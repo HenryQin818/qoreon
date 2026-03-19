@@ -41,8 +41,8 @@
     },
     {
       "title": "最小公开验收",
-      "status": "in_progress",
-      "summary": "待执行 clean-room build 与脱敏扫描。"
+      "status": "done",
+      "summary": "已完成本地构建、单测、禁词扫描与本机运行验收。"
     }
   ],
   "environment_matrix": [
@@ -50,7 +50,7 @@
       "name": "Local Demo",
       "port": "18770",
       "role": "公开版本机预览",
-      "status": "planned"
+      "status": "active"
     }
   ],
   "milestones": [
@@ -64,7 +64,7 @@
     },
     {
       "title": "构建与脱敏验证",
-      "status": "in_progress"
+      "status": "done"
     }
   ],
   "risks": [
@@ -81,19 +81,23 @@
   ],
   "next_actions": [
     {
-      "title": "执行 build 与最小测试",
+      "title": "创建远程公开仓库并推送 main/tag",
       "owner": "maintainer"
     },
     {
-      "title": "执行禁词扫描与路径扫描",
+      "title": "在 clean-room 机器上复跑 ai-bootstrap",
       "owner": "maintainer"
     },
     {
-      "title": "初始化 fresh-history git 仓库",
+      "title": "按首发范围准备第一批公开 issue",
       "owner": "maintainer"
     }
   ],
   "updates": [
+    {
+      "date": "2026-03-20",
+      "summary": "已完成公开仓 fresh-history 初始化、内部冻结快照、单测/构建/脱敏扫描与 18770 本机验收。"
+    },
     {
       "date": "2026-03-20",
       "summary": "公开版候选目录、示例项目、种子包、技能包与 AI 初始化入口已落地。"

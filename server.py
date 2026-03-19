@@ -4637,7 +4637,7 @@ def main() -> int:
     ap.add_argument(
         "--environment-name",
         type=str,
-        default=str(os.environ.get("TASK_DASHBOARD_ENV_NAME") or "stable"),
+        default=str(os.environ.get("TASK_DASHBOARD_ENV_NAME") or "demo"),
         help="runtime environment label",
     )
     args = ap.parse_args()
@@ -4653,7 +4653,7 @@ def main() -> int:
         print(f"[runstore] repaired legacy/hot meta drift: {len(repaired_legacy_rows)}")
     conversation_memo_store = ConversationMemoStore(base_dir=runs_dir.parent / ".run" / "conversation-memos")
     repo_root = Path(__file__).resolve().parent
-    environment_name = str(args.environment_name or "stable").strip() or "stable"
+    environment_name = str(args.environment_name or "demo").strip() or "demo"
     cfg = _load_dashboard_cfg_current()
     current_project_id = _resolve_runtime_project_id(
         cfg,

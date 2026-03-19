@@ -973,7 +973,7 @@ def main(argv: list[str] | None = None) -> int:
         },
         "task_page": task_page_link,
         "agent_curtain_page": agent_curtain_page_link,
-        "environment": str(os.environ.get("TASK_DASHBOARD_ENV_NAME") or "stable").strip() or "stable",
+        "environment": str(os.environ.get("TASK_DASHBOARD_ENV_NAME") or "demo").strip() or "demo",
         "overview": overview_data,
     }
     agent_relationship_board_page_data: dict[str, Any] = {
@@ -991,7 +991,7 @@ def main(argv: list[str] | None = None) -> int:
         "task_page": task_page_link,
         "agent_curtain_page": agent_curtain_page_link,
         "agent_relationship_board_page": agent_relationship_board_page_link,
-        "environment": str(os.environ.get("TASK_DASHBOARD_ENV_NAME") or "stable").strip() or "stable",
+        "environment": str(os.environ.get("TASK_DASHBOARD_ENV_NAME") or "demo").strip() or "demo",
         "overview": overview_data,
     }
     communication_page_data: dict[str, Any] = {
@@ -1001,7 +1001,7 @@ def main(argv: list[str] | None = None) -> int:
         "communication_page": communication_page_link,
         "status_report_page": status_report_page_link,
         "session_health_page": session_health_page_link,
-        "environment": str(os.environ.get("TASK_DASHBOARD_ENV_NAME") or "stable").strip() or "stable",
+        "environment": str(os.environ.get("TASK_DASHBOARD_ENV_NAME") or "demo").strip() or "demo",
     }
     session_health_page_data = build_session_health_page(
         projects_meta,
