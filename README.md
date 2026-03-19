@@ -38,8 +38,8 @@ python3 server.py --port 18770
 
 5. 打开页面：
 
-- `http://127.0.0.1:18770/share/project-task-dashboard.html`
-- `http://127.0.0.1:18770/share/project-overview-dashboard.html`
+- `http://127.0.0.1:18770/project-task-dashboard.html`
+- `http://127.0.0.1:18770/project-overview-dashboard.html`
 - `http://127.0.0.1:18770/__health`
 
 ## 建议阅读顺序

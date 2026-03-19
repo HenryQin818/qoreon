@@ -4626,7 +4626,12 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--bind", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=18770)
-    ap.add_argument("--static-root", type=str, required=True, help="directory to serve (static_sites)")
+    ap.add_argument(
+        "--static-root",
+        type=str,
+        default=str(Path(__file__).resolve().parent / "dist"),
+        help="directory to serve (defaults to ./dist)",
+    )
     ap.add_argument("--runs-dir", type=str, default=str(Path(__file__).resolve().parent / ".runs"))
     ap.add_argument("--http-log", type=str, default=str(Path(__file__).resolve().parent / ".run" / "task-dashboard-server.http.log"))
     ap.add_argument(
