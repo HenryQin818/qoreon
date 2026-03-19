@@ -1,0 +1,297 @@
+    .project-config-btn {
+      color: var(--muted);
+      border-color: rgba(0,0,0,0.10);
+      background: rgba(255,255,255,0.74);
+    }
+    .project-config-btn.active {
+      color: rgba(255,255,255,0.98);
+      border-color: rgba(18,90,164,0.55);
+      background: linear-gradient(120deg, #125aa4 0%, #2f6fed 48%, #47b2ff 100%);
+      box-shadow: 0 8px 22px rgba(18,90,164,0.24);
+      text-shadow: 0 1px 2px rgba(0,0,0,0.18);
+    }
+
+    .project-config-mask {
+      position: fixed;
+      inset: 0;
+      display: none;
+      align-items: stretch;
+      justify-content: flex-end;
+      background: rgba(8,12,22,0.28);
+      backdrop-filter: blur(6px);
+      z-index: 1260;
+    }
+    .project-config-mask.show { display: flex; }
+    .project-config-drawer {
+      width: min(720px, 92vw);
+      height: 100%;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      gap: 10px;
+      padding: 18px 18px 20px;
+      background: linear-gradient(180deg, rgba(255,255,255,0.96) 0%, rgba(248,250,255,0.96) 100%);
+      border-left: 1px solid rgba(0,0,0,0.08);
+      box-shadow: -18px 0 44px rgba(15,23,42,0.16);
+      overflow: hidden;
+    }
+    .project-config-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid rgba(0,0,0,0.08);
+    }
+    .project-config-titlewrap {
+      min-width: 0;
+      display: grid;
+      gap: 4px;
+    }
+    .project-config-kicker {
+      font-family: var(--mono);
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted2);
+    }
+    .project-config-title {
+      font-size: 18px;
+      font-weight: 900;
+      color: rgba(0,0,0,0.88);
+      line-height: 1.2;
+    }
+    .project-config-sub {
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.45;
+    }
+    .project-config-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+    .project-config-body {
+      min-height: 0;
+      overflow: auto;
+      display: grid;
+      gap: 12px;
+      padding-right: 4px;
+    }
+    .project-config-section {
+      display: grid;
+      gap: 10px;
+      padding: 14px;
+      border-radius: 16px;
+      border: 1px solid rgba(0,0,0,0.08);
+      background: rgba(255,255,255,0.78);
+      box-shadow: 0 10px 24px rgba(15,23,42,0.06);
+    }
+    .project-config-section.hero {
+      border-color: rgba(18,90,164,0.18);
+      background: linear-gradient(180deg, rgba(242,248,255,0.94) 0%, rgba(255,255,255,0.82) 100%);
+    }
+    .project-config-section-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .project-config-section-titlewrap {
+      min-width: 0;
+      display: grid;
+      gap: 3px;
+    }
+    .project-config-section-title {
+      font-size: 14px;
+      font-weight: 800;
+      color: rgba(0,0,0,0.86);
+      line-height: 1.25;
+    }
+    .project-config-section-sub {
+      font-size: 12px;
+      line-height: 1.45;
+      color: var(--muted);
+    }
+    .project-config-chip-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .project-config-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      min-height: 28px;
+      padding: 0 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+      border: 1px solid rgba(0,0,0,0.08);
+      background: rgba(255,255,255,0.74);
+      color: rgba(0,0,0,0.74);
+    }
+    .project-config-chip.good {
+      color: #176947;
+      border-color: rgba(31,143,95,0.24);
+      background: rgba(31,143,95,0.10);
+    }
+    .project-config-chip.warn {
+      color: #8a5a00;
+      border-color: rgba(210,145,28,0.24);
+      background: rgba(210,145,28,0.10);
+    }
+    .project-config-chip.info {
+      color: #125aa4;
+      border-color: rgba(18,90,164,0.22);
+      background: rgba(18,90,164,0.10);
+    }
+    .project-config-chip.muted {
+      color: var(--muted2);
+      border-color: rgba(0,0,0,0.08);
+      background: rgba(255,255,255,0.72);
+    }
+    .project-config-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+    .project-config-field {
+      display: grid;
+      gap: 6px;
+      min-width: 0;
+    }
+    .project-config-field label {
+      font-size: 12px;
+      font-weight: 700;
+      color: rgba(0,0,0,0.74);
+    }
+    .project-config-field small {
+      font-size: 11px;
+      line-height: 1.4;
+      color: var(--muted2);
+    }
+    .project-config-field.full { grid-column: 1 / -1; }
+    .project-config-field input,
+    .project-config-field select {
+      min-width: 0;
+      height: 38px;
+      border-radius: 12px;
+      border: 1px solid rgba(0,0,0,0.12);
+      background: rgba(255,255,255,0.92);
+      padding: 0 12px;
+      color: rgba(0,0,0,0.82);
+      font-size: 13px;
+      box-sizing: border-box;
+    }
+    .project-config-field input:focus,
+    .project-config-field select:focus {
+      outline: none;
+      border-color: rgba(18,90,164,0.42);
+      box-shadow: 0 0 0 3px rgba(18,90,164,0.12);
+    }
+    .project-config-meta-grid {
+      display: grid;
+      grid-template-columns: 108px minmax(0, 1fr);
+      gap: 8px 12px;
+      align-items: start;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .project-config-meta-grid .k {
+      color: var(--muted2);
+      font-weight: 700;
+    }
+    .project-config-meta-grid .v {
+      color: rgba(0,0,0,0.76);
+      word-break: break-all;
+    }
+    .project-config-message {
+      border-radius: 12px;
+      padding: 10px 12px;
+      font-size: 12px;
+      line-height: 1.5;
+      border: 1px solid rgba(0,0,0,0.08);
+      background: rgba(255,255,255,0.72);
+      color: rgba(0,0,0,0.72);
+    }
+    .project-config-message.error {
+      color: #8f1f1f;
+      border-color: rgba(201,29,59,0.24);
+      background: rgba(201,29,59,0.08);
+    }
+    .project-config-message.success {
+      color: #176947;
+      border-color: rgba(31,143,95,0.22);
+      background: rgba(31,143,95,0.10);
+    }
+    .project-config-message.info {
+      color: #125aa4;
+      border-color: rgba(18,90,164,0.22);
+      background: rgba(18,90,164,0.08);
+    }
+    .project-config-message.warn {
+      color: #8a5a00;
+      border-color: rgba(210,145,28,0.24);
+      background: rgba(210,145,28,0.10);
+    }
+    .project-config-actions-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .project-config-stat-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .project-config-stat-card {
+      display: grid;
+      gap: 4px;
+      padding: 12px;
+      border-radius: 14px;
+      border: 1px solid rgba(0,0,0,0.08);
+      background: rgba(255,255,255,0.82);
+    }
+    .project-config-stat-card .value {
+      font-size: 20px;
+      font-weight: 900;
+      color: rgba(0,0,0,0.86);
+      line-height: 1;
+    }
+    .project-config-stat-card .label {
+      font-size: 12px;
+      color: var(--muted2);
+      line-height: 1.35;
+    }
+    .project-config-link-btn {
+      border: 1px solid rgba(0,0,0,0.10);
+      background: rgba(255,255,255,0.84);
+    }
+    .project-config-code {
+      display: block;
+      white-space: pre-wrap;
+      word-break: break-all;
+      padding: 10px 12px;
+      border-radius: 12px;
+      background: rgba(15,23,42,0.04);
+      border: 1px solid rgba(15,23,42,0.08);
+      font-family: var(--mono);
+      font-size: 12px;
+      line-height: 1.5;
+      color: rgba(0,0,0,0.74);
+    }
+
+    @media (max-width: 960px) {
+      .project-config-grid,
+      .project-config-stat-grid {
+        grid-template-columns: 1fr;
+      }
+      .project-config-drawer {
+        width: min(100vw, 100vw);
+        padding: 14px;
+      }
+    }

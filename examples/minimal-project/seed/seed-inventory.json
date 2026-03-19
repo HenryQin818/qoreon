@@ -1,0 +1,25 @@
+{
+  "schema_version": "1.0",
+  "public_safe": true,
+  "project_id": "minimal_project",
+  "files": [
+    "examples/minimal-project/seed/project_seed.json",
+    "examples/minimal-project/seed/channels_seed.json",
+    "examples/minimal-project/seed/agents_seed.json",
+    "examples/minimal-project/seed/tasks_seed.json",
+    "examples/minimal-project/seed/skills-manifest.json"
+  ],
+  "skills": [
+    "master-control",
+    "executor",
+    "docs-maintainer",
+    "test-release",
+    "structure-governance",
+    "git-bridge-readonly"
+  ],
+  "notes": [
+    "先读 ai-bootstrap，再读本清单。",
+    "只使用公开安全的 seed，不要自行补真实 session/run。",
+    "Git 桥接技能默认关闭。"
+  ]
+}

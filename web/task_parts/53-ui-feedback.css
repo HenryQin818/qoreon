@@ -1,0 +1,55 @@
+.td-toast-stack {
+  position: fixed;
+  right: 20px;
+  bottom: 24px;
+  z-index: 1200;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+  pointer-events: none;
+}
+
+.td-toast {
+  min-width: 220px;
+  max-width: min(420px, calc(100vw - 32px));
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  background: rgba(15, 23, 42, 0.94);
+  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.22);
+  color: #fff;
+  font-size: 13px;
+  line-height: 1.5;
+  opacity: 0;
+  transform: translateY(8px);
+  transition: opacity 160ms ease, transform 160ms ease;
+}
+
+.td-toast.show {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.td-toast.success {
+  background: rgba(22, 101, 52, 0.96);
+  border-color: rgba(134, 239, 172, 0.22);
+}
+
+.td-toast.error {
+  background: rgba(153, 27, 27, 0.96);
+  border-color: rgba(252, 165, 165, 0.22);
+}
+
+@media (max-width: 760px) {
+  .td-toast-stack {
+    left: 12px;
+    right: 12px;
+    bottom: 16px;
+    align-items: stretch;
+  }
+
+  .td-toast {
+    max-width: 100%;
+  }
+}

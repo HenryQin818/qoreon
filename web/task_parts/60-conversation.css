@@ -1,0 +1,496 @@
+/* 第六刀：会话编辑与输入区样式 */
+    .convcomposer { position: relative; margin-top: 10px; border: 1px solid var(--line); border-radius: 12px; background: rgba(255,255,255,0.56); padding: 8px; }
+    .convsenderrow {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 0 0 6px;
+      min-height: 22px;
+    }
+    .convsenderactions {
+      flex: 0 0 auto;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .convrecentagents-global-toggle {
+      flex: 0 0 auto;
+      width: 20px;
+      height: 20px;
+      padding: 0;
+      border: none;
+      background: transparent;
+      box-shadow: none;
+      color: rgba(15,23,42,0.56);
+      display: inline-grid;
+      place-items: center;
+      cursor: pointer;
+    }
+    .convrecentagents-global-toggle svg {
+      width: 18px;
+      height: 18px;
+      opacity: 1;
+    }
+    .convrecentagents-global-toggle.active {
+      color: var(--blue);
+    }
+    .convrecentagents-global-toggle:hover {
+      color: rgba(15,23,42,0.78);
+    }
+    .conv-enter-send-toggle {
+      flex: 0 0 auto;
+      width: 20px;
+      height: 20px;
+      padding: 0;
+      border: none;
+      background: transparent;
+      box-shadow: none;
+      color: rgba(15,23,42,0.58);
+      display: inline-grid;
+      place-items: center;
+      cursor: pointer;
+    }
+    .conv-enter-send-toggle svg {
+      width: 16px;
+      height: 16px;
+      overflow: visible;
+    }
+    .conv-enter-send-toggle .kbd-slash {
+      opacity: 0;
+      transition: opacity 140ms ease;
+    }
+    .conv-enter-send-toggle.active {
+      color: var(--blue);
+    }
+    .conv-enter-send-toggle.off {
+      color: rgba(15,23,42,0.48);
+    }
+    .conv-enter-send-toggle.off .kbd-slash {
+      opacity: 1;
+    }
+    .conv-enter-send-toggle:hover {
+      color: rgba(15,23,42,0.8);
+    }
+    .convsenderhint {
+      margin: 0;
+      flex: 1;
+      min-width: 0;
+      font-size: 12px;
+      color: var(--muted2);
+      line-height: 1.4;
+    }
+    .convquicktips {
+      display: none;
+      align-items: center;
+      gap: 8px;
+      margin: 0 0 6px;
+    }
+    .convquicktip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 0;
+      border: none;
+      background: transparent;
+    }
+    .convquicktip-label {
+      min-width: 0;
+      display: inline-flex;
+      align-items: center;
+      height: 20px;
+      border-radius: 999px;
+      border: 1px solid rgba(179,106,0,0.20);
+      background: rgba(179,106,0,0.08);
+      color: rgba(122,75,0,0.92);
+      font-size: 10px;
+      font-family: var(--mono);
+      padding: 0 8px;
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .convquicktip-send {
+      flex-shrink: 0;
+      height: 20px;
+      min-height: 20px;
+      padding: 0 6px;
+      font-size: 10px;
+      border-radius: 6px;
+      color: rgba(47,111,237,0.92);
+      line-height: 20px;
+    }
+    .convhint { font-size: 11px; color: var(--muted2); margin-bottom: 8px; }
+
+    .convrecentagents {
+      display: none;
+      position: relative;
+      margin-bottom: 6px;
+    }
+    .convrecentagents-wrap {
+      position: relative;
+      display: grid;
+      gap: 0;
+    }
+    .convrecentagents-wrap.is-expanded .convrecentagents-bar {
+      border-top-left-radius: 0;
+      border-top-right-radius: 0;
+      border-top-color: transparent;
+    }
+    .convrecentagents-wrap.is-expanded .convrecentagents-strip {
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+    }
+    .convrecentagents-popover {
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: calc(100% - 1px);
+      z-index: 9;
+      padding: 8px 8px 6px;
+      border: 1px solid rgba(0,0,0,0.10);
+      border-bottom: none;
+      border-radius: 12px 12px 0 0;
+      background: rgba(255,255,255,0.97);
+      box-shadow: var(--shadow2);
+      backdrop-filter: blur(14px);
+    }
+    .convrecentagents-popover[hidden] {
+      display: none;
+    }
+    .convrecentagents-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      max-height: 220px;
+      overflow: auto;
+      align-content: flex-start;
+    }
+    .convrecentagents-bar {
+      position: relative;
+      z-index: 2;
+      display: grid;
+      grid-template-columns: 1fr auto;
+      align-items: center;
+      gap: 8px;
+      min-height: 34px;
+      padding: 5px 8px;
+      border-radius: 12px;
+      border: 1px solid rgba(0,0,0,0.08);
+      background: rgba(255,255,255,0.88);
+    }
+    .convrecentagents-strip {
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      overflow: hidden;
+      white-space: nowrap;
+    }
+    .convrecentagent-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      flex: 0 0 auto;
+      min-width: 0;
+      max-width: 188px;
+      height: 28px;
+      padding: 0 10px 0 6px;
+      border-radius: 999px;
+      border: 1px solid rgba(15,23,42,0.09);
+      background: rgba(248,250,252,0.96);
+      color: rgba(15,23,42,0.84);
+      cursor: pointer;
+      box-shadow: 0 4px 12px rgba(15,23,42,0.04);
+    }
+    .convrecentagent-chip .conv-avatar {
+      width: 18px;
+      height: 18px;
+      border-radius: 999px;
+      font-size: 10px;
+      border-width: 1px;
+      box-shadow: none;
+      flex: 0 0 auto;
+    }
+    .convrecentagent-chip .conv-avatar.assigned {
+      font-size: 11px;
+    }
+    .convrecentagent-chip .conv-avatar.fallback {
+      letter-spacing: 0;
+    }
+    .convrecentagent-chip:hover {
+      border-color: rgba(47,111,237,0.18);
+      background: rgba(47,111,237,0.06);
+    }
+    .convrecentagent-chip.active {
+      color: var(--blue);
+      border-color: rgba(47,111,237,0.20);
+      background: rgba(47,111,237,0.10);
+    }
+    .convrecentagent-avatar {
+      width: 18px;
+      height: 18px;
+      border-radius: 999px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex: 0 0 auto;
+      color: #fff;
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: 0.02em;
+    }
+    .convrecentagent-avatar.tone-blue { background: linear-gradient(180deg, #4a8df8, #2d6fe7); }
+    .convrecentagent-avatar.tone-green { background: linear-gradient(180deg, #2cb67d, #169a66); }
+    .convrecentagent-avatar.tone-orange { background: linear-gradient(180deg, #f59e0b, #d97706); }
+    .convrecentagent-avatar.tone-violet { background: linear-gradient(180deg, #8b7bff, #6d5dfc); }
+    .convrecentagent-avatar.tone-slate { background: linear-gradient(180deg, #7b8798, #596579); }
+    .convrecentagent-label {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .convrecentagents-toggle {
+      flex: 0 0 auto;
+      min-height: 28px;
+      height: 28px;
+      padding: 0 10px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 700;
+      color: rgba(54,90,184,0.90);
+      white-space: nowrap;
+    }
+    .convrecentagents-toggle.active {
+      border-color: rgba(47,111,237,0.16);
+      background: rgba(47,111,237,0.08);
+      color: var(--blue);
+    }
+
+    .convmentions {
+      display: none;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-bottom: 6px;
+    }
+    .mention-count {
+      display: inline-flex;
+      align-items: center;
+      height: 22px;
+      border-radius: 999px;
+      border: 1px solid rgba(15,110,138,0.20);
+      background: rgba(15,110,138,0.08);
+      color: #0d5e76;
+      font-size: 11px;
+      font-family: var(--mono);
+      padding: 0 9px;
+      font-weight: 600;
+    }
+    .mention-tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      height: 24px;
+      border-radius: 999px;
+      border: 1px solid rgba(15,110,138,0.24);
+      background: rgba(15,110,138,0.12);
+      color: #0d5e76;
+      padding: 0 7px 0 10px;
+      font-size: 11px;
+      font-family: var(--mono);
+      max-width: 260px;
+    }
+    .mention-tag-label {
+      min-width: 0;
+      max-width: 210px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .mention-tag-remove {
+      width: 16px;
+      height: 16px;
+      border: none;
+      border-radius: 999px;
+      background: rgba(0,0,0,0.15);
+      color: rgba(0,0,0,0.62);
+      cursor: pointer;
+      font-size: 12px;
+      line-height: 16px;
+      padding: 0;
+      text-align: center;
+    }
+    .mention-tag-remove:hover {
+      background: rgba(0,0,0,0.22);
+      color: rgba(0,0,0,0.78);
+    }
+    .convmention-suggest {
+      display: none;
+      position: relative;
+      z-index: 7;
+      margin-top: 4px;
+      width: min(420px, 100%);
+      border: 1px solid rgba(0,0,0,0.10);
+      border-radius: 12px;
+      background: rgba(255,255,255,0.97);
+      box-shadow: var(--shadow2);
+      overflow: hidden;
+    }
+    .convmention-list {
+      display: flex;
+      flex-direction: column;
+      max-height: 220px;
+      overflow: auto;
+    }
+    .convmention-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      width: 100%;
+      border: none;
+      border-bottom: 1px solid rgba(0,0,0,0.06);
+      background: transparent;
+      padding: 8px 10px;
+      text-align: left;
+      cursor: pointer;
+      color: var(--text);
+    }
+    .convmention-item:last-child {
+      border-bottom: none;
+    }
+    .convmention-item.active,
+    .convmention-item:hover {
+      background: rgba(47,111,237,0.10);
+    }
+    .convmention-name {
+      font-size: 12px;
+      font-weight: 600;
+      color: rgba(0,0,0,0.82);
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      flex: 1;
+    }
+    .convmention-meta {
+      font-size: 11px;
+      color: var(--muted2);
+      font-family: var(--mono);
+      flex-shrink: 0;
+    }
+    .convattachments { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+    .mention-drag-source {
+      cursor: grab;
+    }
+    .mention-drag-source.is-dragging {
+      opacity: 0.7;
+      cursor: grabbing;
+    }
+    .attach-thumb {
+      position: relative;
+      width: 72px;
+      height: 72px;
+      border-radius: 10px;
+      border: 1px solid rgba(0,0,0,0.10);
+      overflow: hidden;
+      background: rgba(255,255,255,0.72);
+      flex-shrink: 0;
+    }
+    .attach-thumb img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+      cursor: zoom-in;
+    }
+    .attach-thumb .remove-btn {
+      position: absolute;
+      top: 4px;
+      right: 4px;
+      width: 18px;
+      height: 18px;
+      border: none;
+      border-radius: 999px;
+      background: rgba(0,0,0,0.66);
+      color: #fff;
+      line-height: 18px;
+      padding: 0;
+      text-align: center;
+      cursor: pointer;
+      font-size: 12px;
+    }
+    .attach-file {
+      position: relative;
+      min-width: 220px;
+      max-width: 340px;
+      border-radius: 10px;
+      border: 1px solid rgba(0,0,0,0.10);
+      background: rgba(255,255,255,0.82);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 10px;
+      padding-right: 28px;
+    }
+    .attach-file-ico {
+      width: 24px;
+      height: 24px;
+      border-radius: 8px;
+      background: rgba(70,110,220,0.12);
+      color: #365ab8;
+      font-size: 14px;
+      font-weight: 700;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex: 0 0 auto;
+    }
+    .attach-file-main { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+    .attach-file-name {
+      font-size: 12px;
+      color: #203044;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 260px;
+    }
+    .attach-file-meta {
+      font-size: 11px;
+      color: var(--muted2);
+      white-space: nowrap;
+    }
+    .attach-file .remove-btn {
+      position: absolute;
+      top: 6px;
+      right: 6px;
+      width: 18px;
+      height: 18px;
+      border: none;
+      border-radius: 999px;
+      background: rgba(0,0,0,0.66);
+      color: #fff;
+      line-height: 18px;
+      padding: 0;
+      text-align: center;
+      cursor: pointer;
+      font-size: 12px;
+    }
+    .convcomposer.drop-active {
+      border-color: rgba(89,121,212,0.55);
+      box-shadow: 0 0 0 2px rgba(89,121,212,0.16) inset;
+    }
+    @media (max-width: 760px) {
+      .convrecentagent-chip {
+        max-width: 152px;
+      }
+      .convrecentagents-popover {
+        left: -2px;
+        right: -2px;
+      }
+    }

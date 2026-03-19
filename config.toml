@@ -1,0 +1,25 @@
+[dashboard]
+title = "Task Dashboard OSS"
+subtitle = "公开版一体包：看板 + CCB + 示例项目 + Agent/技能种子"
+
+[[projects]]
+id = "minimal_project"
+name = "Minimal Project"
+description = "公开示例项目，展示最小协作结构、任务数据、种子包与技能包。"
+color = "#145f4a"
+project_root_rel = "examples/minimal-project"
+task_root_rel = "examples/minimal-project/tasks"
+runtime_root_rel = "examples/minimal-project/.runtime/demo"
+execution_context = { profile = "sandboxed", environment = "demo", worktree_root = "examples/minimal-project", workdir = "examples/minimal-project", runtime_root = "examples/minimal-project/.runtime/demo", sessions_root = "examples/minimal-project/.runtime/demo/.sessions", runs_root = "examples/minimal-project/.runtime/demo/.runs", server_port = "18770", health_source = "/__health" }
+channels = [
+  { name = "主体-总控", desc = "收敛范围、冻结节奏、发起验收。", cli_type = "codex", enable_requirements = true },
+  { name = "子级01-执行", desc = "承接功能实现与最小数据准备。", cli_type = "codex" },
+  { name = "子级02-文档", desc = "维护 README、示例说明和 AI 初始化文档。", cli_type = "codex" },
+  { name = "子级03-测试", desc = "负责 clean-room bootstrap 与主链路 smoke。", cli_type = "codex" },
+  { name = "辅助01-结构治理与项目接入", desc = "冻结项目结构、种子 schema 与接入边界。", cli_type = "codex", enable_requirements = true },
+  { name = "辅助02-Git桥接与发布同步", desc = "只读核查导出差异与发布同步口径。", cli_type = "codex" }
+]
+links = [
+  { label = "AI Bootstrap", url = "docs/public/ai-bootstrap.md" },
+  { label = "Example Project", url = "examples/minimal-project/README.md" }
+]

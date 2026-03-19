@@ -1,0 +1,66 @@
+{
+  "schema_version": "1.0",
+  "public_safe": true,
+  "skills": [
+    {
+      "name": "master-control",
+      "path": "examples/minimal-project/skills/master-control/SKILL.md",
+      "default_enabled": true,
+      "capabilities": ["dispatch", "acceptance"],
+      "side_effect_level": "medium",
+      "default_mode": "guided_execute",
+      "requires_manual_confirm": false,
+      "has_external_dependency": false
+    },
+    {
+      "name": "executor",
+      "path": "examples/minimal-project/skills/executor/SKILL.md",
+      "default_enabled": true,
+      "capabilities": ["implement", "self_check"],
+      "side_effect_level": "medium",
+      "default_mode": "guided_execute",
+      "requires_manual_confirm": false,
+      "has_external_dependency": false
+    },
+    {
+      "name": "docs-maintainer",
+      "path": "examples/minimal-project/skills/docs-maintainer/SKILL.md",
+      "default_enabled": true,
+      "capabilities": ["readme", "bootstrap_docs"],
+      "side_effect_level": "low",
+      "default_mode": "read_then_write",
+      "requires_manual_confirm": false,
+      "has_external_dependency": false
+    },
+    {
+      "name": "test-release",
+      "path": "examples/minimal-project/skills/test-release/SKILL.md",
+      "default_enabled": true,
+      "capabilities": ["smoke", "gate"],
+      "side_effect_level": "medium",
+      "default_mode": "read_then_execute",
+      "requires_manual_confirm": false,
+      "has_external_dependency": false
+    },
+    {
+      "name": "structure-governance",
+      "path": "examples/minimal-project/skills/structure-governance/SKILL.md",
+      "default_enabled": true,
+      "capabilities": ["schema_review", "boundary_control"],
+      "side_effect_level": "low",
+      "default_mode": "review_only",
+      "requires_manual_confirm": false,
+      "has_external_dependency": false
+    },
+    {
+      "name": "git-bridge-readonly",
+      "path": "examples/minimal-project/skills/git-bridge-readonly/SKILL.md",
+      "default_enabled": false,
+      "capabilities": ["diff_review", "dry_run_export"],
+      "side_effect_level": "medium",
+      "default_mode": "read_only",
+      "requires_manual_confirm": true,
+      "has_external_dependency": false
+    }
+  ]
+}

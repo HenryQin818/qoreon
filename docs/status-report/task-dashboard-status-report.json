@@ -1,0 +1,116 @@
+{
+  "page": {
+    "title": "Task Dashboard OSS 状态汇报",
+    "subtitle": "公开候选包当前范围、示例项目与下一步动作的统一视图。"
+  },
+  "hero": {
+    "kicker": "Open Source Candidate",
+    "headline": "公开版一体包基线已就位",
+    "summary": "当前版本包含核心看板代码、最小本机服务、示例项目、通道/Agent 种子、技能包和 AI 初始化说明。"
+  },
+  "summary_cards": [
+    {
+      "label": "首发范围",
+      "value": "V1",
+      "detail": "代码主链路 + 示例项目 + 种子包 + 技能包 + AI Bootstrap",
+      "tone": "accent"
+    },
+    {
+      "label": "默认端口",
+      "value": "18770",
+      "detail": "公开版默认本机端口",
+      "tone": "ok"
+    },
+    {
+      "label": "初始化入口",
+      "value": "docs/public/ai-bootstrap.md",
+      "detail": "外部 AI 先读这一份",
+      "tone": "info"
+    }
+  ],
+  "workstreams": [
+    {
+      "title": "核心构建链路",
+      "status": "done",
+      "summary": "build/server 已改成公开仓独立路径与默认端口。 "
+    },
+    {
+      "title": "示例项目与种子包",
+      "status": "done",
+      "summary": "已补示例任务空间、通道种子、Agent 种子与技能 manifest。"
+    },
+    {
+      "title": "最小公开验收",
+      "status": "in_progress",
+      "summary": "待执行 clean-room build 与脱敏扫描。"
+    }
+  ],
+  "environment_matrix": [
+    {
+      "name": "Local Demo",
+      "port": "18770",
+      "role": "公开版本机预览",
+      "status": "planned"
+    }
+  ],
+  "milestones": [
+    {
+      "title": "公开候选目录建立",
+      "status": "done"
+    },
+    {
+      "title": "一体包资料补齐",
+      "status": "done"
+    },
+    {
+      "title": "构建与脱敏验证",
+      "status": "in_progress"
+    }
+  ],
+  "risks": [
+    {
+      "title": "CLI 本地依赖差异",
+      "detail": "不同机器上可用的 CLI 类型和二进制路径可能不同。",
+      "level": "medium"
+    },
+    {
+      "title": "公开初始化理解偏差",
+      "detail": "外部 AI 可能跳过 seed/skills 直接修改代码，需要严格按 ai-bootstrap 执行。",
+      "level": "medium"
+    }
+  ],
+  "next_actions": [
+    {
+      "title": "执行 build 与最小测试",
+      "owner": "maintainer"
+    },
+    {
+      "title": "执行禁词扫描与路径扫描",
+      "owner": "maintainer"
+    },
+    {
+      "title": "初始化 fresh-history git 仓库",
+      "owner": "maintainer"
+    }
+  ],
+  "updates": [
+    {
+      "date": "2026-03-20",
+      "summary": "公开版候选目录、示例项目、种子包、技能包与 AI 初始化入口已落地。"
+    }
+  ],
+  "references": [
+    {
+      "label": "AI Bootstrap",
+      "path": "docs/public/ai-bootstrap.md"
+    },
+    {
+      "label": "Seed Inventory",
+      "path": "examples/minimal-project/seed/seed-inventory.json"
+    }
+  ],
+  "update_rules": [
+    "优先更新 JSON，再执行 build_project_task_dashboard.py",
+    "只写公开安全信息，不写真实 token、真实 session 或真实绝对路径"
+  ]
+}

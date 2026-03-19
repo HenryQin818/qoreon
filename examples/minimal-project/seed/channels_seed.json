@@ -1,0 +1,66 @@
+{
+  "schema_version": "1.0",
+  "public_safe": true,
+  "channels": [
+    {
+      "name": "主体-总控",
+      "default_enabled": true,
+      "capabilities": ["scope_freeze", "dispatch", "acceptance"],
+      "side_effect_level": "medium",
+      "default_mode": "guided_execute",
+      "requires_manual_confirm": false,
+      "has_external_dependency": true,
+      "forbidden_payloads": ["real_remote_write"]
+    },
+    {
+      "name": "子级01-执行",
+      "default_enabled": true,
+      "capabilities": ["implementation", "refine", "self_check"],
+      "side_effect_level": "medium",
+      "default_mode": "guided_execute",
+      "requires_manual_confirm": false,
+      "has_external_dependency": true,
+      "forbidden_payloads": ["token", "private_path"]
+    },
+    {
+      "name": "子级02-文档",
+      "default_enabled": true,
+      "capabilities": ["readme", "bootstrap_docs", "user_guides"],
+      "side_effect_level": "low",
+      "default_mode": "read_then_write",
+      "requires_manual_confirm": false,
+      "has_external_dependency": false,
+      "forbidden_payloads": ["private_reference"]
+    },
+    {
+      "name": "子级03-测试",
+      "default_enabled": true,
+      "capabilities": ["smoke", "clean_room", "release_gate"],
+      "side_effect_level": "medium",
+      "default_mode": "read_then_execute",
+      "requires_manual_confirm": false,
+      "has_external_dependency": true,
+      "forbidden_payloads": ["destructive_cleanup"]
+    },
+    {
+      "name": "辅助01-结构治理与项目接入",
+      "default_enabled": true,
+      "capabilities": ["schema_freeze", "seed_validation", "boundary_review"],
+      "side_effect_level": "low",
+      "default_mode": "review_only",
+      "requires_manual_confirm": false,
+      "has_external_dependency": false,
+      "forbidden_payloads": ["private_contract"]
+    },
+    {
+      "name": "辅助02-Git桥接与发布同步",
+      "default_enabled": false,
+      "capabilities": ["diff_review", "dry_run_export", "release_notes"],
+      "side_effect_level": "medium",
+      "default_mode": "read_only",
+      "requires_manual_confirm": true,
+      "has_external_dependency": true,
+      "forbidden_payloads": ["push_remote", "rewrite_history"]
+    }
+  ]
+}

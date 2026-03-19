@@ -1,0 +1,99 @@
+    /* 第五刀：主列表 shell / list rows */
+    .filterbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: rgba(255,255,255,0.42);
+    }
+    .filterrow {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      align-items: center;
+    }
+    .chipbtn {
+      border-radius: 999px;
+      border: 1px solid rgba(0,0,0,0.10);
+      background: rgba(255,255,255,0.66);
+      cursor: pointer;
+      padding: 6px 10px;
+      font-size: 12px;
+      transition: 140ms ease;
+    }
+    .chipbtn:hover {
+      transform: translateY(-1px);
+      box-shadow: var(--shadow2);
+    }
+    .chipbtn.active {
+      border-color: rgba(47,111,237,0.28);
+      background: rgba(47,111,237,0.12);
+    }
+    .filelist {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .frow {
+      text-align: left;
+      border: 1px solid rgba(0,0,0,0.10);
+      background: rgba(255,255,255,0.72);
+      border-radius: 14px;
+      padding: 12px;
+      cursor: pointer;
+      transition: 140ms ease;
+    }
+    .frow:hover {
+      transform: translateY(-1px);
+      box-shadow: var(--shadow2);
+    }
+    .frow.active {
+      border-color: rgba(47,111,237,0.28);
+      background: rgba(47,111,237,0.10);
+    }
+    .frow .t {
+      font-weight: 900;
+      font-size: 14px;
+      line-height: 1.35;
+      overflow-wrap: anywhere;
+    }
+    .frow .m {
+      margin-top: 8px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .frow .p {
+      margin-top: 6px;
+      font-family: var(--mono);
+      font-size: 11px;
+      color: rgba(0,0,0,0.50);
+    }
+    .mainlist-title-row {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .frow-title-ops {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-shrink: 0;
+    }
+    .frow .status-selector {
+      flex-shrink: 0;
+    }
+    .frow .status-btn {
+      padding: 3px 6px;
+      font-size: 10px;
+    }
+
+    @media (max-width: 760px) {
+      .filterbar { padding: 8px; }
+      .chipbtn { padding: 5px 8px; font-size: 11px; }
+      .frow { padding: 10px; }
+      .frow .t { font-size: 13px; }
+    }

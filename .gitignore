@@ -1,0 +1,17 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+
+.run/
+.runs/
+.runtime/
+.sessions/
+dist/
+static_sites/
+artifacts/
+*.log
+*.pid
+
+config.local.toml
+
+examples/minimal-project/.runtime/

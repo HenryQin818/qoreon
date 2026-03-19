@@ -1,0 +1,30 @@
+{
+  "schema_version": "1.0",
+  "public_safe": true,
+  "project": {
+    "id": "minimal_project",
+    "name": "Minimal Project",
+    "description": "公开版内置示例项目，用于完成一轮最小协作闭环。",
+    "project_root_rel": "examples/minimal-project",
+    "task_root_rel": "examples/minimal-project/tasks",
+    "runtime_root_rel": "examples/minimal-project/.runtime/demo"
+  },
+  "execution_defaults": {
+    "default_enabled": true,
+    "profile": "sandboxed",
+    "environment": "demo",
+    "default_mode": "guided_execute",
+    "side_effect_level": "low",
+    "requires_manual_confirm": false,
+    "has_external_dependency": true,
+    "server_port": "18770",
+    "health_source": "/__health"
+  },
+  "forbidden_payloads": [
+    "real_session_id",
+    "real_run_id",
+    "absolute_user_path",
+    "private_remote_url",
+    "token"
+  ]
+}
