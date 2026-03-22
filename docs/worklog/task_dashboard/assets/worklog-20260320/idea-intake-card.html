@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>需求发起卡片</title>
+    <style>
+      :root {
+        --paper: #fffdf8;
+        --ink: #24302d;
+        --muted: #6b776d;
+        --line: rgba(86, 119, 101, 0.14);
+        --soft: #f5efe4;
+        --soft-2: #f8f4eb;
+        --accent: #557663;
+        --accent-soft: rgba(85, 118, 99, 0.12);
+        --shadow: rgba(100, 84, 55, 0.14);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: "PingFang SC", "Noto Sans SC", "Hiragino Sans GB", sans-serif;
+        color: var(--ink);
+        background:
+          radial-gradient(circle at 12% 12%, rgba(85, 118, 99, 0.14), transparent 24%),
+          radial-gradient(circle at 92% 16%, rgba(212, 190, 148, 0.18), transparent 22%),
+          linear-gradient(180deg, #f7f2e7 0%, #f4ede1 100%);
+        padding: 40px;
+      }
+
+      .card {
+        width: 1380px;
+        margin: 0 auto;
+        border-radius: 34px;
+        border: 1px solid rgba(86, 119, 101, 0.16);
+        background: rgba(255, 253, 248, 0.96);
+        box-shadow: 0 28px 84px var(--shadow);
+        overflow: hidden;
+      }
+
+      .head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 24px;
+        padding: 26px 30px 22px;
+        border-bottom: 1px solid var(--line);
+        background: linear-gradient(180deg, rgba(255, 255, 255, 0.85), rgba(249, 245, 236, 0.92));
+      }
+
+      .head-left {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+      }
+
+      .avatar {
+        width: 54px;
+        height: 54px;
+        border-radius: 18px;
+        display: grid;
+        place-items: center;
+        background: linear-gradient(135deg, #638770, #4f6f5e);
+        color: #fff;
+        font-size: 24px;
+        font-weight: 800;
+        letter-spacing: 0.02em;
+      }
+
+      .head-copy .eyebrow {
+        font-size: 14px;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: var(--accent);
+      }
+
+      .head-copy h1 {
+        margin: 6px 0 0;
+        font-size: 30px;
+        line-height: 1.2;
+        letter-spacing: -0.03em;
+      }
+
+      .meta {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+      }
+
+      .chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 9px 14px;
+        border-radius: 999px;
+        background: var(--accent-soft);
+        border: 1px solid rgba(85, 118, 99, 0.1);
+        color: var(--accent);
+        font-size: 14px;
+        font-weight: 700;
+      }
+
+      .time {
+        font-size: 14px;
+        color: var(--muted);
+      }
+
+      .body {
+        display: grid;
+        grid-template-columns: 1.2fr 0.8fr;
+        gap: 18px;
+        padding: 26px 30px 30px;
+      }
+
+      .bubble-wrap {
+        padding: 18px;
+        border-radius: 28px;
+        background: linear-gradient(180deg, #fffcf6, #f7f1e6);
+        border: 1px solid var(--line);
+      }
+
+      .bubble-meta {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 14px;
+        color: var(--muted);
+        font-size: 14px;
+      }
+
+      .bubble {
+        position: relative;
+        padding: 26px 26px 24px;
+        border-radius: 26px;
+        background: linear-gradient(180deg, #ffffff, #fbf8f1);
+        border: 1px solid rgba(86, 119, 101, 0.12);
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6);
+      }
+
+      .bubble::before {
+        content: "";
+        position: absolute;
+        left: 28px;
+        top: -10px;
+        width: 20px;
+        height: 20px;
+        transform: rotate(45deg);
+        background: #fffdf8;
+        border-left: 1px solid rgba(86, 119, 101, 0.12);
+        border-top: 1px solid rgba(86, 119, 101, 0.12);
+      }
+
+      .bubble p {
+        margin: 0;
+        font-size: 21px;
+        line-height: 1.9;
+        letter-spacing: -0.01em;
+      }
+
+      .bubble strong {
+        color: #2e5140;
+      }
+
+      .side {
+        display: grid;
+        gap: 16px;
+      }
+
+      .panel {
+        padding: 20px 20px 18px;
+        border-radius: 24px;
+        background: var(--soft-2);
+        border: 1px solid rgba(86, 119, 101, 0.1);
+      }
+
+      .panel h2 {
+        margin: 0 0 14px;
+        font-size: 20px;
+        letter-spacing: -0.02em;
+      }
+
+      .tags {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+
+      .tag {
+        padding: 10px 13px;
+        border-radius: 14px;
+        background: #ffffff;
+        border: 1px solid rgba(86, 119, 101, 0.08);
+        font-size: 15px;
+        font-weight: 700;
+        color: #3f5b4d;
+      }
+
+      .panel ul {
+        margin: 0;
+        padding-left: 22px;
+      }
+
+      .panel li {
+        margin: 0 0 10px;
+        font-size: 17px;
+        line-height: 1.72;
+        color: var(--ink);
+      }
+
+      .panel li:last-child {
+        margin-bottom: 0;
+      }
+
+      .foot {
+        padding: 0 30px 28px;
+      }
+
+      .note {
+        padding: 16px 20px;
+        border-radius: 20px;
+        background: linear-gradient(180deg, rgba(85, 118, 99, 0.08), rgba(85, 118, 99, 0.03));
+        border: 1px solid rgba(85, 118, 99, 0.12);
+        font-size: 16px;
+        line-height: 1.7;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="card">
+      <header class="head">
+        <div class="head-left">
+          <div class="avatar">我</div>
+          <div class="head-copy">
+            <div class="eyebrow">User Request</div>
+            <h1>用户先讲的不是功能点，而是一种更顺手的工作方式</h1>
+          </div>
+        </div>
+        <div class="meta">
+          <div class="chip">需求发起</div>
+          <div class="chip">工作方式声明</div>
+          <div class="time">2026-03-20 · 首条需求信息</div>
+        </div>
+      </header>
+
+      <section class="body">
+        <div class="bubble-wrap">
+          <div class="bubble-meta">
+            <span>用户消息</span>
+            <span>长文本需求</span>
+          </div>
+          <div class="bubble">
+            <p>我最近比较习惯这样工作：<strong>先沟通方案和它与现系统的关系</strong>；如果纯文字看起来累，就让 Agent <strong>先做可视化表达或原型页</strong>；经过几轮评审和细节打磨，达成共识之后，再进入实施，并让相关负责人一起做审核、指导和协同。</p>
+          </div>
+        </div>
+
+        <aside class="side">
+          <section class="panel">
+            <h2>这条消息里已经包含的关键信号</h2>
+            <div class="tags">
+              <span class="tag">先沟通关系</span>
+              <span class="tag">再看结果</span>
+              <span class="tag">偏好原型评审</span>
+              <span class="tag">最后进入实施</span>
+            </div>
+          </section>
+
+          <section class="panel">
+            <h2>业务联络该听出来的重点</h2>
+            <ul>
+              <li>这不是一个单点功能需求，而是一条完整协作链路的声明。</li>
+              <li>可视化不是装饰，而是这条链路里的正式评审手段。</li>
+              <li>后面会自然带出分工、审核和协同，不适合一开始就压成执行单。</li>
+            </ul>
+          </section>
+        </aside>
+      </section>
+
+      <footer class="foot">
+        <div class="note"><strong>这张卡要表达的意思：</strong>真正的起点是“用户先把目标和工作方式讲出来”，而不是一开始就给系统一个已经写死的任务名。</div>
+      </footer>
+    </main>
+  </body>
+</html>

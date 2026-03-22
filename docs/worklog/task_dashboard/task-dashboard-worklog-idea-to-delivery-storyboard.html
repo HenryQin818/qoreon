@@ -1,0 +1,894 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Qoreon 工作故事板：从想法到协同实施</title>
+  <style>
+    :root {
+      --bg: #f6efe4;
+      --paper: rgba(255, 251, 245, 0.92);
+      --ink: #1f2a24;
+      --muted: #667067;
+      --line: rgba(50, 67, 59, 0.12);
+      --accent: #b4572f;
+      --accent-2: #204d42;
+      --gold: #d0a25a;
+      --rose: #d37f64;
+      --violet: #6f67b7;
+      --shadow: 0 20px 60px rgba(53, 41, 28, 0.13);
+      --radius-xl: 28px;
+      --radius-lg: 20px;
+      --radius-md: 16px;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at top right, rgba(208,162,90,0.35), transparent 22%),
+        radial-gradient(circle at 18% 20%, rgba(180,87,47,0.16), transparent 20%),
+        linear-gradient(180deg, #f8f1e7 0%, #f4ede0 45%, #efe5d7 100%);
+      font-family: "Avenir Next", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      line-height: 1.72;
+    }
+    body.lightbox-open {
+      overflow: hidden;
+    }
+    .page {
+      width: min(1220px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 32px 0 64px;
+      display: grid;
+      gap: 22px;
+    }
+    .hero, .panel, .chapter, .closing {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: var(--radius-xl);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(10px);
+    }
+    .hero {
+      padding: 34px;
+      display: grid;
+      grid-template-columns: 1.25fr 0.95fr;
+      gap: 28px;
+      overflow: hidden;
+      position: relative;
+    }
+    .hero::after {
+      content: "";
+      position: absolute;
+      inset: auto -60px -80px auto;
+      width: 240px;
+      height: 240px;
+      background: radial-gradient(circle, rgba(208,162,90,0.22), transparent 70%);
+      pointer-events: none;
+    }
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 14px;
+      border-radius: 999px;
+      background: rgba(32, 77, 66, 0.08);
+      color: var(--accent-2);
+      font-size: 13px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+    h1, h2, h3 {
+      margin: 0;
+      font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", "Songti SC", serif;
+      line-height: 1.15;
+      font-weight: 700;
+    }
+    h1 { font-size: clamp(34px, 5.4vw, 62px); margin-top: 18px; }
+    h2 { font-size: 34px; }
+    .hero p.lead {
+      margin: 18px 0 0;
+      font-size: 18px;
+      color: #364038;
+      max-width: 42em;
+    }
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 22px;
+    }
+    .meta span,
+    .tag,
+    .signal,
+    .mini-step,
+    .duty,
+    .note-pill {
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      padding: 8px 12px;
+      font-size: 13px;
+      color: var(--muted);
+      background: rgba(255,255,255,0.55);
+    }
+    .hero-side {
+      display: grid;
+      gap: 16px;
+      align-content: start;
+    }
+    .signal {
+      border-radius: 18px;
+      padding: 16px;
+      background: linear-gradient(180deg, rgba(255,255,255,0.74), rgba(249,242,231,0.95));
+    }
+    .signal strong {
+      display: block;
+      font-size: 26px;
+      color: var(--accent-2);
+      margin-bottom: 6px;
+    }
+    .panel { padding: 24px; }
+    .section-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: flex-end;
+      margin-bottom: 18px;
+      flex-wrap: wrap;
+    }
+    .section-head p {
+      margin: 0;
+      color: var(--muted);
+      max-width: 54em;
+    }
+    .flow-strip {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 16px;
+    }
+    .flow-card {
+      padding: 18px;
+      border-radius: var(--radius-lg);
+      border: 1px solid rgba(44, 61, 50, 0.09);
+      background: linear-gradient(180deg, rgba(255,255,255,0.76), rgba(246,239,228,0.95));
+      display: grid;
+      gap: 12px;
+    }
+    .flow-card strong {
+      font-size: 21px;
+      color: var(--accent-2);
+    }
+    .flow-card p {
+      margin: 0;
+      color: #313a34;
+      font-size: 14px;
+    }
+    .step-kicker {
+      font-size: 12px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--accent);
+    }
+    .step-tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .mini-step {
+      padding: 6px 10px;
+      font-size: 12px;
+    }
+    .cast {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 18px;
+    }
+    .role-card {
+      padding: 18px;
+      border-radius: var(--radius-lg);
+      background: linear-gradient(180deg, rgba(255,255,255,0.72), rgba(246,239,228,0.92));
+      border: 1px solid rgba(44, 61, 50, 0.09);
+      display: grid;
+      gap: 14px;
+    }
+    .role-head {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+    .avatar {
+      width: 58px;
+      height: 58px;
+      border-radius: 20px;
+      display: grid;
+      place-items: center;
+      font-weight: 800;
+      font-size: 24px;
+      color: white;
+      flex: 0 0 auto;
+      box-shadow: inset 0 -10px 18px rgba(0,0,0,0.14);
+    }
+    .a-user { background: linear-gradient(135deg, #6a6fb4, #45498c); }
+    .a-biz { background: linear-gradient(135deg, #375f54, #203f38); }
+    .a-proto { background: linear-gradient(135deg, #cf805e, #a85637); }
+    .a-run { background: linear-gradient(135deg, #4d6778, #304653); }
+    .a-struct { background: linear-gradient(135deg, #78664d, #544533); }
+    .a-master { background: linear-gradient(135deg, #b4572f, #884425); }
+    .role-card small {
+      color: var(--muted);
+      display: block;
+      margin-top: 4px;
+    }
+    .bubble {
+      padding: 14px 16px;
+      border-radius: 18px 18px 18px 6px;
+      background: white;
+      border: 1px solid rgba(44,61,50,0.08);
+      color: #2f3932;
+      position: relative;
+      min-height: 94px;
+    }
+    .bubble::before {
+      content: "";
+      position: absolute;
+      left: 18px;
+      bottom: -10px;
+      width: 18px;
+      height: 18px;
+      background: white;
+      border-left: 1px solid rgba(44,61,50,0.08);
+      border-bottom: 1px solid rgba(44,61,50,0.08);
+      transform: rotate(-35deg);
+      border-bottom-left-radius: 6px;
+    }
+    .chapters {
+      display: grid;
+      gap: 18px;
+    }
+    .chapter {
+      display: grid;
+      grid-template-columns: 220px 1fr;
+      gap: 22px;
+      padding: 24px;
+      align-items: start;
+    }
+    .stamp {
+      padding: 18px;
+      border-radius: 22px;
+      background: linear-gradient(180deg, rgba(32,77,66,0.08), rgba(32,77,66,0.02));
+      border: 1px solid rgba(32,77,66,0.1);
+      position: sticky;
+      top: 24px;
+    }
+    .stamp .day {
+      font-size: 12px;
+      letter-spacing: 0.14em;
+      color: var(--accent-2);
+      text-transform: uppercase;
+    }
+    .stamp strong {
+      display: block;
+      font-size: 30px;
+      margin-top: 10px;
+    }
+    .stamp p {
+      margin: 10px 0 0;
+      color: var(--muted);
+      font-size: 14px;
+    }
+    .chapter article h3 {
+      font-size: 30px;
+      margin-bottom: 12px;
+    }
+    .chapter article p {
+      margin: 0 0 14px;
+      color: #313a34;
+    }
+    .bullet-list {
+      display: grid;
+      gap: 10px;
+      margin-top: 12px;
+    }
+    .bullet-list div {
+      padding: 13px 15px;
+      border-radius: 16px;
+      background: rgba(255,255,255,0.72);
+      border: 1px solid rgba(44,61,50,0.08);
+    }
+    .evidence-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 18px;
+      margin-top: 18px;
+    }
+    .evidence-grid.prototype-evolution-grid {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      align-items: start;
+    }
+    .prototype-gallery-note {
+      margin: 16px 0 0;
+      padding: 14px 16px;
+      border-radius: 18px;
+      background: linear-gradient(180deg, rgba(255,255,255,0.74), rgba(246,239,228,0.94));
+      border: 1px solid rgba(44,61,50,0.08);
+      color: #313a34;
+    }
+    figure {
+      margin: 0;
+      background: rgba(255,255,255,0.72);
+      border-radius: 22px;
+      border: 1px solid rgba(44,61,50,0.09);
+      overflow: hidden;
+    }
+    figure.zoomable {
+      cursor: zoom-in;
+      transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+    }
+    figure.zoomable:hover {
+      transform: translateY(-2px);
+      border-color: rgba(180,87,47,0.24);
+      box-shadow: 0 18px 36px rgba(53, 41, 28, 0.10);
+    }
+    figure.zoomable:focus-visible {
+      outline: 3px solid rgba(180,87,47,0.22);
+      outline-offset: 4px;
+    }
+    figure img {
+      width: 100%;
+      display: block;
+      aspect-ratio: 16 / 10;
+      object-fit: cover;
+      background: #eadfce;
+    }
+    figcaption {
+      padding: 14px 16px 18px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+    .prototype-evolution-grid figure img {
+      aspect-ratio: 4 / 3;
+      object-position: top center;
+    }
+    .prototype-evolution-grid figcaption strong {
+      display: block;
+      margin-bottom: 8px;
+      color: var(--ink);
+      font-size: 15px;
+    }
+    .duty-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 14px;
+    }
+    .duty-card {
+      padding: 18px;
+      border-radius: 20px;
+      background: linear-gradient(180deg, rgba(255,255,255,0.82), rgba(247,239,228,0.96));
+      border: 1px solid rgba(44,61,50,0.08);
+    }
+    .duty-card strong {
+      display: block;
+      margin-bottom: 8px;
+      font-size: 18px;
+    }
+    .duty-card p {
+      margin: 0;
+      color: #313a34;
+      font-size: 14px;
+    }
+    .note-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 14px;
+    }
+    .note-pill {
+      border-radius: 16px;
+      padding: 10px 12px;
+      background: rgba(255,255,255,0.72);
+    }
+    .lightbox {
+      position: fixed;
+      inset: 0;
+      z-index: 999;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      background: rgba(22, 25, 23, 0.74);
+      backdrop-filter: blur(12px);
+    }
+    .lightbox[hidden] {
+      display: none;
+    }
+    .lightbox-backdrop {
+      position: absolute;
+      inset: 0;
+      border: 0;
+      background: transparent;
+      cursor: zoom-out;
+    }
+    .lightbox-card {
+      position: relative;
+      z-index: 1;
+      width: min(1100px, calc(100vw - 40px));
+      max-height: calc(100vh - 40px);
+      padding: 18px;
+      border-radius: 28px;
+      background: rgba(255, 251, 245, 0.98);
+      border: 1px solid rgba(50, 67, 59, 0.10);
+      box-shadow: 0 30px 80px rgba(0, 0, 0, 0.25);
+      display: grid;
+      gap: 14px;
+    }
+    .lightbox-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: flex-start;
+    }
+    .lightbox-kicker {
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--accent);
+    }
+    .lightbox-title {
+      margin-top: 6px;
+      font-size: 28px;
+      line-height: 1.18;
+    }
+    .lightbox-close {
+      flex: 0 0 auto;
+      width: 42px;
+      height: 42px;
+      border-radius: 999px;
+      border: 1px solid rgba(50, 67, 59, 0.12);
+      background: rgba(255,255,255,0.82);
+      color: var(--ink);
+      font-size: 22px;
+      cursor: pointer;
+    }
+    .lightbox-close:hover {
+      background: white;
+    }
+    .lightbox-media-wrap {
+      overflow: auto;
+      border-radius: 20px;
+      border: 1px solid rgba(50, 67, 59, 0.08);
+      background: linear-gradient(180deg, rgba(255,255,255,0.76), rgba(246,239,228,0.70));
+    }
+    .lightbox-media {
+      width: 100%;
+      display: block;
+      height: auto;
+      background: #f3ebdd;
+    }
+    .lightbox-caption {
+      padding: 0 2px 2px;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.75;
+    }
+    .lightbox-tip {
+      display: inline-flex;
+      align-items: center;
+      width: fit-content;
+      padding: 6px 10px;
+      border-radius: 999px;
+      border: 1px solid rgba(50, 67, 59, 0.10);
+      background: rgba(255,255,255,0.72);
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .closing {
+      padding: 28px;
+      position: relative;
+      overflow: hidden;
+    }
+    .closing::after {
+      content: "";
+      position: absolute;
+      right: -40px;
+      bottom: -60px;
+      width: 220px;
+      height: 220px;
+      background: radial-gradient(circle, rgba(180,87,47,0.16), transparent 70%);
+    }
+    .closing p {
+      max-width: 60em;
+      margin: 0 0 12px;
+    }
+    .ribbon {
+      display: inline-block;
+      margin-bottom: 14px;
+      padding: 7px 12px;
+      border-radius: 999px;
+      background: rgba(180,87,47,0.09);
+      color: var(--accent);
+      font-size: 13px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    .closing ul {
+      margin: 14px 0 0;
+      padding-left: 20px;
+      color: var(--muted);
+    }
+    @media (max-width: 980px) {
+      .hero,
+      .chapter,
+      .flow-strip,
+      .cast,
+      .evidence-grid,
+      .duty-grid {
+        grid-template-columns: 1fr;
+      }
+      .stamp {
+        position: static !important;
+      }
+      .lightbox {
+        padding: 12px;
+      }
+      .lightbox-card {
+        width: min(100vw - 24px, 100%);
+        max-height: calc(100vh - 24px);
+        padding: 14px;
+        border-radius: 22px;
+      }
+      .lightbox-title {
+        font-size: 22px;
+      }
+    }
+    @media (max-width: 1180px) {
+      .evidence-grid.prototype-evolution-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="hero">
+      <div>
+        <span class="eyebrow">Workflow Storyboard · 2026-03-20 · Qoreon</span>
+        <h1>一个需求，不是从任务单开始，<br/>而是从共识开始。</h1>
+        <p class="lead">这是你现在最常用、也最有效的一种工作方式：先把想法说给 Agent，先聊“这事和现系统是什么关系”，一旦文字开始吃力，就立刻切到可视化表达或原型页面，用看结果的方式继续评审。等共识被打磨到足够清晰，再把它交给多 Agent 协作实施。</p>
+        <div class="meta">
+          <span>主线：需求想法 → 可视化评审 → 共识冻结 → 协同实施</span>
+          <span>真实时间：2026-03-19 至 2026-03-20</span>
+          <span>叙事视角：站在产品经理的结果评审位</span>
+          <span>这页用途：固化常用分工与协作模式</span>
+        </div>
+      </div>
+      <div class="hero-side">
+        <div class="signal"><strong>293 个 run 样本</strong>说明这套模式不是概念宣言，而是已经被真实协作不断跑出来的工作习惯。</div>
+        <div class="signal"><strong>2 种可视化方式</strong>一种是用来表达结构和关系的方案页，一种是能直接评审效果的原型页。</div>
+        <div class="signal"><strong>4 段协作链路</strong>先收想法，再做可视化，再冻共识，最后按角色拆到业务、任务、架构和实现层。</div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="section-head">
+        <div>
+          <h2>这条链路，现在是怎么跑的</h2>
+          <p>这不是“多几个 Agent 一起说话”那么简单，而是一套逐层收敛的方法。你不需要一开始就把需求写成任务书，只需要先把目标和疑问扔进来，后面的结构化动作由系统协作去接住。</p>
+        </div>
+      </div>
+      <div class="flow-strip">
+        <article class="flow-card">
+          <div class="step-kicker">Step 01</div>
+          <strong>把想法说出来</strong>
+          <p>先聊目的、现系统关系、担心点和预期效果，不急着写成任务条目。</p>
+          <div class="step-tags">
+            <span class="mini-step">需求想法</span>
+            <span class="mini-step">系统关系</span>
+            <span class="mini-step">口头目标</span>
+          </div>
+        </article>
+        <article class="flow-card">
+          <div class="step-kicker">Step 02</div>
+          <strong>切到可视化</strong>
+          <p>当文字开始累、结构开始绕，就做表达页、原型页、故事页，把抽象判断变成可评审对象。</p>
+          <div class="step-tags">
+            <span class="mini-step">方案表达</span>
+            <span class="mini-step">原型评审</span>
+            <span class="mini-step">故事板</span>
+          </div>
+        </article>
+        <article class="flow-card">
+          <div class="step-kicker">Step 03</div>
+          <strong>把共识冻住</strong>
+          <p>经过几轮细节打磨后，把“到底要做什么”冻结成正式真源、评审对象和边界。</p>
+          <div class="step-tags">
+            <span class="mini-step">真源冻结</span>
+            <span class="mini-step">边界冻结</span>
+            <span class="mini-step">可实施</span>
+          </div>
+        </article>
+        <article class="flow-card">
+          <div class="step-kicker">Step 04</div>
+          <strong>多角色接力实施</strong>
+          <p>业务、前端、运行时、结构治理、总控和辅助审核一起接力，不让一个 Agent 独自猜全链路。</p>
+          <div class="step-tags">
+            <span class="mini-step">协同派发</span>
+            <span class="mini-step">专项审核</span>
+            <span class="mini-step">回执收口</span>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="section-head">
+        <div>
+          <h2>这条工作模式里，常见的登场角色</h2>
+          <p>下面这些不是抽象职责，而是你现在已经在真实使用的协作位。后面业务联络要做好分发，核心不是代替他们实施，而是知道什么时候把问题送给谁、什么时候把结果翻译回来。</p>
+        </div>
+      </div>
+      <div class="cast">
+        <article class="role-card">
+          <div class="role-head"><div class="avatar a-user">你</div><div><strong>提出人 / 产品经理</strong><small>负责目标、结果判断和效果评审。</small></div></div>
+          <div class="bubble">“我先说我要什么，不一定先能说清技术。你先帮我看这件事和现系统是什么关系。”</div>
+        </article>
+        <article class="role-card">
+          <div class="role-head"><div class="avatar a-biz">联</div><div><strong>业务联络</strong><small>负责收件、补背景、首轮分流和回执翻译。</small></div></div>
+          <div class="bubble">“这件事先别急着拆实现，我先判断它更像页面体验、运行时还是治理规则，再找对协同入口。”</div>
+        </article>
+        <article class="role-card">
+          <div class="role-head"><div class="avatar a-proto">型</div><div><strong>方案表达 / 原型页</strong><small>把抽象想法做成可看、可评审的东西。</small></div></div>
+          <div class="bubble">“当纯文字开始费劲，就先做页面、方案页或故事页，让你站在结果上做判断。”</div>
+        </article>
+        <article class="role-card">
+          <div class="role-head"><div class="avatar a-run">执</div><div><strong>专项执行位</strong><small>前端、运行时、架构、数据、工具链按领域接力。</small></div></div>
+          <div class="bubble">“共识一旦冻结，就按前端 / 运行时 / 结构这几条线拆，不再让一个人猜完整个系统。”</div>
+        </article>
+        <article class="role-card">
+          <div class="role-head"><div class="avatar a-struct">构</div><div><strong>结构治理 / 系统梳理</strong><small>守住真源、边界、会话与配置秩序。</small></div></div>
+          <div class="bubble">“哪些是正式真源，哪些只是过程材料，哪些能放行到下一步，这些要有人盯。”</div>
+        </article>
+        <article class="role-card">
+          <div class="role-head"><div class="avatar a-master">总</div><div><strong>总控 / 放行位</strong><small>负责范围裁剪、风险判断和最终收口。</small></div></div>
+          <div class="bubble">“不是做完就算过，要看当前是不是已经形成可放行的共识和可验收的结果。”</div>
+        </article>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="section-head">
+        <div>
+          <h2>这套模式，真实是怎么发生的</h2>
+          <p>下面不是抽象方法论，而是你现在已经在 Qoreon 里反复使用的现场版故事。</p>
+        </div>
+      </div>
+      <div class="chapters">
+        <section class="chapter">
+          <aside class="stamp">
+            <div class="day">Chapter 01</div>
+            <strong>先从一句话开始</strong>
+            <p>3 月 20 日，需求先以自然语言进入对话，不先伪装成任务书。</p>
+          </aside>
+          <article>
+            <h3>你先讲想法，Agent 先帮你把问题站稳</h3>
+            <p>真正有用的起点，并不是“请写 PRD”，而是你先说：<strong>我最近更习惯这样工作，我会先沟通方案和它与现系统的关系，文字看累了就切可视化，然后再评审、再共识、再实施。</strong> 这类话很重要，因为它不只是功能诉求，它其实在告诉系统你偏好的工作节奏。</p>
+            <p>这一步里，最关键的不是立刻给答案，而是先识别这条诉求属于哪种工作模式。它不是单纯问一个页面怎么改，而是在声明一种“从需求想法到多 Agent 协作实施”的方法。业务联络如果能在这里听懂，就不会把它误分成普通执行单。</p>
+            <div class="bullet-list">
+              <div><strong>这一步的目标：</strong>先理解用户要的不是单一页面，而是一条可复用的协作路径。</div>
+              <div><strong>业务联络该做的：</strong>补齐背景、确认这件事会跨方案表达、任务化和实施协同，而不是急着派给单个执行位。</div>
+            </div>
+            <div class="evidence-grid">
+              <figure class="zoomable" tabindex="0" data-lightbox-title="首页改版最初需求消息" data-lightbox-kicker="Chapter 01 · 需求进入对话">
+                <img src="assets/worklog-20260320/overview-home-origin-request.png" alt="首页改版最初需求消息截图" />
+                <figcaption>这里直接放回当时的原始对话更准确。用户一开始先指出“当前项目任务看板还是旧统计视角”，并追问首页应该怎样围绕真正要关注的任务推进去改，这才是首页改版这条业务线的真实起点。</figcaption>
+              </figure>
+            </div>
+          </article>
+        </section>
+
+        <section class="chapter">
+          <aside class="stamp">
+            <div class="day">Chapter 02</div>
+            <strong>文字不够就切画面</strong>
+            <p>一旦结构开始复杂，系统就不再只回长文，而是拉出可视化对象给你看。</p>
+          </aside>
+          <article>
+            <h3>可视化不是锦上添花，而是让评审回到结果上</h3>
+            <p>你已经很明确地说过，纯文字看起来累，所以希望 Agent 把方案做成可视化表达，或者直接做成原型页面。这个判断非常对，因为很多需求在文字阶段争不清楚，不是因为没人努力，而是因为大家脑子里看到的根本不是同一个东西。</p>
+            <p>于是这套模式里会自然长出两类页面：一类是<strong>方案表达页</strong>，负责把“这个方向的结构和边界”讲明白；另一类是<strong>原型页</strong>，负责让你站在结果上直接评审“做出来像不像、顺不顺、值不值得继续”。</p>
+            <div class="bullet-list">
+              <div><strong>表达页解决什么：</strong>先把信息架构、状态关系、关键判断说透，让所有人看同一张地图。</div>
+              <div><strong>原型页解决什么：</strong>把抽象描述变成可以挑细节的对象，帮助你判断结果是不是你要的那个方向。</div>
+            </div>
+            <p class="prototype-gallery-note">这次真正对应的是“小秘书首页改版”这条业务线：总揽页从原来的统计与列表视角，逐步收敛成“任务情况 + Agent 活动消息”的关注型首页。把 v1 到 v5 并排放出来，比只看最后一版更能看清首页改版是怎样一路做减法、再慢慢贴近现网页面的。</p>
+            <div class="evidence-grid prototype-evolution-grid">
+              <figure class="zoomable" tabindex="0" data-lightbox-title="首页改版 · overview关注型统计与消息活跃原型 v1" data-lightbox-kicker="Chapter 02 · 首页改版 v1">
+                <img src="assets/worklog-20260320/overview-evolution/overview-home-v1.png" alt="首页改版 overview关注型统计与消息活跃原型 v1 截图" />
+                <figcaption><strong>v1 · 关注型重构起稿</strong>第一次把首页从“库存统计页”改成“消息活跃与推进关注页”，信息量最多，方向也最激进。</figcaption>
+              </figure>
+              <figure class="zoomable" tabindex="0" data-lightbox-title="首页改版 · overview关注型统计与消息活跃原型 v2" data-lightbox-kicker="Chapter 02 · 首页改版 v2">
+                <img src="assets/worklog-20260320/overview-evolution/overview-home-v2.png" alt="首页改版 overview关注型统计与消息活跃原型 v2 截图" />
+                <figcaption><strong>v2 · 双趋势收敛版</strong>收掉对话榜和多组摘要，只保留“任务情况趋势 + Agent 活动消息趋势 + 项目入口”。</figcaption>
+              </figure>
+              <figure class="zoomable" tabindex="0" data-lightbox-title="首页改版 · overview关注型统计与消息活跃原型 v3" data-lightbox-kicker="Chapter 02 · 首页改版 v3">
+                <img src="assets/worklog-20260320/overview-evolution/overview-home-v3.png" alt="首页改版 overview关注型统计与消息活跃原型 v3 截图" />
+                <figcaption><strong>v3 · 正式页头部贴齐</strong>开始回收到当前正式页语法，头部和项目卡不再另起一套视觉语言。</figcaption>
+              </figure>
+              <figure class="zoomable" tabindex="0" data-lightbox-title="首页改版 · overview关注型统计与消息活跃原型 v4" data-lightbox-kicker="Chapter 02 · 首页改版 v4">
+                <img src="assets/worklog-20260320/overview-evolution/overview-home-v4.png" alt="首页改版 overview关注型统计与消息活跃原型 v4 截图" />
+                <figcaption><strong>v4 · 向在线版继续靠拢</strong>保留筛选控制栏，继续收掉项目卡底部操作行，首页越来越像可直接落地的真实页面。</figcaption>
+              </figure>
+              <figure class="zoomable" tabindex="0" data-lightbox-title="首页改版 · overview关注型统计与消息活跃原型 v5" data-lightbox-kicker="Chapter 02 · 首页改版 v5">
+                <img src="assets/worklog-20260320/overview-evolution/overview-home-v5.png" alt="首页改版 overview关注型统计与消息活跃原型 v5 截图" />
+                <figcaption><strong>v5 · 减法后的定向版本</strong>继续去掉解释性文字和弱提示，只保留判断首页状态真正需要看的信息。</figcaption>
+              </figure>
+            </div>
+          </article>
+        </section>
+
+        <section class="chapter">
+          <aside class="stamp">
+            <div class="day">Chapter 03</div>
+            <strong>把共识冻成真源</strong>
+            <p>几轮评审之后，重点不再是继续解释，而是把结果冻结成可持续推进的正式对象。</p>
+          </aside>
+          <article>
+            <h3>共识不是“大家差不多懂了”，而是形成了正式评审对象</h3>
+            <p>当你和 Agent 在可视化页面上来回几轮之后，事情会进入一个很关键的阶段：从“这是一个不错的方向”，变成“我们已经知道接下来具体要做什么”。这时就不能继续把共识留在聊天里了，它需要被冻成需求、任务、边界和交付对象。</p>
+            <p>首页改版这条线，当时并不是先落成一张独立任务单，而是先并入一份正式需求真源。谁负责、当前范围是什么、后续哪些动作继续挂靠这条主线，都会先围着这份正式对象组织，而不是围着随手消息漂浮。</p>
+            <div class="bullet-list">
+              <div><strong>冻结后的好处：</strong>后续实施不再反复猜“是不是要做这个”，而是围绕同一个任务对象推进。</div>
+              <div><strong>业务联络此时要记住：</strong>先判断它冻结进的是需求真源还是任务真源，后续回执都优先回到这条主线，而不是重新散回口头讨论。</div>
+            </div>
+            <div class="evidence-grid">
+              <figure class="zoomable" tabindex="0" data-lightbox-title="首页改版挂靠需求真源现场" data-lightbox-kicker="Chapter 03 · 需求冻结">
+                <img src="assets/worklog-20260320/overview-requirement-freeze-current.png" alt="首页改版挂靠需求真源截图" />
+                <figcaption>这条首页改版在当时还没有独立拆成任务单，先被正式并入 <code>REQ-20260319-FRAME-LEFTOVER-REVIEW</code>。更准确地说，这一刻冻结的是“后续协作该围着哪份真源继续推进”。</figcaption>
+              </figure>
+            </div>
+          </article>
+        </section>
+
+        <section class="chapter">
+          <aside class="stamp">
+            <div class="day">Chapter 04</div>
+            <strong>实施靠接力，不靠猜</strong>
+            <p>共识之后，工作才真正开始进入多 Agent 分工协同。</p>
+          </aside>
+          <article>
+            <h3>专项负责人、审核位和协同 Agent，会把事情一层层做实</h3>
+            <p>到了执行阶段，这套模式的价值才会完全显出来。因为实施不是让一个 Agent 独自从产品想到代码，而是按任务、业务、技术架构和治理规则，把问题拆到相应负责人那里，再由总控和治理线做审核和放行。</p>
+            <p>这意味着一件事：<strong>你不需要自己先决定找谁。</strong> 系统会把问题拆给前端、运行时、结构治理、总控、信息梳理、业务联络等不同角色，大家在同一条主线上做各自最擅长的那部分。最后回来的不是一堆零散回复，而是逐渐拼完整的交付结果。</p>
+            <div class="bullet-list">
+              <div><strong>专项执行位负责：</strong>把已经确认的目标落成真实页面、服务链路、结构规则或工具链动作。</div>
+              <div><strong>审核位负责：</strong>判断范围是否跑偏、实现是否越界、当前是否已可放行。</div>
+              <div><strong>业务联络负责：</strong>在中间看懂这些回执，把它们重新翻译成你容易消费的业务语言和下一步动作。</div>
+            </div>
+            <div class="evidence-grid">
+              <figure class="zoomable" tabindex="0" data-lightbox-title="分工协作被讲清楚的现场" data-lightbox-kicker="Chapter 04 · 协作分工共识">
+                <img src="assets/worklog-20260320/idea-to-visual-chat.png" alt="分工协作被讲清楚的对话截图" />
+                <figcaption>这张图更适合放在最后一段。因为它承接的不是“需求刚出现”，而是“这件事后面会经过可视化、评审、实施，并让相关负责人一起审核和协同”的分工共识。</figcaption>
+              </figure>
+            </div>
+          </article>
+        </section>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="section-head">
+        <div>
+          <h2>这套模式，对业务联络意味着什么</h2>
+          <p>你后续要做好业务分发，重点不是多懂一点技术细节，而是守住这四个动作：收件、转译、组织、回译。</p>
+        </div>
+      </div>
+      <div class="duty-grid">
+        <article class="duty-card">
+          <strong>1. 收件</strong>
+          <p>先识别这条话是在提功能、提工作模式，还是在表达评审偏好。别一上来就把复杂诉求压扁成单个执行单。</p>
+        </article>
+        <article class="duty-card">
+          <strong>2. 转译</strong>
+          <p>把“我想先看效果”“纯文字太累”“我想知道和现系统关系”这类产品语言，转成可消费的通道目标。</p>
+        </article>
+        <article class="duty-card">
+          <strong>3. 组织</strong>
+          <p>在“方案表达 / 原型评审 / 专项实施 / 治理放行”之间找对接力顺序，让问题按正确阶段流动。</p>
+        </article>
+        <article class="duty-card">
+          <strong>4. 回译</strong>
+          <p>把专项回执重新翻译成业务语言，告诉提出人：现在处在哪个阶段、唯一阻塞是什么、下一步看什么。</p>
+        </article>
+      </div>
+      <div class="note-row">
+        <span class="note-pill">收件入口常态化：主体01-业务联络</span>
+        <span class="note-pill">方案可视化：表达页 / 原型页 / 故事板</span>
+        <span class="note-pill">实施分流：前端 / 运行时 / 结构治理 / 工具链</span>
+        <span class="note-pill">收口原则：一般情况下回执给原发送 Agent</span>
+      </div>
+    </section>
+
+    <section class="closing">
+      <span class="ribbon">Closing Note</span>
+      <h2>这套 Agent 化分工的完整工作模式，核心不是“多快做出来”，而是“先把结果看清楚，再把协作组织起来”。</h2>
+      <p>你现在这套方法之所以顺手，是因为它天然照顾了产品工作的真实节奏。需求一开始往往只是一个方向感和几个判断点，直接逼成任务书会很硬；先把想法聊透，再把想法做成可视化对象，等共识足够稳了再进入实施，这样不仅更贴近你的工作方式，也更容易让后面的多 Agent 协同真正对准目标。</p>
+      <p>从业务联络角度看，这页故事板最值得记住的一点是：<strong>需求不是直接被派发出去的，而是先被理解、被可视化、被冻成共识，最后才被拆成协作。</strong> 只要守住这条顺序，后面的分流和回执就会越来越顺。</p>
+      <ul>
+        <li>参考材料：`2026-03-19 task_dashboard 今日 Agent 业务情况总结`</li>
+        <li>真实截图来源：2026-03-20 本地协作现场、方案页、原型页、任务页与会话现场</li>
+        <li>适用范围：需求想法刚出现，且需要“先看结果再做实施”的多 Agent 协作场景</li>
+      </ul>
+    </section>
+  </main>
+  <div class="lightbox" id="storyLightbox" hidden aria-hidden="true">
+    <button class="lightbox-backdrop" type="button" id="storyLightboxBackdrop" aria-label="关闭图片详情"></button>
+    <section class="lightbox-card" role="dialog" aria-modal="true" aria-labelledby="storyLightboxTitle">
+      <div class="lightbox-head">
+        <div>
+          <div class="lightbox-kicker" id="storyLightboxKicker">图片详情</div>
+          <h2 class="lightbox-title" id="storyLightboxTitle">查看图片</h2>
+        </div>
+        <button class="lightbox-close" type="button" id="storyLightboxClose" aria-label="关闭图片详情">×</button>
+      </div>
+      <div class="lightbox-media-wrap">
+        <img class="lightbox-media" id="storyLightboxImage" src="" alt="" />
+      </div>
+      <div class="lightbox-caption" id="storyLightboxCaption"></div>
+      <div class="lightbox-tip">点击遮罩或按 Esc 关闭</div>
+    </section>
+  </div>
+  <script>
+    (function () {
+      const lightbox = document.getElementById("storyLightbox");
+      const lightboxImage = document.getElementById("storyLightboxImage");
+      const lightboxTitle = document.getElementById("storyLightboxTitle");
+      const lightboxKicker = document.getElementById("storyLightboxKicker");
+      const lightboxCaption = document.getElementById("storyLightboxCaption");
+      const closeButton = document.getElementById("storyLightboxClose");
+      const backdrop = document.getElementById("storyLightboxBackdrop");
+      const figures = Array.from(document.querySelectorAll("figure.zoomable"));
+      let lastTrigger = null;
+
+      function openLightbox(figure) {
+        if (!figure || !lightbox || !lightboxImage) return;
+        const img = figure.querySelector("img");
+        const caption = figure.querySelector("figcaption");
+        if (!img) return;
+        lastTrigger = figure;
+        lightboxImage.src = img.getAttribute("src") || "";
+        lightboxImage.alt = img.getAttribute("alt") || "";
+        lightboxTitle.textContent = figure.getAttribute("data-lightbox-title") || img.getAttribute("alt") || "查看图片";
+        lightboxKicker.textContent = figure.getAttribute("data-lightbox-kicker") || "图片详情";
+        lightboxCaption.textContent = caption ? caption.textContent || "" : "";
+        lightbox.hidden = false;
+        lightbox.setAttribute("aria-hidden", "false");
+        document.body.classList.add("lightbox-open");
+        closeButton && closeButton.focus();
+      }
+
+      function closeLightbox() {
+        if (!lightbox || lightbox.hidden) return;
+        lightbox.hidden = true;
+        lightbox.setAttribute("aria-hidden", "true");
+        document.body.classList.remove("lightbox-open");
+        lightboxImage.src = "";
+        if (lastTrigger && typeof lastTrigger.focus === "function") lastTrigger.focus();
+      }
+
+      figures.forEach((figure) => {
+        figure.addEventListener("click", () => openLightbox(figure));
+        figure.addEventListener("keydown", (event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            openLightbox(figure);
+          }
+        });
+      });
+
+      if (closeButton) closeButton.addEventListener("click", closeLightbox);
+      if (backdrop) backdrop.addEventListener("click", closeLightbox);
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") closeLightbox();
+      });
+    })();
+  </script>
+</body>
+</html>

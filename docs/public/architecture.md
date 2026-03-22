@@ -12,7 +12,7 @@
 
 - Markdown 任务空间是看板真源
 - `.runtime/.sessions/.runs` 是运行产物真源
-- `examples/minimal-project/seed/*.json` 是公开种子包真源
+- `examples/standard-project/seed/*.json` 是公开种子包真源
 - `docs/public/ai-bootstrap.md` 是 AI 初始化唯一入口
 
 ## Qoreon 开源一体包

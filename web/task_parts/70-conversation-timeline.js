@@ -2090,8 +2090,9 @@
       }
 
       const assistantBubbleText = String(displayAssistantText || "").trim();
+      const showAssistantBodyCard = !!assistantBubbleText && !isRunWorking(st);
       let bodyCard = null;
-      if (assistantBubbleText) {
+      if (showAssistantBodyCard) {
         bodyCard = el("div", { class: "msg-body-card assistant" });
         const bodyHead = el("div", { class: "msg-body-head" });
         bodyHead.appendChild(el("div", { class: "msg-body-title", text: "正文" }));

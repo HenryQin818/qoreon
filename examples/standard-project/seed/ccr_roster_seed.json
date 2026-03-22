@@ -1,0 +1,156 @@
+{
+  "schema_version": "1.0",
+  "public_safe": true,
+  "project_id": "standard_project",
+  "default_read_order": [
+    "examples/standard-project/README.md",
+    "examples/standard-project/seed/seed-inventory.json",
+    "examples/standard-project/seed/ccr_roster_seed.json",
+    "examples/standard-project/tasks/辅助05-团队协作Skills治理/产出物/沉淀/03-公开公共技能包清单.md",
+    "examples/standard-project/tasks/README.md",
+    "examples/standard-project/tasks/主体-总控/产出物/沉淀/01-治理通道来源映射.md",
+    "examples/standard-project/tasks/主体-总控/产出物/沉淀/02-标准项目启动顺序.md",
+    "examples/standard-project/tasks/主体-总控/产出物/沉淀/03-标准项目通讯录与分工表.md"
+  ],
+  "communication_playbook": {
+    "interaction_modes": [
+      "dialog_now",
+      "task_with_receipt",
+      "notify_only"
+    ],
+    "sender_types": [
+      "system",
+      "agent",
+      "user"
+    ],
+    "message_kind_map": {
+      "system": "system_callback",
+      "agent": "collab_update",
+      "user": "manual_update"
+    },
+    "agent_delivery_modes": [
+      "wait_reply",
+      "notify_once"
+    ],
+    "templates": {
+      "task_with_receipt": "当前结论 / 是否通过或放行 / 唯一阻塞 / 关键路径或 run_id / 下一步动作",
+      "notify_only": "仅通知，不要求回执；若需收口，再转 task_with_receipt"
+    },
+    "self_test_checklist": [
+      "能读到 12 条通道",
+      "能定位默认启用的 6 个核心通道",
+      "能识别扩展治理通道的默认入口",
+      "能把回执发送回原发送 Agent"
+    ]
+  },
+  "channels": [
+    {
+      "channel_name": "主体-总控",
+      "agent_id": "master_control",
+      "role": "主控",
+      "responsibility_boundary": "管总节奏、批次排序、派发与收口，不替代业务通道写实现",
+      "default_collaboration_entry": "tasks/主体-总控/产出物/沉淀/02-标准项目启动顺序.md",
+      "default_enabled": true,
+      "skills": ["project-startup-collab-suite", "agent-init-training-playbook", "collab-message-send"]
+    },
+    {
+      "channel_name": "辅助01-结构治理与项目接入",
+      "agent_id": "structure_governor",
+      "role": "结构治理",
+      "responsibility_boundary": "管目录、通讯录、接入边界、CCR 更新顺序与真源判断",
+      "default_collaboration_entry": "tasks/辅助01-结构治理与项目接入/任务/【待开始】【任务】20260321-结构治理与通讯录基线整编.md",
+      "default_enabled": true,
+      "skills": ["ccr-update-playbook", "agent-init-training-playbook", "collab-message-send"]
+    },
+    {
+      "channel_name": "子级01-运行时与后端",
+      "agent_id": "runtime_backend",
+      "role": "后端",
+      "responsibility_boundary": "管 bootstrap 支撑、运行时、API 与服务接入，不碰展示层",
+      "default_collaboration_entry": "tasks/子级01-运行时与后端/任务/【待开始】【任务】20260321-标准项目运行时与Bootstrap支撑校准.md",
+      "default_enabled": true,
+      "skills": ["collab-message-send"]
+    },
+    {
+      "channel_name": "子级02-前端与交互",
+      "agent_id": "frontend_interaction",
+      "role": "前端",
+      "responsibility_boundary": "管页面入口、交互、可见性与默认呈现，不改运行契约",
+      "default_collaboration_entry": "tasks/子级02-前端与交互/任务/【待开始】【任务】20260321-标准项目页面入口与项目可见性校准.md",
+      "default_enabled": true,
+      "skills": ["collab-message-send"]
+    },
+    {
+      "channel_name": "子级03-数据与契约",
+      "agent_id": "data_contract",
+      "role": "数据契约",
+      "responsibility_boundary": "管 seed、契约字段、校验规则与兼容性，不做业务实现",
+      "default_collaboration_entry": "tasks/子级03-数据与契约/任务/【待开始】【任务】20260321-标准项目Seed与契约字段校验.md",
+      "default_enabled": true,
+      "skills": ["collab-message-send"]
+    },
+    {
+      "channel_name": "子级04-测试与验收",
+      "agent_id": "test_release",
+      "role": "测试验收",
+      "responsibility_boundary": "管 bootstrap、健康检查、clean-room 与放行结论",
+      "default_collaboration_entry": "tasks/子级04-测试与验收/任务/【待开始】【任务】20260321-标准项目Bootstrap与健康验收.md",
+      "default_enabled": true,
+      "skills": ["collab-message-send"]
+    },
+    {
+      "channel_name": "辅助02-文档与知识沉淀",
+      "agent_id": "docs_maintainer",
+      "role": "文档",
+      "responsibility_boundary": "管 README、知识索引、启动说明与公开文档同步",
+      "default_collaboration_entry": "tasks/辅助02-文档与知识沉淀/任务/【待开始】【任务】20260321-标准项目说明与知识索引整理.md",
+      "default_enabled": false,
+      "skills": ["collab-message-send"]
+    },
+    {
+      "channel_name": "辅助03-用户镜像与业务判断",
+      "agent_id": "user_mirror",
+      "role": "用户镜像",
+      "responsibility_boundary": "管用户视角、推荐结构、业务判断，不直接发版",
+      "default_collaboration_entry": "tasks/辅助03-用户镜像与业务判断/任务/【待开始】【任务】20260321-标准项目业务判断与推荐结构说明.md",
+      "default_enabled": false,
+      "skills": ["collab-message-send"]
+    },
+    {
+      "channel_name": "辅助04-Git桥接与发布同步",
+      "agent_id": "git_bridge_readonly",
+      "role": "桥接",
+      "responsibility_boundary": "管只读预检、差异复核、发布边界，不直接推远端",
+      "default_collaboration_entry": "tasks/辅助04-Git桥接与发布同步/任务/【待开始】【任务】20260321-标准项目同步边界与只读预检.md",
+      "default_enabled": false,
+      "skills": ["collab-message-send"]
+    },
+    {
+      "channel_name": "辅助05-团队协作Skills治理",
+      "agent_id": "skills_governor",
+      "role": "技能治理",
+      "responsibility_boundary": "管技能清单、技能升级、培训基线与使用约束",
+      "default_collaboration_entry": "tasks/辅助05-团队协作Skills治理/任务/【待开始】【任务】20260321-Skills治理规范与培训基线接入.md",
+      "default_enabled": false,
+      "skills": ["skills-governance-upgrade", "agent-init-training-playbook", "collab-message-send"]
+    },
+    {
+      "channel_name": "辅助06-项目运维",
+      "agent_id": "project_ops",
+      "role": "项目运维",
+      "responsibility_boundary": "管会话健康、轮换、上下文腐烂修复与运行巡检",
+      "default_collaboration_entry": "tasks/辅助06-项目运维/任务/【待开始】【任务】20260321-会话健康巡检与轮换修复基线接入.md",
+      "default_enabled": false,
+      "skills": ["session-health-inspector", "session-rotation-handoff", "collab-message-send"]
+    },
+    {
+      "channel_name": "系统01-信息梳理",
+      "agent_id": "info_organizer",
+      "role": "信息梳理",
+      "responsibility_boundary": "管任务文件健康、知识盘点、只读转派与结构扫描",
+      "default_collaboration_entry": "tasks/系统01-信息梳理/任务/【待开始】【任务】20260321-任务文件健康检查与知识盘点基线接入.md",
+      "default_enabled": false,
+      "skills": ["task-health-organizer", "collab-message-send"]
+    }
+  ]
+}

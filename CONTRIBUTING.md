@@ -11,7 +11,7 @@
 
 ```bash
 python3 build_project_task_dashboard.py
-python3 server.py --port 18770
+python3 server.py --port 18770 --static-root dist
 python3 -m unittest discover -s tests -p 'test_*.py' -v
 ```
 

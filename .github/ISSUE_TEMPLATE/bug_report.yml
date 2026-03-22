@@ -1,0 +1,62 @@
+name: Bug report
+description: Report a reproducible problem in Qoreon.
+title: "[Bug] "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a problem.
+
+        Before filing, please confirm you have checked:
+        - `README.md`
+        - `docs/public/quick-start.md`
+        - `docs/public/ai-bootstrap.md`
+  - type: input
+    id: version
+    attributes:
+      label: Version or tag
+      description: Which commit, tag, or local branch are you testing?
+      placeholder: qoreon-v1-candidate-20260321-b
+    validations:
+      required: true
+  - type: dropdown
+    id: setup
+    attributes:
+      label: Setup path
+      options:
+        - Minimal project only
+        - Minimal project plus built-in agents
+        - Standard project template
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: List the exact commands and pages you used.
+      placeholder: |
+        1. python3 scripts/install_public_bundle.py --start-server
+        2. python3 server.py --port 18770 --static-root dist
+        3. Open /project-task-dashboard.html
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or screenshots
+      description: Paste traceback, browser console output, or screenshots if available.

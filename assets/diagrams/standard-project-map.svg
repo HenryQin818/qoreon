@@ -1,0 +1,68 @@
+<svg width="1600" height="820" viewBox="0 0 1600 820" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="mapbg" x1="70" y1="30" x2="1530" y2="790" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#131A22"/>
+      <stop offset="1" stop-color="#15292B"/>
+    </linearGradient>
+    <linearGradient id="mapcard" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#183036"/>
+      <stop offset="1" stop-color="#11252A"/>
+    </linearGradient>
+    <linearGradient id="core" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#30D6A8"/>
+      <stop offset="1" stop-color="#77E4CA"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1600" height="820" rx="36" fill="url(#mapbg)"/>
+  <text x="90" y="92" fill="#F7F3E8" font-family="SFMono-Regular, Menlo, monospace" font-size="18">standard_project structure</text>
+  <text x="90" y="144" fill="#F7F3E8" font-family="Helvetica, Arial, sans-serif" font-size="44" font-weight="700">One public project, three visible layers</text>
+  <text x="90" y="186" fill="#BBD1CC" font-family="Helvetica, Arial, sans-serif" font-size="24">Qoreon ships one standard project so install, AI bootstrap, and governance all point to the same place.</text>
+
+  <g transform="translate(90 250)">
+    <rect width="440" height="470" rx="28" fill="url(#mapcard)" stroke="#2C555C"/>
+    <text x="34" y="62" fill="#F7F3E8" font-family="Helvetica, Arial, sans-serif" font-size="30" font-weight="700">Control layer</text>
+    <text x="34" y="98" fill="#BBD1CC" font-family="Helvetica, Arial, sans-serif" font-size="20">How the project is directed</text>
+    <rect x="34" y="132" width="372" height="70" rx="18" fill="#123E3E" stroke="#3DAA94"/>
+    <text x="56" y="176" fill="#F7F3E8" font-family="Helvetica, Arial, sans-serif" font-size="24" font-weight="700">主体-总控</text>
+    <rect x="34" y="222" width="372" height="70" rx="18" fill="#122C37" stroke="#42798B"/>
+    <text x="56" y="266" fill="#F7F3E8" font-family="Helvetica, Arial, sans-serif" font-size="22">辅助01 结构治理与项目接入</text>
+    <rect x="34" y="312" width="372" height="70" rx="18" fill="#122C37" stroke="#42798B"/>
+    <text x="56" y="356" fill="#F7F3E8" font-family="Helvetica, Arial, sans-serif" font-size="22">辅助05 Skills 治理</text>
+    <rect x="34" y="402" width="372" height="70" rx="18" fill="#122C37" stroke="#42798B"/>
+    <text x="56" y="446" fill="#F7F3E8" font-family="Helvetica, Arial, sans-serif" font-size="22">辅助06 项目运维</text>
+  </g>
+
+  <g transform="translate(580 250)">
+    <rect width="440" height="470" rx="28" fill="url(#mapcard)" stroke="#2C555C"/>
+    <text x="34" y="62" fill="#F7F3E8" font-family="Helvetica, Arial, sans-serif" font-size="30" font-weight="700">Execution layer</text>
+    <text x="34" y="98" fill="#BBD1CC" font-family="Helvetica, Arial, sans-serif" font-size="20">How work is carried out</text>
+    <rect x="34" y="132" width="372" height="70" rx="18" fill="#123E3E" stroke="#3DAA94"/>
+    <text x="56" y="176" fill="#F7F3E8" font-family="Helvetica, Arial, sans-serif" font-size="22">子级01 运行时与后端</text>
+    <rect x="34" y="222" width="372" height="70" rx="18" fill="#123E3E" stroke="#3DAA94"/>
+    <text x="56" y="266" fill="#F7F3E8" font-family="Helvetica, Arial, sans-serif" font-size="22">子级02 前端与交互</text>
+    <rect x="34" y="312" width="372" height="70" rx="18" fill="#123E3E" stroke="#3DAA94"/>
+    <text x="56" y="356" fill="#F7F3E8" font-family="Helvetica, Arial, sans-serif" font-size="22">子级03 数据与契约</text>
+    <rect x="34" y="402" width="372" height="70" rx="18" fill="#123E3E" stroke="#3DAA94"/>
+    <text x="56" y="446" fill="#F7F3E8" font-family="Helvetica, Arial, sans-serif" font-size="22">子级04 测试与验收</text>
+  </g>
+
+  <g transform="translate(1070 250)">
+    <rect width="440" height="470" rx="28" fill="url(#mapcard)" stroke="#2C555C"/>
+    <text x="34" y="62" fill="#F7F3E8" font-family="Helvetica, Arial, sans-serif" font-size="30" font-weight="700">Public package layer</text>
+    <text x="34" y="98" fill="#BBD1CC" font-family="Helvetica, Arial, sans-serif" font-size="20">What ships to a new computer</text>
+    <rect x="34" y="132" width="372" height="70" rx="18" fill="#132F39" stroke="#478698"/>
+    <text x="56" y="176" fill="#F7F3E8" font-family="Helvetica, Arial, sans-serif" font-size="22">standard_project</text>
+    <rect x="34" y="222" width="372" height="70" rx="18" fill="#132F39" stroke="#478698"/>
+    <text x="56" y="266" fill="#F7F3E8" font-family="Helvetica, Arial, sans-serif" font-size="22">seed / skills / CCR roster</text>
+    <rect x="34" y="312" width="372" height="70" rx="18" fill="#132F39" stroke="#478698"/>
+    <text x="56" y="356" fill="#F7F3E8" font-family="Helvetica, Arial, sans-serif" font-size="22">ai-bootstrap / quick-start</text>
+    <rect x="34" y="402" width="372" height="70" rx="18" fill="#132F39" stroke="#478698"/>
+    <text x="56" y="446" fill="#F7F3E8" font-family="Helvetica, Arial, sans-serif" font-size="22">install + startup scripts</text>
+  </g>
+
+  <path d="M530 485H565" stroke="url(#core)" stroke-width="6" stroke-linecap="round"/>
+  <path d="M1020 485H1055" stroke="url(#core)" stroke-width="6" stroke-linecap="round"/>
+  <circle cx="548" cy="485" r="12" fill="#31D0AA"/>
+  <circle cx="1038" cy="485" r="12" fill="#31D0AA"/>
+</svg>

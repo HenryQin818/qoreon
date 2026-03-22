@@ -1,0 +1,72 @@
+<svg width="1600" height="620" viewBox="0 0 1600 620" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="80" y1="40" x2="1520" y2="580" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0F1720"/>
+      <stop offset="1" stop-color="#162B2D"/>
+    </linearGradient>
+    <linearGradient id="card" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#17343A"/>
+      <stop offset="1" stop-color="#12262A"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#31D0AA"/>
+      <stop offset="1" stop-color="#8FE2D0"/>
+    </linearGradient>
+    <filter id="shadow" x="-30" y="-30" width="220" height="220" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#061214" flood-opacity="0.28"/>
+    </filter>
+  </defs>
+
+  <rect x="0" y="0" width="1600" height="620" rx="32" fill="url(#bg)"/>
+  <text x="90" y="98" fill="#F7F3E8" font-family="SFMono-Regular, Menlo, monospace" font-size="18">Qoreon public install flow</text>
+  <text x="90" y="150" fill="#F7F3E8" font-family="Helvetica, Arial, sans-serif" font-size="44" font-weight="700">From download to AI-driven startup</text>
+  <text x="90" y="192" fill="#BBD1CC" font-family="Helvetica, Arial, sans-serif" font-size="24">The public package is designed to move from local install to a usable standard project in four steps.</text>
+
+  <g transform="translate(90 260)">
+    <rect width="300" height="230" rx="24" fill="url(#card)" stroke="#2D555C"/>
+    <circle cx="56" cy="56" r="30" fill="url(#accent)" filter="url(#shadow)"/>
+    <text x="47" y="64" fill="#072A23" font-family="Helvetica, Arial, sans-serif" font-size="22" font-weight="700">1</text>
+    <text x="32" y="118" fill="#F7F3E8" font-family="Helvetica, Arial, sans-serif" font-size="30" font-weight="700">Install</text>
+    <text x="32" y="156" fill="#BBD1CC" font-family="Helvetica, Arial, sans-serif" font-size="22">Run the standard project</text>
+    <text x="32" y="190" fill="#F7F3E8" font-family="SFMono-Regular, Menlo, monospace" font-size="18">python3 scripts/</text>
+    <text x="32" y="216" fill="#F7F3E8" font-family="SFMono-Regular, Menlo, monospace" font-size="18">start_standard_project.py</text>
+  </g>
+
+  <g transform="translate(470 260)">
+    <rect width="300" height="230" rx="24" fill="url(#card)" stroke="#2D555C"/>
+    <circle cx="56" cy="56" r="30" fill="url(#accent)" filter="url(#shadow)"/>
+    <text x="47" y="64" fill="#072A23" font-family="Helvetica, Arial, sans-serif" font-size="22" font-weight="700">2</text>
+    <text x="32" y="118" fill="#F7F3E8" font-family="Helvetica, Arial, sans-serif" font-size="30" font-weight="700">Open</text>
+    <text x="32" y="156" fill="#BBD1CC" font-family="Helvetica, Arial, sans-serif" font-size="22">Check the local project</text>
+    <text x="32" y="194" fill="#F7F3E8" font-family="SFMono-Regular, Menlo, monospace" font-size="18">127.0.0.1:18770</text>
+    <text x="32" y="220" fill="#F7F3E8" font-family="SFMono-Regular, Menlo, monospace" font-size="18">project-task-dashboard.html</text>
+  </g>
+
+  <g transform="translate(850 260)">
+    <rect width="300" height="230" rx="24" fill="url(#card)" stroke="#2D555C"/>
+    <circle cx="56" cy="56" r="30" fill="url(#accent)" filter="url(#shadow)"/>
+    <text x="47" y="64" fill="#072A23" font-family="Helvetica, Arial, sans-serif" font-size="22" font-weight="700">3</text>
+    <text x="32" y="118" fill="#F7F3E8" font-family="Helvetica, Arial, sans-serif" font-size="30" font-weight="700">Generate</text>
+    <text x="32" y="156" fill="#BBD1CC" font-family="Helvetica, Arial, sans-serif" font-size="22">Prepare AI startup batch</text>
+    <text x="32" y="190" fill="#F7F3E8" font-family="SFMono-Regular, Menlo, monospace" font-size="18">python3 scripts/</text>
+    <text x="32" y="216" fill="#F7F3E8" font-family="SFMono-Regular, Menlo, monospace" font-size="18">start_standard_project.py --with-agents</text>
+  </g>
+
+  <g transform="translate(1230 260)">
+    <rect width="280" height="230" rx="24" fill="url(#card)" stroke="#2D555C"/>
+    <circle cx="56" cy="56" r="30" fill="url(#accent)" filter="url(#shadow)"/>
+    <text x="47" y="64" fill="#072A23" font-family="Helvetica, Arial, sans-serif" font-size="22" font-weight="700">4</text>
+    <text x="32" y="118" fill="#F7F3E8" font-family="Helvetica, Arial, sans-serif" font-size="30" font-weight="700">Continue</text>
+    <text x="32" y="156" fill="#BBD1CC" font-family="Helvetica, Arial, sans-serif" font-size="22">Give docs + batch to the local AI</text>
+    <text x="32" y="194" fill="#F7F3E8" font-family="Helvetica, Arial, sans-serif" font-size="18">AI bootstrap guide</text>
+    <text x="32" y="220" fill="#F7F3E8" font-family="Helvetica, Arial, sans-serif" font-size="18">then first-wave startup</text>
+  </g>
+
+  <path d="M401 375H455" stroke="#65D7BC" stroke-width="6" stroke-linecap="round"/>
+  <path d="M781 375H835" stroke="#65D7BC" stroke-width="6" stroke-linecap="round"/>
+  <path d="M1161 375H1215" stroke="#65D7BC" stroke-width="6" stroke-linecap="round"/>
+
+  <path d="M445 375L426 362V388L445 375Z" fill="#65D7BC"/>
+  <path d="M825 375L806 362V388L825 375Z" fill="#65D7BC"/>
+  <path d="M1205 375L1186 362V388L1205 375Z" fill="#65D7BC"/>
+</svg>

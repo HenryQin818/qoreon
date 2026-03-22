@@ -14,6 +14,7 @@ import os
 import re
 import secrets
 import time
+import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -175,8 +176,9 @@ def _repo_root() -> Path:
     """
     Resolve the repository root path.
 
-    Uses the TASK_DASHBOARD_REPO_ROOT environment variable if set and valid,
-    otherwise computes based on the module location (4 levels up from this file).
+    Uses the TASK_DASHBOARD_REPO_ROOT environment variable if set and valid.
+    Otherwise, choose between the current repo root and the legacy workspace root
+    by checking which one actually matches config.toml's relative project paths.
 
     Prefers Desktop/xiaomishu as canonical root when it resolves to the same
     physical directory, to keep path presentation stable across symlinked workspaces.
@@ -194,17 +196,88 @@ def _repo_root() -> Path:
             pass
         return p
 
+    def _project_relative_hints(project: Any) -> list[str]:
+        if not isinstance(project, dict):
+            return []
+        hints: list[str] = []
+        for key in ("project_root_rel", "task_root_rel", "runtime_root_rel", "session_json_rel", "session_list_rel"):
+            text = str(project.get(key) or "").strip()
+            if text:
+                hints.append(text)
+        return hints
+
+    def _config_relative_hints(config_path: Path) -> list[str]:
+        try:
+            payload = tomllib.loads(config_path.read_text(encoding="utf-8"))
+        except Exception:
+            return []
+        projects = payload.get("projects") if isinstance(payload, dict) else None
+        if not isinstance(projects, list):
+            return []
+        hints: list[str] = []
+        for project in projects:
+            hints.extend(_project_relative_hints(project))
+        return hints
+
+    def _first_project_hints(config_path: Path) -> list[str]:
+        try:
+            payload = tomllib.loads(config_path.read_text(encoding="utf-8"))
+        except Exception:
+            return []
+        projects = payload.get("projects") if isinstance(payload, dict) else None
+        if not isinstance(projects, list):
+            return []
+        for project in projects:
+            hints = _project_relative_hints(project)
+            if hints:
+                return hints
+        return []
+
+    def _candidate_score(root: Path, hints: list[str]) -> int:
+        score = 0
+        for rel in hints:
+            try:
+                target = (root / rel).resolve()
+            except Exception:
+                target = root / rel
+            if target.exists():
+                score += 1
+        return score
+
+    repo_root = Path(__file__).absolute().parents[1]
+    workspace_root = repo_root.parents[2] if len(repo_root.parents) >= 3 else repo_root
+    config_path = repo_root / "config.toml"
+    first_hints = _first_project_hints(config_path)
+
     # Allow explicit root override to keep path presentation stable across symlinked
-    # workspaces (e.g. Desktop alias vs workspace physical path).
+    # workspaces (e.g. Desktop alias vs workspace physical path). When the current repo
+    # already contains a self-contained public config layout, ignore unrelated env roots.
     raw = str(os.environ.get("TASK_DASHBOARD_REPO_ROOT") or "").strip()
     if raw:
         p = Path(raw).expanduser()
         if not p.is_absolute():
             p = (Path(__file__).absolute().parent / p)
         if p.exists() and p.is_dir():
+            if first_hints and _candidate_score(repo_root, first_hints) > 0 and _candidate_score(p, first_hints) == 0:
+                return _prefer_desktop_alias(repo_root)
             return _prefer_desktop_alias(p)
-    # Keep logical path when possible; avoid forcing resolve() here.
-    return _prefer_desktop_alias(Path(__file__).absolute().parents[3])
+
+    if first_hints:
+        if _candidate_score(repo_root, first_hints) > 0:
+            return _prefer_desktop_alias(repo_root)
+        if _candidate_score(workspace_root, first_hints) > 0:
+            return _prefer_desktop_alias(workspace_root)
+
+    hints = _config_relative_hints(config_path)
+    if hints:
+        repo_score = _candidate_score(repo_root, hints)
+        workspace_score = _candidate_score(workspace_root, hints)
+        if repo_score > workspace_score:
+            return _prefer_desktop_alias(repo_root)
+        if workspace_score > 0:
+            return _prefer_desktop_alias(workspace_root)
+
+    return _prefer_desktop_alias(repo_root)
 
 
 def _find_project_cfg(project_id: str) -> dict[str, Any]:

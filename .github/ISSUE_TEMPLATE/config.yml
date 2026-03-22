@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Quick Start
+    url: https://github.com/HenryQin818/qoreon/blob/main/docs/public/quick-start.md
+    about: Start here if you are still trying to run the public bundle locally.
+  - name: AI Bootstrap
+    url: https://github.com/HenryQin818/qoreon/blob/main/docs/public/ai-bootstrap.md
+    about: Use this if you want another AI to bootstrap and operate Qoreon on your machine.

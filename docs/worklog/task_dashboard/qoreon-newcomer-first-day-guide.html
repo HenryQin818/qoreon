@@ -1,0 +1,659 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Qoreon 使用手册：项目、通道、Agent 与跨项目协作</title>
+  <style>
+    :root {
+      --bg: #f3efe8;
+      --panel: rgba(255, 252, 247, 0.92);
+      --panel-strong: #fffaf2;
+      --ink: #1d2c29;
+      --muted: #60706b;
+      --line: rgba(30, 44, 41, 0.12);
+      --accent: #9d4f2f;
+      --accent-2: #214d46;
+      --accent-3: #d5a258;
+      --shadow: 0 20px 50px rgba(46, 33, 20, 0.10);
+      --radius-xl: 28px;
+      --radius-lg: 20px;
+      --radius-md: 16px;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      font-family: "Avenir Next", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      line-height: 1.7;
+      background:
+        radial-gradient(circle at 0% 0%, rgba(213,162,88,0.16), transparent 28%),
+        radial-gradient(circle at 100% 10%, rgba(157,79,47,0.14), transparent 24%),
+        linear-gradient(180deg, #f8f4ee 0%, #f1ebe2 50%, #ece5d9 100%);
+    }
+    .page {
+      width: min(1280px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 28px 0 56px;
+    }
+    .hero,
+    .layout,
+    .section,
+    .closing {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius-xl);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(10px);
+    }
+    .hero {
+      padding: 34px;
+      position: relative;
+      overflow: hidden;
+    }
+    .hero::after {
+      content: "";
+      position: absolute;
+      right: -90px;
+      top: -40px;
+      width: 260px;
+      height: 260px;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(33,77,70,0.16), transparent 68%);
+      pointer-events: none;
+    }
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 14px;
+      border-radius: 999px;
+      background: rgba(33,77,70,0.08);
+      color: var(--accent-2);
+      font-size: 13px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+    h1, h2, h3, h4 {
+      margin: 0;
+      font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", "Songti SC", serif;
+      line-height: 1.14;
+    }
+    h1 {
+      margin-top: 18px;
+      font-size: clamp(34px, 5.6vw, 62px);
+      max-width: 10.5em;
+    }
+    .lead {
+      margin: 16px 0 0;
+      max-width: 52em;
+      font-size: 18px;
+      color: #33413c;
+    }
+    .hero-grid {
+      display: grid;
+      grid-template-columns: 1.15fr 0.85fr;
+      gap: 24px;
+      margin-top: 26px;
+      position: relative;
+      z-index: 1;
+    }
+    .hero-card,
+    .mini-card,
+    .cap-card,
+    .flow-card,
+    .role-card,
+    .bridge-card,
+    .mode-card {
+      border: 1px solid var(--line);
+      border-radius: var(--radius-lg);
+      background: rgba(255,255,255,0.72);
+    }
+    .hero-card {
+      padding: 20px;
+      background: linear-gradient(180deg, rgba(255,255,255,0.84), rgba(250,245,236,0.92));
+    }
+    .hero-card strong {
+      display: block;
+      font-size: 15px;
+      color: var(--accent-2);
+      margin-bottom: 6px;
+    }
+    .hero-card p {
+      margin: 0;
+      color: var(--muted);
+    }
+    .layout {
+      display: grid;
+      grid-template-columns: 280px 1fr;
+      gap: 22px;
+      margin-top: 22px;
+      padding: 22px;
+    }
+    .toc {
+      position: sticky;
+      top: 18px;
+      align-self: start;
+      padding: 20px;
+      border-radius: 22px;
+      background: linear-gradient(180deg, rgba(255,255,255,0.84), rgba(248,241,231,0.92));
+      border: 1px solid var(--line);
+    }
+    .toc h3 {
+      font-size: 24px;
+      margin-bottom: 12px;
+    }
+    .toc p {
+      margin: 0 0 14px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+    .toc a {
+      display: block;
+      padding: 10px 12px;
+      margin-bottom: 8px;
+      color: var(--ink);
+      text-decoration: none;
+      border-radius: 14px;
+      border: 1px solid transparent;
+      background: rgba(255,255,255,0.55);
+      transition: transform 160ms ease, border-color 160ms ease, background 160ms ease;
+    }
+    .toc a:hover {
+      transform: translateX(4px);
+      border-color: rgba(33,77,70,0.16);
+      background: rgba(255,255,255,0.85);
+    }
+    .toc .hint {
+      margin-top: 16px;
+      padding-top: 14px;
+      border-top: 1px dashed var(--line);
+      font-size: 13px;
+      color: var(--muted);
+    }
+    .content {
+      display: grid;
+      gap: 18px;
+    }
+    .section {
+      padding: 24px;
+    }
+    .section-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: end;
+      margin-bottom: 16px;
+    }
+    .section-head p {
+      margin: 8px 0 0;
+      color: var(--muted);
+      max-width: 48em;
+    }
+    .kicker {
+      color: var(--accent);
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      font-weight: 700;
+    }
+    .tree {
+      display: grid;
+      gap: 14px;
+    }
+    .tree-row {
+      display: grid;
+      grid-template-columns: 180px 1fr;
+      gap: 14px;
+      align-items: stretch;
+    }
+    .tree-label {
+      padding: 16px;
+      border-radius: 18px;
+      background: linear-gradient(180deg, rgba(33,77,70,0.92), rgba(22,55,50,0.96));
+      color: #f5efe7;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+    }
+    .tree-label strong {
+      font-size: 24px;
+      margin-bottom: 4px;
+      font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", "Songti SC", serif;
+    }
+    .tree-panel {
+      padding: 16px 18px;
+      border-radius: 18px;
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,0.72);
+    }
+    .tree-panel p {
+      margin: 0;
+      color: #33413c;
+    }
+    .mini-grid,
+    .cap-grid,
+    .flow-grid,
+    .role-grid,
+    .bridge-grid,
+    .mode-grid {
+      display: grid;
+      gap: 14px;
+    }
+    .mini-grid { grid-template-columns: repeat(3, 1fr); margin-top: 16px; }
+    .cap-grid { grid-template-columns: repeat(3, 1fr); }
+    .flow-grid { grid-template-columns: repeat(5, 1fr); }
+    .role-grid { grid-template-columns: repeat(2, 1fr); }
+    .bridge-grid { grid-template-columns: 1.1fr 0.9fr; }
+    .mode-grid { grid-template-columns: repeat(3, 1fr); }
+    .mini-card,
+    .cap-card,
+    .flow-card,
+    .role-card,
+    .bridge-card,
+    .mode-card {
+      padding: 18px;
+    }
+    .mini-card h3,
+    .cap-card h3,
+    .role-card h3,
+    .bridge-card h3,
+    .mode-card h3 {
+      font-size: 24px;
+      margin-bottom: 10px;
+    }
+    .mini-card p,
+    .cap-card p,
+    .role-card p,
+    .bridge-card p,
+    .mode-card p,
+    .flow-card p {
+      margin: 0;
+      color: #33413c;
+    }
+    .flow-card {
+      position: relative;
+      overflow: hidden;
+      min-height: 220px;
+    }
+    .flow-card .step {
+      width: 38px;
+      height: 38px;
+      border-radius: 12px;
+      background: rgba(33,77,70,0.10);
+      color: var(--accent-2);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      margin-bottom: 12px;
+    }
+    .flow-card::after {
+      content: "";
+      position: absolute;
+      top: 34px;
+      right: -24px;
+      width: 48px;
+      height: 2px;
+      background: linear-gradient(90deg, rgba(33,77,70,0.2), transparent);
+    }
+    .flow-grid .flow-card:last-child::after { display: none; }
+    .tag-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 12px;
+    }
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,0.82);
+      color: var(--muted);
+      padding: 7px 10px;
+      font-size: 12px;
+    }
+    .list {
+      margin: 12px 0 0;
+      padding-left: 18px;
+      color: #33413c;
+    }
+    .list li { margin: 6px 0; }
+    .bridge-quote {
+      border-radius: 20px;
+      padding: 22px;
+      background: linear-gradient(180deg, rgba(157,79,47,0.92), rgba(126,56,33,0.96));
+      color: #fbf4ea;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      min-height: 100%;
+    }
+    .bridge-quote strong {
+      font-size: 32px;
+      line-height: 1.2;
+      font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", "Songti SC", serif;
+    }
+    .bridge-quote span {
+      margin-top: 14px;
+      color: rgba(251,244,234,0.82);
+    }
+    .closing {
+      margin-top: 20px;
+      padding: 28px;
+      background: linear-gradient(180deg, rgba(255,251,246,0.94), rgba(247,241,232,0.96));
+    }
+    .closing h2 {
+      font-size: clamp(28px, 4vw, 44px);
+      margin-bottom: 12px;
+    }
+    .closing p {
+      margin: 0;
+      max-width: 50em;
+      color: #33413c;
+      font-size: 17px;
+    }
+    .footer-note {
+      margin-top: 18px;
+      padding-top: 16px;
+      border-top: 1px dashed var(--line);
+      font-size: 13px;
+      color: var(--muted);
+    }
+    @media (max-width: 1080px) {
+      .layout,
+      .hero-grid,
+      .bridge-grid,
+      .role-grid,
+      .mini-grid,
+      .cap-grid,
+      .flow-grid,
+      .mode-grid,
+      .tree-row {
+        grid-template-columns: 1fr;
+      }
+      .layout { padding: 16px; }
+      .toc { position: static; }
+      .flow-card::after { display: none; }
+      .page { width: min(100% - 20px, 1280px); padding-top: 18px; }
+      .hero, .layout, .section, .closing { border-radius: 22px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="hero">
+      <span class="eyebrow">Platform Manual · Qoreon · Work System</span>
+      <h1>Qoreon 使用手册：<br/>项目、通道、Agent 与跨项目协作</h1>
+      <p class="lead">这不是一篇情绪化日志，也不是一堆内部术语堆出来的说明。它只解决一个问题：第一次看见 Qoreon 的人，能不能在一页里看懂这套系统是什么、里面有哪些角色、可以做哪些动作，以及一件事情是怎么被协同推进下去的。</p>
+      <div class="hero-grid">
+        <div class="hero-card">
+          <strong>一句话理解</strong>
+          <p>Qoreon 是把项目、通道、Agent、对话、任务、消息、验收和跨项目桥接放进同一套工作现场里的协作系统。</p>
+        </div>
+        <div class="hero-card">
+          <strong>推荐阅读方式</strong>
+          <p>先看“系统结构”，再看“你可以做什么”，最后看“推荐工作方式”和“跨项目协作”。读完以后，你应该知道这套系统到底能拿来推进什么事。</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="layout">
+      <aside class="toc">
+        <h3>阅读导航</h3>
+        <p>按系统视角逐层往下看，不要把它当成单纯聊天工具。</p>
+        <a href="#structure">01. 系统结构</a>
+        <a href="#actions">02. 你可以做什么</a>
+        <a href="#flow">03. 一件事怎么推进</a>
+        <a href="#roles">04. 推荐组织方式</a>
+        <a href="#cross-project">05. 跨项目协作</a>
+        <a href="#modes">06. 推荐用法</a>
+        <div class="hint">当前推荐口径：任务为主线，消息为过程，产出物为证据，反馈为例外。</div>
+      </aside>
+
+      <div class="content">
+        <section class="section" id="structure">
+          <div class="section-head">
+            <div>
+              <div class="kicker">System Structure</div>
+              <h2>01. 先看整体，这套系统是怎么搭起来的</h2>
+              <p>Qoreon 不是一个大聊天框。它是按“项目 -> 通道 -> Agent -> 对话 -> 任务 -> 协作链路”的层次组织起来的，层级不同，负责的问题也不同。</p>
+            </div>
+          </div>
+
+          <div class="tree">
+            <div class="tree-row">
+              <div class="tree-label"><strong>项目</strong><span>最大的工作容器</span></div>
+              <div class="tree-panel"><p>每个项目都有自己的任务空间、通道结构、会话真源、协作通讯录和运行上下文。项目先把边界划清楚，后面的任务和协作才不会混线。</p></div>
+            </div>
+            <div class="tree-row">
+              <div class="tree-label"><strong>通道</strong><span>项目内的职责槽位</span></div>
+              <div class="tree-panel"><p>通道负责长期分工，例如总控、架构治理、运行时、前端、测试、PMO。通道不是临时文件夹，而是稳定责任面。</p></div>
+            </div>
+            <div class="tree-row">
+              <div class="tree-label"><strong>Agent</strong><span>通道里的执行主体</span></div>
+              <div class="tree-panel"><p>Agent 可以接任务、接消息、持续在对话里推进工作，也可以联系其他 Agent。一个通道可以有主负责 Agent、备份 Agent 和专项 Agent。</p></div>
+            </div>
+            <div class="tree-row">
+              <div class="tree-label"><strong>对话</strong><span>真正开展工作的窗口</span></div>
+              <div class="tree-panel"><p>对话不只是聊天记录，而是操作面。你可以直接安排工作、发调查、要求输出方案、要求联系其他 Agent 并回执。</p></div>
+            </div>
+            <div class="tree-row">
+              <div class="tree-label"><strong>任务</strong><span>正式工作主线</span></div>
+              <div class="tree-panel"><p>需要明确推进、交付和验收的事情，要落到任务里。任务决定主线，消息推动过程，产出物留下证据，验收负责收口。</p></div>
+            </div>
+          </div>
+
+          <div class="mini-grid">
+            <article class="mini-card">
+              <h3>会话真源</h3>
+              <p>真正工作的不是页面截图，而是 Agent 对应的会话与上下文。会话一旦绑定，就意味着这个角色开始持续积累自己的判断和工作历史。</p>
+            </article>
+            <article class="mini-card">
+              <h3>消息链路</h3>
+              <p>消息负责过程协作。一个 Agent 可以给另一个 Agent 发消息，带目标、带回执要求、带来源身份，而不是靠人手工转述。</p>
+            </article>
+            <article class="mini-card">
+              <h3>证据链</h3>
+              <p>产出物、run、回执、验收结论会留下来。这样一件事不是“说过了就算”，而是能回看、能接力、能核验。</p>
+            </article>
+          </div>
+        </section>
+
+        <section class="section" id="actions">
+          <div class="section-head">
+            <div>
+              <div class="kicker">Capabilities</div>
+              <h2>02. 在 Qoreon 里，你到底可以做什么</h2>
+              <p>如果只把它当聊天工具，你会低估它。如果只把它当任务看板，你也会误会它。它真正的能力在于：让“安排、执行、协同、回执、收口”发生在同一套现场里。</p>
+            </div>
+          </div>
+
+          <div class="cap-grid">
+            <article class="cap-card">
+              <h3>看项目和通道</h3>
+              <p>你可以先从项目看全局，再进入单个通道看当前主线、活跃 Agent、最近推进和状态分布，知道现在这套系统正在忙什么。</p>
+              <div class="tag-row"><span class="tag">多项目视角</span><span class="tag">通道分工</span><span class="tag">活跃状态</span></div>
+            </article>
+            <article class="cap-card">
+              <h3>直接跟 Agent 对话</h3>
+              <p>可以直接问情况，也可以直接安排动作：继续推进、先调查再回、生成任务、整理材料、汇总结论，不需要切出去再回填。</p>
+              <div class="tag-row"><span class="tag">问进度</span><span class="tag">安排行动</span><span class="tag">持续上下文</span></div>
+            </article>
+            <article class="cap-card">
+              <h3>让 Agent 自动去协作</h3>
+              <p>不是所有事情都要你亲自转述。主责 Agent 可以联系其他 Agent，请他们补接口、核字段、回验收、给判断，再把结果带回主线。</p>
+              <div class="tag-row"><span class="tag">消息派发</span><span class="tag">回执回收</span><span class="tag">链路继续</span></div>
+            </article>
+            <article class="cap-card">
+              <h3>把工作落成任务</h3>
+              <p>重要工作可以正式落成任务，写清楚目标、主责、状态、交付路径和验收口径。这样这件事就不再只是聊过，而是进入了可跟踪主线。</p>
+              <div class="tag-row"><span class="tag">状态明确</span><span class="tag">主责清楚</span><span class="tag">可验收</span></div>
+            </article>
+            <article class="cap-card">
+              <h3>追踪 run 与证据</h3>
+              <p>协作过程不是黑箱。你可以看到 run、消息回执、产出路径和验收结论，知道一件事到底做到哪、卡在哪里、有没有真正被收口。</p>
+              <div class="tag-row"><span class="tag">回执</span><span class="tag">run证据</span><span class="tag">可回放</span></div>
+            </article>
+            <article class="cap-card">
+              <h3>跨项目形成机制</h3>
+              <p>这套系统不只支持单项目内部协同，也支持项目与项目之间的结构化沟通。重点不是“互相发消息”，而是来源、目标和回执都不会混乱。</p>
+              <div class="tag-row"><span class="tag">桥接通道</span><span class="tag">来源项目</span><span class="tag">目标项目</span></div>
+            </article>
+          </div>
+        </section>
+
+        <section class="section" id="flow">
+          <div class="section-head">
+            <div>
+              <div class="kicker">Workflow</div>
+              <h2>03. 一件事情在这套系统里通常怎么被推进</h2>
+              <p>Qoreon 的重点，不是把所有角色塞进一个对话框，而是让他们围着同一条主线各司其职，然后把结果继续往前推。</p>
+            </div>
+          </div>
+
+          <div class="flow-grid">
+            <article class="flow-card">
+              <div class="step">1</div>
+              <h3>提出目标</h3>
+              <p>事情通常从产品、用户、总控或某个板块需求开始。第一步不是写代码，而是先确认目标、边界和优先级。</p>
+            </article>
+            <article class="flow-card">
+              <div class="step">2</div>
+              <h3>定主线</h3>
+              <p>总控或主责人决定这是不是正式主线，谁是主负责通道、谁是主负责 Agent，哪些支撑通道需要加入。</p>
+            </article>
+            <article class="flow-card">
+              <div class="step">3</div>
+              <h3>分动作</h3>
+              <p>主责 Agent 开始推进，需要别的通道时，不是人肉转述，而是直接发结构化消息，让协作对象接下一棒。</p>
+            </article>
+            <article class="flow-card">
+              <div class="step">4</div>
+              <h3>收证据</h3>
+              <p>过程中形成消息回执、run、产出物和判断结论。重要证据要能被别人接着看，而不是只停留在某个人脑子里。</p>
+            </article>
+            <article class="flow-card">
+              <div class="step">5</div>
+              <h3>做收口</h3>
+              <p>最后由测试、验收、总控或主责人判断是否放行、是否归档、是否继续下一轮。没有收口，这件事就还没真正结束。</p>
+            </article>
+          </div>
+        </section>
+
+        <section class="section" id="roles">
+          <div class="section-head">
+            <div>
+              <div class="kicker">Recommended Organization</div>
+              <h2>04. 我们推荐怎样组织工作，系统才会稳定</h2>
+              <p>这套系统最怕两种极端：一种是所有事都回到总控，另一种是所有人都在游击推进。更稳的方式，是业务主责、平台支撑、中央门禁三层分开。</p>
+            </div>
+          </div>
+
+          <div class="role-grid">
+            <article class="role-card">
+              <h3>总控层</h3>
+              <p>负责主线、优先级、是否放行和最后收口。它控制方向和节奏，但不应该长期下沉替代执行。</p>
+              <ul class="list">
+                <li>控制任务层主线与批次</li>
+                <li>处理跨板块冲突与取舍</li>
+                <li>决定何时收口、何时升级</li>
+              </ul>
+            </article>
+            <article class="role-card">
+              <h3>架构师 / 技术门禁</h3>
+              <p>负责技术路线、契约边界、兼容与发布门禁。它保证工程秩序，不替代所有人持续写实现。</p>
+              <ul class="list">
+                <li>控制技术边界与结构演进</li>
+                <li>把高风险变更挡在门外</li>
+                <li>给复杂实现提供路线判断</li>
+              </ul>
+            </article>
+            <article class="role-card">
+              <h3>业务主责通道</h3>
+              <p>承接长期板块推进。每个板块最好有主负责通道、主负责 Agent、备份 Agent 和支撑通道，避免知识反复丢失。</p>
+              <ul class="list">
+                <li>对话/会话管理</li>
+                <li>项目页/任务页</li>
+                <li>自动化与桥接</li>
+              </ul>
+            </article>
+            <article class="role-card">
+              <h3>日常管理与 PMO</h3>
+              <p>负责节奏、催办、问题聚合、待验收清理，让系统不失速。它解决推进秩序，不替代业务和技术判断。</p>
+              <ul class="list">
+                <li>催回执</li>
+                <li>清积压</li>
+                <li>盯状态一致性</li>
+              </ul>
+            </article>
+          </div>
+        </section>
+
+        <section class="section" id="cross-project">
+          <div class="section-head">
+            <div>
+              <div class="kicker">Cross-Project Collaboration</div>
+              <h2>05. 跨项目沟通不是混着聊，而是结构化桥接</h2>
+              <p>Qoreon 不只适合单项目。它同样支持生产、开发、开源执行等多个项目之间的协作。但前提是：跨项目必须带结构化身份，不能把真源和上下文混写。</p>
+            </div>
+          </div>
+
+          <div class="bridge-grid">
+            <div class="bridge-quote">
+              <strong>跨项目协作成立的前提，不是“能发到对方”，而是“回得回来，而且不会写错地方”。</strong>
+              <span>推荐通过桥接通道或桥接角色，维持来源项目、目标项目、callback_to 与 run 证据一致。</span>
+            </div>
+            <div class="bridge-card">
+              <h3>跨项目协作的基本规则</h3>
+              <ul class="list">
+                <li>明确来源项目和目标项目</li>
+                <li>明确来源通道、目标通道、主负责 Agent</li>
+                <li>消息里带回执目标，保证处理完能回到原发起方</li>
+                <li>桥接通道只负责链路，不替代目标项目实施</li>
+                <li>禁止把 A 项目的真源直接写进 B 项目</li>
+              </ul>
+            </div>
+          </div>
+        </section>
+
+        <section class="section" id="modes">
+          <div class="section-head">
+            <div>
+              <div class="kicker">Recommended Modes</div>
+              <h2>06. 最后，推荐三种最好用的工作方式</h2>
+              <p>如果你刚开始使用这套系统，不用一上来把所有能力都开满。先按这三种模式理解，就已经能覆盖大部分真实工作。</p>
+            </div>
+          </div>
+
+          <div class="mode-grid">
+            <article class="mode-card">
+              <h3>单项目主线模式</h3>
+              <p>最常用。总控定主线，架构定边界，主责通道推进，支撑通道补能力，最后测试和验收收口。</p>
+              <div class="tag-row"><span class="tag">日常功能推进</span><span class="tag">项目内协同</span></div>
+            </article>
+            <article class="mode-card">
+              <h3>多 Agent 联动模式</h3>
+              <p>适合一件事同时牵动多个通道。主负责 Agent 持主线，其它 Agent 通过结构化消息补各自那一段，再回到主线汇总。</p>
+              <div class="tag-row"><span class="tag">并行协作</span><span class="tag">消息回执</span></div>
+            </article>
+            <article class="mode-card">
+              <h3>跨项目桥接模式</h3>
+              <p>适合生产、开发、开源执行等多个项目并行。通过桥接角色保证身份、上下文、回执和真源都不串线。</p>
+              <div class="tag-row"><span class="tag">多项目联动</span><span class="tag">桥接通道</span></div>
+            </article>
+          </div>
+        </section>
+      </div>
+    </section>
+
+    <section class="closing">
+      <h2>最后一句话总结</h2>
+      <p>如果你把 Qoreon 只理解成“会聊天的任务系统”，会低估它；如果你把它只理解成“能列任务的看板”，也会误会它。它真正的价值，是让项目、分工、Agent、对话、任务、证据、验收和跨项目协作都进入同一套可继续推进的工作机制。</p>
+      <div class="footer-note">当前页面口径基于项目现有组织方式、主责制模型、消息主驱动协作规则与跨项目桥接实践整理。</div>
+    </section>
+  </main>
+</body>
+</html>

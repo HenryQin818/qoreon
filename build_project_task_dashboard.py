@@ -14,14 +14,13 @@ import sys
 from pathlib import Path
 
 from task_dashboard.cli import main
+from task_dashboard.helpers import _repo_root
 
 
 if __name__ == "__main__":
-    # Config still resolves from the xiaomishu workspace root, but build outputs must
-    # follow the current repo/worktree instead of always writing into stable/dist.
     script_path = Path(__file__).resolve()
     repo_root = script_path.parent
-    workspace_root = repo_root.parents[2]
+    workspace_root = _repo_root().resolve()
     try:
         repo_rel = repo_root.relative_to(workspace_root)
     except Exception:

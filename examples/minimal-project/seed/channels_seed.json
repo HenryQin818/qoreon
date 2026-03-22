@@ -13,9 +13,19 @@
       "forbidden_payloads": ["real_remote_write"]
     },
     {
-      "name": "子级01-执行",
+      "name": "辅助01-架构与结构治理",
       "default_enabled": true,
-      "capabilities": ["implementation", "refine", "self_check"],
+      "capabilities": ["structure_freeze", "schema_review", "boundary_gate"],
+      "side_effect_level": "low",
+      "default_mode": "review_only",
+      "requires_manual_confirm": false,
+      "has_external_dependency": false,
+      "forbidden_payloads": ["private_contract", "real_runtime_state"]
+    },
+    {
+      "name": "子级01-运行时与后端",
+      "default_enabled": true,
+      "capabilities": ["runtime", "api", "bootstrap_support"],
       "side_effect_level": "medium",
       "default_mode": "guided_execute",
       "requires_manual_confirm": false,
@@ -23,17 +33,27 @@
       "forbidden_payloads": ["token", "private_path"]
     },
     {
-      "name": "子级02-文档",
+      "name": "子级02-前端与交互",
       "default_enabled": true,
-      "capabilities": ["readme", "bootstrap_docs", "user_guides"],
-      "side_effect_level": "low",
-      "default_mode": "read_then_write",
+      "capabilities": ["ui", "interaction", "visible_result"],
+      "side_effect_level": "medium",
+      "default_mode": "guided_execute",
       "requires_manual_confirm": false,
       "has_external_dependency": false,
-      "forbidden_payloads": ["private_reference"]
+      "forbidden_payloads": ["private_reference", "unsafe_embed"]
     },
     {
-      "name": "子级03-测试",
+      "name": "子级03-数据与契约",
+      "default_enabled": true,
+      "capabilities": ["schema", "contract", "seed_validation"],
+      "side_effect_level": "low",
+      "default_mode": "review_then_write",
+      "requires_manual_confirm": false,
+      "has_external_dependency": false,
+      "forbidden_payloads": ["private_field", "breaking_change_without_note"]
+    },
+    {
+      "name": "子级04-测试与验收",
       "default_enabled": true,
       "capabilities": ["smoke", "clean_room", "release_gate"],
       "side_effect_level": "medium",
@@ -43,17 +63,27 @@
       "forbidden_payloads": ["destructive_cleanup"]
     },
     {
-      "name": "辅助01-结构治理与项目接入",
-      "default_enabled": true,
-      "capabilities": ["schema_freeze", "seed_validation", "boundary_review"],
+      "name": "辅助02-文档与知识沉淀",
+      "default_enabled": false,
+      "capabilities": ["readme", "bootstrap_docs", "knowledge_sync"],
+      "side_effect_level": "low",
+      "default_mode": "read_then_write",
+      "requires_manual_confirm": false,
+      "has_external_dependency": false,
+      "forbidden_payloads": ["private_reference"]
+    },
+    {
+      "name": "辅助03-用户镜像与业务判断",
+      "default_enabled": false,
+      "capabilities": ["user_goal", "business_judgement", "scenario_review"],
       "side_effect_level": "low",
       "default_mode": "review_only",
       "requires_manual_confirm": false,
       "has_external_dependency": false,
-      "forbidden_payloads": ["private_contract"]
+      "forbidden_payloads": ["private_business_context", "real_user_history"]
     },
     {
-      "name": "辅助02-Git桥接与发布同步",
+      "name": "辅助04-Git桥接与发布同步",
       "default_enabled": false,
       "capabilities": ["diff_review", "dry_run_export", "release_notes"],
       "side_effect_level": "medium",

@@ -62,6 +62,30 @@ def _write_json_file(path: Path, payload: Any) -> None:
     )
 
 
+def _replace_path_with_symlink(link_path: Path, target_path: Path) -> None:
+    link_path.parent.mkdir(parents=True, exist_ok=True)
+    if link_path.is_symlink() or link_path.exists():
+        if link_path.is_dir() and not link_path.is_symlink():
+            shutil.rmtree(link_path)
+        else:
+            link_path.unlink()
+    relative_target = os.path.relpath(target_path, start=link_path.parent)
+    link_path.symlink_to(relative_target, target_is_directory=target_path.is_dir())
+
+
+def _sync_public_share_links(root: Path, dist_root: Path) -> None:
+    worklog_root = (root / "docs" / "worklog").resolve()
+    share_worklog_link = dist_root / "share" / "worklog"
+    if not worklog_root.exists():
+        if share_worklog_link.is_symlink() or share_worklog_link.exists():
+            if share_worklog_link.is_dir() and not share_worklog_link.is_symlink():
+                shutil.rmtree(share_worklog_link)
+            else:
+                share_worklog_link.unlink()
+        return
+    _replace_path_with_symlink(share_worklog_link, worklog_root)
+
+
 def _resolve_optional_path(root: Path, raw: str) -> Path | None:
     value = _as_str(raw).strip()
     if not value:
@@ -297,7 +321,7 @@ def _task_item_bundle_dir_name(out_task_path: Path) -> str:
 
 
 def _task_item_bundle_url(bundle_dir_name: str, file_name: str) -> str:
-    return f"/dist/{quote(bundle_dir_name)}/items/{quote(file_name)}"
+    return f"{quote(bundle_dir_name)}/items/{quote(file_name)}"
 
 
 def _unique_existing_paths(paths: list[Path]) -> list[Path]:
@@ -1078,4 +1102,5 @@ def main(argv: list[str] | None = None) -> int:
     session_health_html = render_from_template(script_dir, "template_session_health.html", session_health_page_data)
     out_session_health_path.write_text(session_health_html, encoding="utf-8")
     print(f"Wrote: {out_session_health_path}")
+    _sync_public_share_links(root, out_task_path.parent)
     return 0

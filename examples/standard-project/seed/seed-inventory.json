@@ -1,0 +1,26 @@
+{
+  "schema_version": "1.0",
+  "public_safe": true,
+  "project_id": "standard_project",
+  "files": [
+    "examples/standard-project/README.md",
+    "examples/standard-project/seed/project_seed.json",
+    "examples/standard-project/seed/channels_seed.json",
+    "examples/standard-project/seed/agents_seed.json",
+    "examples/standard-project/seed/tasks_seed.json",
+    "examples/standard-project/seed/skills-manifest.json",
+    "examples/standard-project/seed/ccr_roster_seed.json",
+    "examples/standard-project/skills/INDEX.md",
+    "examples/standard-project/tasks/README.md",
+    "examples/standard-project/tasks/主体-总控/产出物/沉淀/01-治理通道来源映射.md",
+    "examples/standard-project/tasks/主体-总控/产出物/沉淀/02-标准项目启动顺序.md",
+    "examples/standard-project/tasks/主体-总控/产出物/沉淀/03-标准项目通讯录与分工表.md"
+  ],
+  "notes": [
+    "这是完整标准项目骨架，不替代 minimal-project 的 quick start 入口。",
+    "当前已补齐第一版 agents/tasks/skills 真源，并只保留公开安全公共技能包。",
+    "治理辅助能力将按公开安全提炼结果继续扩充沉淀内容。",
+    "角色相关信息只放在各通道目录、通讯录与知识沉淀里，不再单独打包 role skill。",
+    "AI 启动时请优先读取 README、seed-inventory、ccr_roster_seed、启动顺序、标准项目通讯录/分工表和公开公共技能包清单。"
+  ]
+}

@@ -362,9 +362,12 @@
                     <span class="convtraining-title">Agent培训</span>
                     <span class="convtraining-count" id="convTrainingCount">再 1 条消息后自动消失</span>
                   </div>
-                  <div class="convtraining-desc" id="convTrainingDesc">新 Agent 开始协作前，先发送标准培训说明。</div>
+                  <div class="convtraining-desc" id="convTrainingDesc">新 Agent 开始协作前，先查看所在通道资料，学习公共 skills、发消息方式与回执规则，并完成一次通讯录初始化验证。</div>
                 </div>
-                <button class="btn primary convtraining-send" id="convTrainingSendBtn" type="button">发送培训</button>
+                <div class="convtraining-actions">
+                  <button class="btn primary convtraining-send" id="convTrainingSendBtn" type="button">发送培训</button>
+                  <button class="convtraining-close" id="convTrainingCloseBtn" type="button" aria-label="关闭培训提醒" title="关闭">×</button>
+                </div>
               </div>
             </div>
             <div class="convcomposer">

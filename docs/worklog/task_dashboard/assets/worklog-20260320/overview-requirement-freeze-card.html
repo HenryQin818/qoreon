@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>首页改版需求真源冻结现场</title>
+    <style>
+      :root {
+        --paper: #fffdf8;
+        --ink: #24302d;
+        --muted: #6d786f;
+        --line: rgba(80, 97, 91, 0.14);
+        --soft: #f2ecdf;
+        --accent: #567765;
+        --accent-soft: rgba(86, 119, 101, 0.12);
+        --chip: #f7f2e8;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: "PingFang SC", "Noto Sans SC", "Hiragino Sans GB", sans-serif;
+        color: var(--ink);
+        background:
+          radial-gradient(circle at top left, rgba(86, 119, 101, 0.14), transparent 30%),
+          radial-gradient(circle at right 18%, rgba(190, 166, 122, 0.18), transparent 24%),
+          linear-gradient(180deg, #f7f1e5 0%, #f4eee4 100%);
+        padding: 42px;
+      }
+
+      .frame {
+        width: 1420px;
+        margin: 0 auto;
+        border: 1px solid rgba(80, 97, 91, 0.16);
+        border-radius: 34px;
+        background: rgba(255, 253, 248, 0.94);
+        box-shadow: 0 28px 90px rgba(84, 74, 49, 0.14);
+        overflow: hidden;
+      }
+
+      .hero {
+        display: grid;
+        grid-template-columns: 240px 1fr;
+        gap: 28px;
+        padding: 32px 34px 26px;
+        border-bottom: 1px solid var(--line);
+        background: linear-gradient(180deg, rgba(255, 255, 255, 0.78), rgba(249, 245, 236, 0.92));
+      }
+
+      .rail {
+        padding: 24px 22px;
+        border-radius: 28px;
+        background: linear-gradient(180deg, rgba(250, 245, 235, 0.96), rgba(244, 238, 227, 0.88));
+        border: 1px solid rgba(86, 119, 101, 0.14);
+      }
+
+      .rail .eyebrow {
+        margin: 0 0 18px;
+        font-size: 15px;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: var(--accent);
+      }
+
+      .rail strong {
+        display: block;
+        font-size: 40px;
+        line-height: 1.12;
+        letter-spacing: -0.03em;
+      }
+
+      .rail p {
+        margin: 18px 0 0;
+        font-size: 18px;
+        line-height: 1.8;
+        color: var(--muted);
+      }
+
+      .hero-main {
+        display: flex;
+        flex-direction: column;
+        gap: 18px;
+      }
+
+      .topline {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 18px;
+      }
+
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        padding: 10px 16px;
+        border-radius: 999px;
+        border: 1px solid rgba(86, 119, 101, 0.14);
+        background: var(--accent-soft);
+        color: var(--accent);
+        font-size: 15px;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+      }
+
+      .time {
+        font-size: 15px;
+        color: var(--muted);
+      }
+
+      h1 {
+        margin: 0;
+        font-size: 40px;
+        line-height: 1.18;
+        letter-spacing: -0.03em;
+      }
+
+      .subtitle {
+        margin: 0;
+        font-size: 18px;
+        line-height: 1.8;
+        color: var(--muted);
+      }
+
+      .meta-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .meta-card {
+        padding: 16px 18px;
+        border-radius: 22px;
+        background: var(--paper);
+        border: 1px solid var(--line);
+      }
+
+      .meta-card .label {
+        font-size: 13px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+
+      .meta-card .value {
+        margin-top: 10px;
+        font-size: 17px;
+        line-height: 1.55;
+        font-weight: 700;
+      }
+
+      .sections {
+        display: grid;
+        grid-template-columns: minmax(0, 1.08fr) minmax(0, 0.92fr);
+        gap: 18px;
+        padding: 26px 34px 34px;
+      }
+
+      .section-card {
+        padding: 24px 24px 22px;
+        border-radius: 28px;
+        background: var(--paper);
+        border: 1px solid var(--line);
+      }
+
+      .section-card h2 {
+        margin: 0 0 16px;
+        font-size: 23px;
+        letter-spacing: -0.02em;
+      }
+
+      .section-card ol,
+      .section-card ul {
+        margin: 0;
+        padding-left: 24px;
+      }
+
+      .section-card li {
+        margin: 0 0 12px;
+        font-size: 18px;
+        line-height: 1.78;
+      }
+
+      .section-card li:last-child {
+        margin-bottom: 0;
+      }
+
+      .section-card code {
+        padding: 0.08em 0.36em;
+        border-radius: 0.45em;
+        background: #f1ebdf;
+        font-family: "SFMono-Regular", Menlo, Consolas, monospace;
+        font-size: 0.9em;
+      }
+
+      .trace-list {
+        display: grid;
+        gap: 14px;
+      }
+
+      .trace {
+        padding: 18px 18px 16px;
+        border-radius: 22px;
+        background: var(--chip);
+        border: 1px solid rgba(84, 74, 49, 0.08);
+      }
+
+      .trace .tag {
+        display: inline-flex;
+        align-items: center;
+        padding: 6px 10px;
+        border-radius: 999px;
+        background: #ffffff;
+        border: 1px solid rgba(80, 97, 91, 0.1);
+        font-size: 13px;
+        font-weight: 700;
+        color: var(--accent);
+      }
+
+      .trace h3 {
+        margin: 14px 0 10px;
+        font-size: 20px;
+        line-height: 1.45;
+      }
+
+      .trace p {
+        margin: 0;
+        font-size: 17px;
+        line-height: 1.78;
+        color: var(--muted);
+      }
+
+      .footer-note {
+        margin-top: 18px;
+        padding: 18px 20px;
+        border-radius: 22px;
+        background: linear-gradient(180deg, rgba(86, 119, 101, 0.08), rgba(86, 119, 101, 0.04));
+        border: 1px solid rgba(86, 119, 101, 0.14);
+        font-size: 17px;
+        line-height: 1.76;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="frame">
+      <section class="hero">
+        <aside class="rail">
+          <div class="eyebrow">Freeze Point</div>
+          <strong>首页改版先冻结进正式需求真源</strong>
+          <p>这条业务线在当时还没有独立拆成任务单，先以需求真源的方式收口，避免平行文档继续分叉。</p>
+        </aside>
+        <div class="hero-main">
+          <div class="topline">
+            <div class="badge">正式需求真源</div>
+            <div class="time">更新时间：2026-03-20 10:03 +0800</div>
+          </div>
+          <h1>【需求暂存】20260319-页面框架清理后闲置功能区域专项梳理</h1>
+          <p class="subtitle">首页改版相关的顶部业务维度再安置、快捷入口收纳、项目卡作战室入口清理，最终都统一挂靠到这一个需求真源，不再额外拆平行需求。</p>
+          <div class="meta-grid">
+            <div class="meta-card">
+              <div class="label">状态</div>
+              <div class="value">需求暂存（待专项梳理）</div>
+            </div>
+            <div class="meta-card">
+              <div class="label">需求 ID</div>
+              <div class="value">REQ-20260319-FRAME-LEFTOVER-REVIEW</div>
+            </div>
+            <div class="meta-card">
+              <div class="label">来源通道</div>
+              <div class="value">子级04-前端体验（task-overview 页面交互）</div>
+            </div>
+            <div class="meta-card">
+              <div class="label">主负责通道</div>
+              <div class="value">辅助04-原型设计与Demo可视化（静态数据填充-业务规格确认）</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="sections">
+        <div class="section-card">
+          <h2>需求结论</h2>
+          <ol>
+            <li>本轮页面框架清理后，确实会产生一批闲置、降级或待安置的功能区域，需要单独登记。</li>
+            <li>这些区域不应该并入本轮头部框架实施，否则会把框架冻结和后续功能规划混在一起。</li>
+            <li>先把“会空出来什么、后续怎么安置”记录下来，后面再单开专项梳理。</li>
+          </ol>
+          <div class="footer-note">
+            <strong>下一步建议：</strong> 等头部框架冻结后，再单开一条专项需求，逐项梳理闲置区域的归属；由产品侧先收口，再决定是否进入任务化。
+          </div>
+        </div>
+
+        <div class="section-card">
+          <h2>与首页改版直接相关的两次补充留痕</h2>
+          <div class="trace-list">
+            <article class="trace">
+              <div class="tag">2026-03-20 补充留痕</div>
+              <h3>overview 首页顶部被屏蔽后的业务维度与入口承接</h3>
+              <p>用户已要求移除首页顶部右侧环境标签与快捷按钮；前端本轮只执行入口移除，不扩展为结构重做，因此直接并入本需求，后续统一梳理哪些信息继续保留、迁移或下沉。</p>
+            </article>
+            <article class="trace">
+              <div class="tag">2026-03-20 第二次补充</div>
+              <h3>overview 项目卡片中的作战室入口清理</h3>
+              <p>项目卡内的 <code>作战室</code> 入口移除后，不再单开平行需求，而是继续挂靠这条真源，统一判断业务价值是否保留、迁移到其他入口，还是彻底清理。</p>
+            </article>
+          </div>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

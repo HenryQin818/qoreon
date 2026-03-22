@@ -3227,6 +3227,7 @@
     /* 详情区 shell */
     .detail-view {
       position: relative;
+      min-width: 0;
       min-height: 0;
       display: flex;
       flex-direction: column;
@@ -3404,6 +3405,7 @@
     }
     .detailb {
       padding: 10px 12px;
+      min-width: 0;
       overflow: auto;
       display: flex;
       flex-direction: column;
@@ -3489,9 +3491,13 @@
       padding: 0;
       overflow: hidden;
     }
-    body.panel-conv .detailb > .convwrap { flex: 1 1 auto; }
+    body.panel-conv .detailb > .convwrap {
+      flex: 1 1 auto;
+      min-width: 0;
+    }
     .convwrap {
       display: none;
+      min-width: 0;
       min-height: 0;
       height: 100%;
       padding: 10px 12px 12px;
@@ -3505,6 +3511,7 @@
       gap: 0;
     }
     .convtimeline {
+      min-width: 0;
       min-height: 0;
       overflow: auto;
       border: 1px solid var(--line);
@@ -3967,6 +3974,7 @@
     }
     .convcomposer {
       position: relative;
+      min-width: 0;
       margin-top: 10px;
       border: 1px solid var(--line);
       border-radius: 12px;
@@ -4287,6 +4295,7 @@
     }
     .convsend {
       display: flex;
+      min-width: 0;
       gap: 8px;
       align-items: center;
     }

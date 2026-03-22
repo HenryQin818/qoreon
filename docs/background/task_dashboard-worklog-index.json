@@ -1,0 +1,48 @@
+{
+  "project_id": "task_dashboard",
+  "title": "平台文章",
+  "items": [
+    {
+      "title": "一版给外部试用的版本，是怎么在三个项目里做出来的",
+      "url": "/share/worklog/task_dashboard/qoreon-cross-project-collab-storyboard.html",
+      "local_path": "docs/worklog/task_dashboard/qoreon-cross-project-collab-storyboard.html",
+      "cover": "/share/worklog/task_dashboard/assets/cross-project-collab/open-source-sync-board-live.png",
+      "date": "2026年3月21日"
+    },
+    {
+      "title": "别把心跳当魔法：Qoreon 心跳任务自动化实战手册",
+      "url": "/share/worklog/task_dashboard/qoreon-heartbeat-automation-playbook.html",
+      "local_path": "docs/worklog/task_dashboard/qoreon-heartbeat-automation-playbook.html",
+      "cover": "/share/worklog/task_dashboard/assets/heartbeat-playbook/qoreon-heartbeat-automation-playbook-cover.png",
+      "date": "2026年3月21日"
+    },
+    {
+      "title": "基础项目开发如何做分工：Qoreon 通道分工方法",
+      "url": "/share/worklog/task_dashboard/qoreon-project-worksplit-playbook.html",
+      "local_path": "docs/worklog/task_dashboard/qoreon-project-worksplit-playbook.html",
+      "cover": "/share/worklog/task_dashboard/assets/worksplit-playbook/qoreon-project-worksplit-playbook-cover.png",
+      "date": "2026年3月21日"
+    },
+    {
+      "title": "Qoreon 使用手册：项目、通道、Agent 与跨项目协作",
+      "url": "/share/worklog/task_dashboard/qoreon-newcomer-first-day-guide.html",
+      "local_path": "docs/worklog/task_dashboard/qoreon-newcomer-first-day-guide.html",
+      "cover": "/share/worklog/task_dashboard/assets/manual-cover/qoreon-manual-cover.png",
+      "date": "2026年3月20日"
+    },
+    {
+      "title": "把项目装进陌生人的电脑：Qoreon 开源打包现场",
+      "url": "/share/worklog/task_dashboard/task-dashboard-worklog-open-source-storyboard.html",
+      "local_path": "docs/worklog/task_dashboard/task-dashboard-worklog-open-source-storyboard.html",
+      "cover": "/share/worklog/task_dashboard/assets/worklog-20260320/message-list-hub.png",
+      "date": "2026年3月20日"
+    },
+    {
+      "title": "Qoreon 工作故事板：从想法到协同实施",
+      "url": "/share/worklog/task_dashboard/task-dashboard-worklog-idea-to-delivery-storyboard.html",
+      "local_path": "docs/worklog/task_dashboard/task-dashboard-worklog-idea-to-delivery-storyboard.html",
+      "cover": "/share/worklog/task_dashboard/assets/worklog-20260320/agent-directory-current.png",
+      "date": "2026年3月20日"
+    }
+  ]
+}

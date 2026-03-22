@@ -769,6 +769,19 @@
       persistSessionScopedMap(CONV_TRAINING_SENT_KEY, PCONV.trainingSentBySessionKey);
     }
 
+    function isConversationTrainingDismissedByKey(key) {
+      const draftKey = String(key || "").trim();
+      if (!draftKey) return false;
+      return !!PCONV.trainingDismissedBySessionKey[draftKey];
+    }
+
+    function setConversationTrainingDismissedByKey(key, dismissed) {
+      const draftKey = String(key || "").trim();
+      if (!draftKey) return;
+      if (dismissed) PCONV.trainingDismissedBySessionKey[draftKey] = true;
+      else delete PCONV.trainingDismissedBySessionKey[draftKey];
+    }
+
     function conversationTrainingVisibleMessageCount(runs) {
       return (Array.isArray(runs) ? runs : [])
         .filter((run) => !!String((run && run.id) || "").trim())
@@ -808,47 +821,84 @@
     function buildConversationTrainingMessage() {
       return [
         CONVERSATION_AGENT_TRAINING_PREFIX,
-        "在开始当前协作前，请先完成以下学习：",
+        "在开始当前协作前，你必须先完成以下初始化训练。未完成前，不要回复“已完成初始化”，也不要直接开始正式任务。",
         "",
         "1. 明确职责边界",
         "- 只围绕当前通道和当前任务主线执行，不自行扩题。",
+        "- 默认处理后回原发送 Agent；若消息中有 callback_to.session_id，优先回该 session。",
         "",
         "2. 对齐项目真源",
         "- 项目配置 = 真源默认上下文",
         "- Agent = 身份，session = 当前承载结果",
+        "- 不清楚工作区、分支、真源时，先查项目内真源，不要自行猜测。",
         "",
-        "3. 阅读必读入口",
+        "3. 阅读所在通道资料并学习公共技能",
         "- README.md",
-        "- 活动 任务/",
-        "- 活动 反馈/",
-        "- 产出物/材料/",
-        "- 产出物/沉淀/",
+        "- 当前负责通道下的 任务/",
+        "- 当前负责通道下的 反馈/",
+        "- 当前负责通道下的 产出物/材料/",
+        "- 当前负责通道下的 产出物/沉淀/",
+        "- skills/INDEX.md",
+        "- 当前项目公共 skills 清单/索引文件",
+        "- 至少重点学习：",
+        "  - agent-init-training-playbook",
+        "  - collab-message-send（或当前项目等效的正式消息技能）",
+        "  - project-startup-collab-suite",
+        "  - 当前项目的公共技能与消息沟通技能",
         "",
-        "4. 学习协作规则",
-        "- 默认处理后回原发送 Agent",
-        "- 若消息中有 callback_to.session_id，优先回该 session",
-        "- 发消息时带上自己的 session_id",
-        "- 最小回执结构：当前结论 / 是否通过或放行 / 唯一阻塞 / 关键路径或 run_id / 下一步动作",
+        "4. 学会怎么发正式消息",
+        "- 跨 Agent / 跨通道协作必须走正式系统发送，不把内部草稿或内部 spawn 当成“已通知”",
+        "- 正式消息默认用你当前执行 Agent 自己的身份发送，不借用项目主会话、总控或其他通道 Agent 身份",
+        "- 正式消息最小字段：当前发信Agent / session_id / source_ref / callback_to",
+        "- 消息正文优先显式写：当前发信Agent / 当前会话 / source_ref / callback_to",
+        "- 若保留 [发送主体]，它只能和当前发信Agent同名同身份；不一致视为不合规",
+        "- 只有用户明确要求代发，且正文写出代发原因，才允许身份与执行会话不一致",
+        "- 不清楚发给谁时，先查项目通讯录/CCR，不向用户反问基础目标对象。",
+        "- 正式通知成功至少分三层判断：已生成待发送正文 / 已提交发送，待验证 / 已完成证据闭环",
+        "- 没有 announce_run_id 时，不得写已发出 / 已送达 / 已通知通道",
         "",
-        "5. 首个动作",
-        "- 学习完成后，请回复：",
+        "5. 学会什么时候必须回执",
+        "- 收到任务先首回执，执行后再回结构化结论",
+        "- 只有 notify_only 才可不回",
+        "- 不能只改文件不回消息，不能只输出可转发正文冒充“已发送”，不能自行扩题",
+        "",
+        "6. 完成一次消息能力验证",
+        "- 去项目通讯录/CCR 中找到一个“不是你自己”的 Agent",
+        "- 使用正式消息能力，向该 Agent 发送 1 条“初始化验证消息”",
+        "- 该验证消息必须最小、安全、不扩题",
+        "- 如果当前项目没有可用通讯录或找不到目标，再回唯一阻塞，不得跳过这一步",
+        "",
+        "7. 学习完成后的固定回执格式",
         "已完成初始化",
         "职责边界: <一句话>",
         "当前主线: <一句话>",
+        "已学习公共技能: <列出本轮已学习的关键 skills>",
+        "通讯录验证: 已向 <agent名称> 发送正式消息",
+        "验证证据: <run_id / 目标session_id>",
         "唯一阻塞: <无/一句话>",
         "首个动作: <一句话>",
       ].join("\n");
     }
 
-    function renderConversationTrainingPrompt(ctx, runs) {
-      const { trainingContainer, trainingCount, trainingDesc, trainingSendBtn } = convComposerUiElements();
+    function renderConversationTrainingPrompt(ctx, runs, opts = {}) {
+      const { trainingContainer, trainingCount, trainingDesc, trainingSendBtn, trainingCloseBtn } = convComposerUiElements();
       const timeline = document.getElementById("convTimeline");
       const trainingDock = document.getElementById("convTrainingDock");
       const convWrap = document.getElementById("convWrap");
       const composer = convWrap ? convWrap.querySelector(".convcomposer") : null;
+      const timelineReady = opts && Object.prototype.hasOwnProperty.call(opts, "timelineReady")
+        ? !!opts.timelineReady
+        : true;
       if (!trainingContainer) return;
       const draftKey = ctx ? convComposerDraftKey(ctx.projectId, ctx.sessionId) : "";
       if (!draftKey) {
+        trainingContainer.style.display = "none";
+        if (trainingDock) trainingDock.classList.remove("show");
+        if (convWrap) convWrap.style.removeProperty("--conv-training-offset");
+        if (timeline) timeline.classList.remove("has-training-banner");
+        return;
+      }
+      if (!timelineReady) {
         trainingContainer.style.display = "none";
         if (trainingDock) trainingDock.classList.remove("show");
         if (convWrap) convWrap.style.removeProperty("--conv-training-offset");
@@ -861,13 +911,15 @@
       }
       const alreadySent = !!getConversationTrainingSentAtByKey(draftKey);
       const remaining = conversationTrainingRemainingCount(runs);
-      const shouldShow = !alreadySent && remaining > 0;
+      if (alreadySent || remaining <= 0) setConversationTrainingDismissedByKey(draftKey, false);
+      const dismissed = isConversationTrainingDismissedByKey(draftKey);
+      const shouldShow = !alreadySent && !dismissed && remaining > 0;
       trainingContainer.style.display = shouldShow ? "flex" : "none";
       if (trainingDock) trainingDock.classList.toggle("show", shouldShow);
       if (convWrap) {
         if (shouldShow && composer) {
           const composerHeight = Math.ceil(composer.getBoundingClientRect().height || composer.offsetHeight || 0);
-          convWrap.style.setProperty("--conv-training-offset", Math.max(composerHeight + 10, 132) + "px");
+          convWrap.style.setProperty("--conv-training-offset", Math.max(composerHeight + 4, 126) + "px");
         } else {
           convWrap.style.removeProperty("--conv-training-offset");
         }
@@ -880,12 +932,23 @@
           : "本轮将自动收起";
       }
       if (trainingDesc) {
-        trainingDesc.textContent = "新 Agent 开始协作前，先发一条标准培训说明，让它先学习职责边界、项目真源、阅读入口和回执规则。";
+        trainingDesc.textContent = "新 Agent 开始协作前，先查看所在通道资料，学习公共 skills、发消息方式与回执规则，并完成一次通讯录初始化验证。";
       }
       if (trainingSendBtn) {
         trainingSendBtn.disabled = !!PCONV.sending;
         trainingSendBtn.textContent = PCONV.sending ? "发送中..." : "发送培训";
       }
+      if (trainingCloseBtn) {
+        trainingCloseBtn.disabled = !!PCONV.sending;
+      }
+    }
+
+    function dismissConversationTrainingPrompt() {
+      const ctx = currentConversationCtx();
+      const draftKey = ctx ? convComposerDraftKey(ctx.projectId, ctx.sessionId) : "";
+      if (!ctx || !draftKey) return;
+      setConversationTrainingDismissedByKey(draftKey, true);
+      renderConversationTrainingPrompt(ctx, [], { timelineReady: true });
     }
 
     async function sendConversationTrainingMessage() {
@@ -897,6 +960,7 @@
         pendingHint: "发送中（Agent培训）…",
         successHint: "已发送 Agent 培训，等待执行回溯刷新…",
         onSuccess: () => {
+          setConversationTrainingDismissedByKey(draftKey, false);
           setConversationTrainingSentByKey(draftKey, true);
         },
       });

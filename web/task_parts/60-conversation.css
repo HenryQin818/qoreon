@@ -218,6 +218,32 @@
       font-size: 12px;
       font-weight: 700;
     }
+    .convtraining-actions {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      flex: 0 0 auto;
+    }
+    .convtraining-close {
+      width: 28px;
+      height: 28px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex: 0 0 auto;
+      border: none;
+      background: transparent;
+      color: rgba(15,23,42,0.54);
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 18px;
+      line-height: 1;
+      transition: background 140ms ease, color 140ms ease;
+    }
+    .convtraining-close:hover {
+      background: rgba(15,23,42,0.06);
+      color: rgba(15,23,42,0.78);
+    }
     .convtraining-send:disabled {
       opacity: 0.56;
       cursor: default;
@@ -227,7 +253,7 @@
       position: absolute;
       left: 12px;
       right: 12px;
-      bottom: var(--conv-training-offset, 146px);
+      bottom: var(--conv-training-offset, 138px);
       display: none;
       z-index: 8;
     }

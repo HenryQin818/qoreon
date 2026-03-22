@@ -1473,6 +1473,9 @@
         const binExists = !!(row && row.bin_exists);
         const binExecutable = !!(row && row.bin_executable);
         const effectiveReady = !!effectiveBin && (binExists || !effectiveBin.includes("/")) && (binExecutable || !effectiveBin.includes("/"));
+        const missingLocalBin = !!localBin && !binExists;
+        const nonExecutableLocalBin = !!localBin && binExists && !binExecutable;
+        const missingAutoBin = !localBin && !effectiveReady;
 
         const wrap = document.createElement("div");
         wrap.className = "cfg-cli-row";
@@ -1498,7 +1501,11 @@
         p2.textContent = configured ? `已配置 通道${channelCount} 会话${sessionCount}` : "未配置";
         const p3 = document.createElement("span");
         p3.className = "cfg-pill " + (effectiveReady ? "ok" : "warn");
-        p3.textContent = effectiveReady ? `当前可用 · ${binSource}` : `待检查 · ${binSource}`;
+        if (effectiveReady) p3.textContent = `当前可用 · ${binSource}`;
+        else if (missingLocalBin) p3.textContent = "路径不存在 · 本机覆盖";
+        else if (nonExecutableLocalBin) p3.textContent = "不可执行 · 本机覆盖";
+        else if (missingAutoBin) p3.textContent = "未发现可执行文件";
+        else p3.textContent = `待检查 · ${binSource}`;
         right.appendChild(p1);
         right.appendChild(document.createTextNode(" "));
         right.appendChild(p2);
@@ -1535,7 +1542,15 @@
         pathBlock.appendChild(inputLine);
         const note = document.createElement("div");
         note.className = "cfg-cli-note";
-        note.textContent = "留空后回退自动发现；当前优先级：本机配置 > 环境变量 > PATH/默认发现";
+        if (missingLocalBin) {
+          note.textContent = `当前本机覆盖路径不存在：${localBin}。请改成 ${name} 在本机的实际可执行路径；若 ${name} 已在 PATH 中，可直接清空这里回退自动发现。保存后需重启本机服务。`;
+        } else if (nonExecutableLocalBin) {
+          note.textContent = `当前本机覆盖路径存在但不可执行：${localBin}。请修正为可执行文件路径，或清空后回退自动发现。保存后需重启本机服务。`;
+        } else if (missingAutoBin) {
+          note.textContent = `当前未自动发现到可用 ${name} 命令。请先在本机安装并加入 PATH，或在这里填写绝对路径。保存后需重启本机服务。`;
+        } else {
+          note.textContent = "留空后回退自动发现；当前优先级：本机配置 > 环境变量 > PATH/默认发现";
+        }
         pathBlock.appendChild(note);
         wrap.appendChild(pathBlock);
         listEl.appendChild(wrap);
@@ -1646,10 +1661,10 @@
         ? window.location.origin
         : ((window.location.protocol && window.location.host)
           ? `${window.location.protocol}//${window.location.host}`
-          : "http://127.0.0.1:18765");
+          : "http://127.0.0.1");
       return {
         primary: new URL("/share/avatar-library.html", origin).toString(),
-        fallback: new URL("/dist/avatar-library.html", origin).toString(),
+        fallback: new URL("avatar-library.html", origin).toString(),
       };
     }
 

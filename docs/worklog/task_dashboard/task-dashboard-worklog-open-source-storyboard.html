@@ -1,0 +1,403 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>把项目装进陌生人的电脑：Qoreon 开源打包现场</title>
+  <style>
+    :root {
+      --bg: #f6efe4;
+      --paper: rgba(255, 251, 245, 0.92);
+      --ink: #1f2a24;
+      --muted: #667067;
+      --line: rgba(50, 67, 59, 0.12);
+      --accent: #b4572f;
+      --accent-2: #204d42;
+      --gold: #d0a25a;
+      --rose: #d37f64;
+      --shadow: 0 20px 60px rgba(53, 41, 28, 0.13);
+      --radius-xl: 28px;
+      --radius-lg: 20px;
+      --radius-md: 16px;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at top right, rgba(208,162,90,0.35), transparent 22%),
+        radial-gradient(circle at 18% 20%, rgba(180,87,47,0.16), transparent 20%),
+        linear-gradient(180deg, #f8f1e7 0%, #f4ede0 45%, #efe5d7 100%);
+      font-family: "Avenir Next", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      line-height: 1.7;
+    }
+    .page {
+      width: min(1180px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 32px 0 64px;
+    }
+    .hero, .panel, .chapter, .closing {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: var(--radius-xl);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(10px);
+    }
+    .hero {
+      padding: 34px;
+      display: grid;
+      grid-template-columns: 1.25fr 0.95fr;
+      gap: 28px;
+      overflow: hidden;
+      position: relative;
+    }
+    .hero::after {
+      content: "";
+      position: absolute;
+      inset: auto -60px -80px auto;
+      width: 240px;
+      height: 240px;
+      background: radial-gradient(circle, rgba(208,162,90,0.22), transparent 70%);
+      pointer-events: none;
+    }
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 14px;
+      border-radius: 999px;
+      background: rgba(32, 77, 66, 0.08);
+      color: var(--accent-2);
+      font-size: 13px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+    h1, h2, h3 {
+      margin: 0;
+      font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", "Songti SC", serif;
+      line-height: 1.15;
+      font-weight: 700;
+    }
+    h1 { font-size: clamp(34px, 5.4vw, 62px); margin-top: 18px; }
+    .hero p.lead {
+      margin: 18px 0 0;
+      font-size: 18px;
+      color: #364038;
+      max-width: 42em;
+    }
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 22px;
+    }
+    .meta span, .tag, .signal {
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      padding: 8px 12px;
+      font-size: 13px;
+      color: var(--muted);
+      background: rgba(255,255,255,0.55);
+    }
+    .hero-side {
+      display: grid;
+      gap: 16px;
+      align-content: start;
+    }
+    .signal {
+      border-radius: 18px;
+      padding: 16px;
+      background: linear-gradient(180deg, rgba(255,255,255,0.74), rgba(249,242,231,0.95));
+    }
+    .signal strong { display:block; font-size: 26px; color: var(--accent-2); margin-bottom: 6px; }
+    .grid-3 {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 18px;
+      margin-top: 22px;
+    }
+    .panel { padding: 24px; margin-top: 22px; }
+    .section-head { display:flex; justify-content:space-between; gap:16px; align-items:flex-end; margin-bottom: 18px; }
+    .section-head p { margin: 0; color: var(--muted); max-width: 48em; }
+    .cast {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 18px;
+    }
+    .role-card {
+      padding: 18px;
+      border-radius: var(--radius-lg);
+      background: linear-gradient(180deg, rgba(255,255,255,0.72), rgba(246,239,228,0.92));
+      border: 1px solid rgba(44, 61, 50, 0.09);
+      display: grid;
+      gap: 14px;
+    }
+    .role-head { display:flex; align-items:center; gap: 14px; }
+    .avatar {
+      width: 58px; height: 58px; border-radius: 20px;
+      display:grid; place-items:center; font-weight:800; font-size: 24px;
+      color: white; flex: 0 0 auto;
+      box-shadow: inset 0 -10px 18px rgba(0,0,0,0.14);
+    }
+    .a-master { background: linear-gradient(135deg, #375f54, #203f38); }
+    .a-arch { background: linear-gradient(135deg, #b4572f, #884425); }
+    .a-runtime { background: linear-gradient(135deg, #4d6778, #304653); }
+    .a-front { background: linear-gradient(135deg, #cf805e, #a85637); }
+    .a-struct { background: linear-gradient(135deg, #78664d, #544533); }
+    .a-user { background: linear-gradient(135deg, #6a6fb4, #45498c); }
+    .role-card small { color: var(--muted); display:block; margin-top: 4px; }
+    .bubble {
+      padding: 14px 16px;
+      border-radius: 18px 18px 18px 6px;
+      background: white;
+      border: 1px solid rgba(44,61,50,0.08);
+      color: #2f3932;
+      position: relative;
+      min-height: 92px;
+    }
+    .bubble::before {
+      content: "";
+      position: absolute;
+      left: 18px;
+      bottom: -10px;
+      width: 18px;
+      height: 18px;
+      background: white;
+      border-left: 1px solid rgba(44,61,50,0.08);
+      border-bottom: 1px solid rgba(44,61,50,0.08);
+      transform: rotate(-35deg);
+      border-bottom-left-radius: 6px;
+    }
+    .chapters {
+      display: grid;
+      gap: 18px;
+      margin-top: 8px;
+    }
+    .chapter {
+      display:grid;
+      grid-template-columns: 220px 1fr;
+      gap: 22px;
+      padding: 24px;
+      align-items:start;
+    }
+    .chapter .stamp {
+      padding: 18px;
+      border-radius: 22px;
+      background: linear-gradient(180deg, rgba(32,77,66,0.08), rgba(32,77,66,0.02));
+      border: 1px solid rgba(32,77,66,0.1);
+      position: sticky;
+      top: 24px;
+    }
+    .stamp .day { font-size: 12px; letter-spacing: 0.14em; color: var(--accent-2); text-transform: uppercase; }
+    .stamp strong { display:block; font-size: 30px; margin-top: 10px; }
+    .stamp p { margin: 10px 0 0; color: var(--muted); font-size: 14px; }
+    .chapter article h3 { font-size: 30px; margin-bottom: 12px; }
+    .chapter article p { margin: 0 0 14px; color: #313a34; }
+    .bullet-list { display:grid; gap: 10px; margin-top: 12px; }
+    .bullet-list div {
+      padding: 13px 15px;
+      border-radius: 16px;
+      background: rgba(255,255,255,0.72);
+      border: 1px solid rgba(44,61,50,0.08);
+    }
+    .evidence-grid {
+      display:grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 18px;
+      margin-top: 20px;
+    }
+    figure {
+      margin: 0;
+      background: rgba(255,255,255,0.72);
+      border-radius: 22px;
+      border: 1px solid rgba(44,61,50,0.09);
+      overflow: hidden;
+    }
+    figure img { width: 100%; display: block; aspect-ratio: 16 / 10; object-fit: cover; background: #eadfce; }
+    figcaption { padding: 14px 16px 18px; color: var(--muted); font-size: 14px; }
+    .locks {
+      display:grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 14px;
+    }
+    .lock {
+      padding: 18px;
+      border-radius: 20px;
+      background: linear-gradient(180deg, rgba(255,255,255,0.82), rgba(247,239,228,0.96));
+      border: 1px solid rgba(44,61,50,0.08);
+    }
+    .lock strong { display:block; margin-bottom: 8px; font-size: 17px; }
+    .closing { padding: 28px; margin-top: 24px; position: relative; overflow: hidden; }
+    .closing::after {
+      content: "";
+      position: absolute;
+      right: -40px;
+      bottom: -60px;
+      width: 220px; height: 220px;
+      background: radial-gradient(circle, rgba(180,87,47,0.16), transparent 70%);
+    }
+    .closing p { max-width: 60em; margin: 0 0 12px; }
+    .ribbon {
+      display:inline-block; margin-bottom: 14px; padding: 7px 12px; border-radius: 999px;
+      background: rgba(180,87,47,0.09); color: var(--accent); font-size: 13px; letter-spacing: 0.08em; text-transform: uppercase;
+    }
+    @media (max-width: 980px) {
+      .hero, .chapter { grid-template-columns: 1fr; }
+      .cast, .grid-3, .locks, .evidence-grid { grid-template-columns: 1fr; }
+      .stamp { position: static !important; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="hero">
+      <div>
+        <span class="eyebrow">Work Log · 2026-03-20 · Open Source Pack</span>
+        <h1>把项目装进陌生人的电脑，<br/>才算真正开始做开源。</h1>
+        <p class="lead">这页不是系统台账，也不是 run 列表。它想讲清楚一件事：<strong>Qoreon</strong> 这几天刚把内部协作理顺，今天就开始面对更难的问题了，别人第一次拿到这套东西，能不能真的把它用起来。</p>
+        <div class="meta">
+          <span>当前主线：开源一体包首发准备</span>
+          <span>今日关键词：冻结、脱敏、单入口、clean-room</span>
+          <span>叙事视角：给人看，不给系统看</span>
+        </div>
+      </div>
+      <div class="hero-side">
+        <div class="signal"><strong>293</strong>今日 run 样本，说明今天不是空谈，很多人都真在动。</div>
+        <div class="signal"><strong>4 把锁</strong>V1 范围单表、public_safe 元数据、ai-bootstrap 唯一入口、clean-room smoke。</div>
+        <div class="signal"><strong>1 个硬现实</strong>现在最难的不是“该不该开源”，而是怎么从脏工作树里剥出一份干净候选快照。</div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="section-head">
+        <div>
+          <h2>今天登场的人</h2>
+          <p>这些 Agent 今天不是抽象模块，而是一个个有脾气的工种。有人守门，有人修桥，有人收拾房间，有人盯着包装箱，还有人站在门外问一句最扎心的话：别人第一次来，真的能把它用起来吗？</p>
+        </div>
+      </div>
+      <div class="cast">
+        <article class="role-card">
+          <div class="role-head"><div class="avatar a-master">总</div><div><strong>总控</strong><small>像站台调度员，决定门能不能开。</small></div></div>
+          <div class="bubble">“方向成立，但别急着放行。我要看的不是你们说能发，而是 clean-room 里真能起。”</div>
+        </article>
+        <article class="role-card">
+          <div class="role-head"><div class="avatar a-struct">构</div><div><strong>结构治理</strong><small>像拿着红笔的档案管理员。</small></div></div>
+          <div class="bubble">“屋里那些钥匙、地址、会话号、运行痕迹，别顺手装进公开说明书。公开包要有公开包的分寸。”</div>
+        </article>
+        <article class="role-card">
+          <div class="role-head"><div class="avatar a-runtime">桥</div><div><strong>运行时</strong><small>像桥梁工，负责让别人走得过去。</small></div></div>
+          <div class="bubble">“能在我们自己机器上跑，不算完。别人拿过去还能起，这条桥才算真的修通。”</div>
+        </article>
+        <article class="role-card">
+          <div class="role-head"><div class="avatar a-front">页</div><div><strong>前端</strong><small>像舞台监督，把复杂状态翻译成人话。</small></div></div>
+          <div class="bubble">“消息、回执、待办别再互相抢戏。页面得先把内功练顺，外人拿到包才不会一上来就迷路。”</div>
+        </article>
+        <article class="role-card">
+          <div class="role-head"><div class="avatar a-arch">仓</div><div><strong>开源桥接 / Git</strong><small>像打包工头，负责装箱而不是写传奇。</small></div></div>
+          <div class="bubble">“先冻结，再导出，再验收。别一边继续改主仓，一边假装候选包已经干净了。”</div>
+        </article>
+        <article class="role-card">
+          <div class="role-head"><div class="avatar a-user">我</div><div><strong>用户</strong><small>像最后那个坚持亲手开箱的人。</small></div></div>
+          <div class="bubble">“别告诉我页面能打开。告诉我一个陌生人第一次来，应该先看哪份说明，点哪一步，哪里算成功。”</div>
+        </article>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="section-head">
+        <div>
+          <h2>今天真正发生了什么</h2>
+          <p>这不是“又开了一条新任务线”，而是同一件事的自然后续。昨天大家还在清消息和回执的秩序，今天已经开始问：如果把这套系统交到陌生人手里，它会不会立刻露怯。</p>
+        </div>
+      </div>
+      <div class="chapters">
+        <section class="chapter">
+          <aside class="stamp"><div class="day">Chapter 01</div><strong>先把屋里收干净</strong><p>3 月 19 日，项目先把“内部说不清”的部分压回正轨。</p></aside>
+          <article>
+            <h3>消息终于不再和回执抢主位了</h3>
+            <p>昨天最重要的变化，不是某个新按钮，也不是一条新接口，而是团队终于承认：<strong>一条消息只能有一个真源</strong>。回执不该继续冒充第二条主消息，任务闭环也不该再靠同名反馈副本硬撑。</p>
+            <p>这件事听上去不像大新闻，但它像收拾出门前的玄关。鞋子如果还乱成一堆，谁都别谈体面出门。于是前端在整理列表秩序，结构治理在把“任务为主线、消息为事件、反馈为例外”写成规则，总控则把大家从“多说几句也没关系”的松散状态，拉回到“只看真源”的窄门里。</p>
+            <div class="bullet-list">
+              <div><strong>收敛后的意思很简单：</strong>任务是主线，消息是过程，产出物是证据，反馈只留给少数正式验收场景。</div>
+              <div><strong>这一步的重要性：</strong>如果内部都还在双状态并存，开源包再漂亮，也只是把混乱打了个蝴蝶结送出去。</div>
+            </div>
+          </article>
+        </section>
+
+        <section class="chapter">
+          <aside class="stamp"><div class="day">Chapter 02</div><strong>今天开始装箱</strong><p>3 月 20 日，项目把目光从内部整理切到开源首发准备。</p></aside>
+          <article>
+            <h3>这不是“公开仓上线”，而是一次克制的打包练习</h3>
+            <p>今天团队讨论的，不是“要不要开源”，而是“什么能先出去，什么必须留在屋里”。开源方向已经成立，但总控没有给直接放行。因为大家现在都知道，真正会伤人的不是方向错，而是<strong>导出按一版、验收按另一版</strong>，最后做出一个看起来完整、实际上没人能复现的公开包。</p>
+            <p>所以今天的开源线被收得很克制。它先把事情压成四把锁，谁都别试图绕过去。</p>
+            <div class="locks">
+              <div class="lock"><strong>V1 范围单表</strong>先把 Must、Deferred、Not in V1 写成同一张表，不让不同通道各自想象“首发范围”。</div>
+              <div class="lock"><strong>public_safe 元数据</strong>所有种子和技能都要说明自己能做什么、默认是什么模式、有没有副作用、是否要人工确认。</div>
+              <div class="lock"><strong>ai-bootstrap 单入口</strong>外部 AI 不该在十份文档里猜先读哪份，只认一个初始化入口。</div>
+              <div class="lock"><strong>clean-room smoke</strong>不是你本机能起就算过，必须在干净环境里再走一遍主链路。</div>
+            </div>
+          </article>
+        </section>
+
+        <section class="chapter">
+          <aside class="stamp"><div class="day">Chapter 03</div><strong>最硬的门槛</strong><p>今天真正卡住团队的，不是理念，而是一团非常现实的工程现场。</p></aside>
+          <article>
+            <h3>眼下最难的不是打包，而是从脏工作树里剥出干净候选快照</h3>
+            <p>大家今天已经把很多口径讲清楚了：公开仓不继承私仓历史，公开包要走白名单导出，辅助通道里某些桥接能力默认只能 `read_only / dry_run`，而且首发还要多一条 clean-room 验收。问题在于，<strong>你总得先拿出一份干净的候选快照</strong>。</p>
+            <p>这一步很像搬家前装最后一个箱子。房间已经分类得差不多了，但桌上、地上、抽屉里还都是活的东西。现在最考验人的不是想法，而是克制：能不能在 60 到 90 分钟的冻结窗口里，停手，截一张真正能拿去导出的快照。</p>
+            <div class="bullet-list">
+              <div><strong>今天的工程现实：</strong>不是缺文档，也不是缺口号，而是还差一份“只包含冻结范围文件”的干净候选快照。</div>
+              <div><strong>为什么这一步重要：</strong>没有它，导出、脱敏、文档、测试全都会变成对空气挥拳。</div>
+            </div>
+          </article>
+        </section>
+
+        <section class="chapter">
+          <aside class="stamp"><div class="day">Chapter 04</div><strong>为什么这件事值得写进日志</strong><p>因为项目开始尊重“陌生人第一次来”的体验了。</p></aside>
+          <article>
+            <h3>这套系统终于不只是在服务自己</h3>
+            <p>一个项目什么时候算长大？不是它内部能跑十个 Agent，也不是它有多少配置文件，而是它开始认真对待“别人第一次来，会不会被吓跑”。今天开源一体包这条线，实际上就是把这个问题正式摆上台面。</p>
+            <p>你会发现，今天大家谈的每一件事，本质上都在替一个从未见过这套系统的人说话：初始化入口为什么只能有一个？为什么一定要 clean-room？为什么要把 `session_id`、运行根路径、Service Hub、launchd 这些内部痕迹拦下来？因为一旦站在外人的位置看，很多过去在内部环境里勉强能混过去的事，都会立刻变得刺眼。</p>
+            <p>这也是今天最有温度的地方。项目并没有急着把自己打扮得很漂亮，而是在出门前，先低头看了一眼鞋底有没有泥。</p>
+          </article>
+        </section>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="section-head">
+        <div>
+          <h2>今天的现场，不只是文字</h2>
+          <p>这些图不是装饰，它们就是今天这条主线的底板。界面在收口，消息在变得更像消息，任务在回到自己的主线里。正因为内部现场开始变得清楚，项目才敢谈把自己装进公开包。</p>
+        </div>
+      </div>
+      <div class="evidence-grid">
+        <figure>
+          <img src="assets/worklog-20260320/message-list-hub.png" alt="消息列表现场" />
+          <figcaption>消息列表开始像一个真正有人在用的地方，而不再像系统把所有状态都堆在一层皮肤上。</figcaption>
+        </figure>
+        <figure>
+          <img src="assets/worklog-20260320/receipt-demo.png" alt="回执示意" />
+          <figcaption>回执不再独立抢戏，开始回到原消息身边。这个变化很小，但它让“解释事情”变回了“推进事情”。</figcaption>
+        </figure>
+        <figure>
+          <img src="assets/worklog-20260320/task-detail.png" alt="任务详情现场" />
+          <figcaption>任务详情被重新当作主线，证据、状态、下一步开始围着任务本身组织，而不是围着副本文件打转。</figcaption>
+        </figure>
+        <figure>
+          <img src="assets/worklog-20260320/task-collapsed.png" alt="折叠视图" />
+          <figcaption>折叠后的秩序感也很重要。因为真正会被频繁使用的，不是说明文档，而是这种一眼就能读懂的现场感。</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section class="closing">
+      <span class="ribbon">Closing Note</span>
+      <h2>今天这页日志，想替团队记住的不是“又做了很多”，而是“终于开始考虑别人怎么第一次拿到它”。</h2>
+      <p>如果把这几天连起来看，会发现项目并不是突然跳到了开源。它先把内部协作的绳结解开，先让消息、回执、任务和证据重新各归其位，然后才抬头去看门外。今天的开源打包，其实不是新故事，而是上一轮内部收口的自然后果。</p>
+      <p>所以这页看板最后想留下的，不是一句鼓舞，而是一句很朴素的话：<strong>真正能走出去的系统，往往是先把自己收拾好，再去见人。</strong></p>
+      <p style="color:var(--muted); font-size:14px; margin-top:18px;">依据材料：2026-03-19 今日 Agent 业务情况总结、开源一体包二轮征询收敛、三版本同步工作方式、开源仓库拆分与首发准备，以及当前总控与治理线沉淀。</p>
+    </section>
+  </main>
+</body>
+</html>

@@ -6,9 +6,11 @@ from pathlib import Path
 from typing import Any
 
 
-EXAMPLE_ROOT_REL = Path("examples/minimal-project")
-SEED_ROOT_REL = EXAMPLE_ROOT_REL / "seed"
-RUNTIME_ROOT_REL = EXAMPLE_ROOT_REL / ".runtime" / "demo"
+DEFAULT_PROJECT_ID = "standard_project"
+PUBLIC_EXAMPLE_ROOTS = {
+    "minimal_project": Path("examples/minimal-project"),
+    "standard_project": Path("examples/standard-project"),
+}
 
 REQUIRED_CHANNEL_DIRS = ("任务", "反馈", "产出物/沉淀")
 
@@ -44,13 +46,66 @@ def _task_template(title: str, channel_name: str, status: str) -> str:
     )
 
 
-def bootstrap_public_example(repo_root: Path) -> dict[str, Any]:
+def resolve_public_example_root_rel(
+    *,
+    project_id: str | None = None,
+    example_root_rel: str | Path | None = None,
+) -> Path:
+    if example_root_rel is not None:
+        return Path(str(example_root_rel).strip())
+    selected_project_id = str(project_id or DEFAULT_PROJECT_ID).strip() or DEFAULT_PROJECT_ID
+    selected_root_rel = PUBLIC_EXAMPLE_ROOTS.get(selected_project_id)
+    if selected_root_rel is None:
+        supported = ", ".join(sorted(PUBLIC_EXAMPLE_ROOTS))
+        raise ValueError(f"unknown public example project_id={selected_project_id!r}; supported: {supported}")
+    return selected_root_rel
+
+
+def resolve_public_example_paths(
+    repo_root: Path,
+    *,
+    project_id: str | None = None,
+    example_root_rel: str | Path | None = None,
+) -> dict[str, Path]:
     repo_root = repo_root.resolve()
-    example_root = (repo_root / EXAMPLE_ROOT_REL).resolve()
-    seed_root = (repo_root / SEED_ROOT_REL).resolve()
-    runtime_root = (repo_root / RUNTIME_ROOT_REL).resolve()
+    selected_root_rel = resolve_public_example_root_rel(
+        project_id=project_id,
+        example_root_rel=example_root_rel,
+    )
+    example_root = (repo_root / selected_root_rel).resolve()
+    seed_root = (example_root / "seed").resolve()
+    runtime_root = (example_root / ".runtime" / "demo").resolve()
     runtime_sessions = runtime_root / ".sessions"
     runtime_runs = runtime_root / ".runs"
+    return {
+        "repo_root": repo_root,
+        "selected_root_rel": selected_root_rel,
+        "example_root": example_root,
+        "seed_root": seed_root,
+        "runtime_root": runtime_root,
+        "runtime_sessions": runtime_sessions,
+        "runtime_runs": runtime_runs,
+    }
+
+
+def bootstrap_public_example(
+    repo_root: Path,
+    *,
+    project_id: str | None = None,
+    example_root_rel: str | Path | None = None,
+) -> dict[str, Any]:
+    paths = resolve_public_example_paths(
+        repo_root,
+        project_id=project_id,
+        example_root_rel=example_root_rel,
+    )
+    repo_root = paths["repo_root"]
+    selected_root_rel = paths["selected_root_rel"]
+    example_root = paths["example_root"]
+    seed_root = paths["seed_root"]
+    runtime_root = paths["runtime_root"]
+    runtime_sessions = paths["runtime_sessions"]
+    runtime_runs = paths["runtime_runs"]
 
     inventory_path = seed_root / "seed-inventory.json"
     inventory = _load_json(inventory_path)
@@ -92,7 +147,7 @@ def bootstrap_public_example(repo_root: Path) -> dict[str, Any]:
         raise ValueError("seed files must contain list fields")
 
     created_dirs: list[str] = []
-    for rel in (EXAMPLE_ROOT_REL, runtime_root.relative_to(repo_root), runtime_sessions.relative_to(repo_root), runtime_runs.relative_to(repo_root)):
+    for rel in (selected_root_rel, runtime_root.relative_to(repo_root), runtime_sessions.relative_to(repo_root), runtime_runs.relative_to(repo_root)):
         path = repo_root / rel
         if not path.exists():
             path.mkdir(parents=True, exist_ok=True)
@@ -178,9 +233,12 @@ def bootstrap_public_example(repo_root: Path) -> dict[str, Any]:
             "tasks": created_tasks,
         },
         "next_steps": [
+            "python3 scripts/start_standard_project.py",
+            "把 docs/public/ai-bootstrap.md 提供给你的 AI，并要求它按 standard_project 的默认启动批次推进",
             "python3 build_project_task_dashboard.py",
-            "python3 server.py --port 18770",
-            "打开 /__health 与项目页面确认最小示例项目可见",
+            "python3 server.py --port 18770 --static-root dist",
+            "python3 scripts/activate_public_example_agents.py --project-id standard_project --base-url http://127.0.0.1:18770",
+            "打开 /__health 与项目页面确认 standard_project 可见",
         ],
     }
 

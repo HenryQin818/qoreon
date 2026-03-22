@@ -1,0 +1,90 @@
+{
+  "schema_version": "1.0",
+  "public_safe": true,
+  "tasks": [
+    {
+      "code": "20260321-standard-master",
+      "channel_name": "主体-总控",
+      "status": "进行中",
+      "title": "完整标准项目落位与治理辅助接入",
+      "path": "examples/standard-project/tasks/主体-总控/任务/【进行中】【任务】20260321-完整标准项目落位与治理辅助接入.md"
+    },
+    {
+      "code": "20260321-standard-structure",
+      "channel_name": "辅助01-结构治理与项目接入",
+      "status": "待开始",
+      "title": "结构治理与通讯录基线整编",
+      "path": "examples/standard-project/tasks/辅助01-结构治理与项目接入/任务/【待开始】【任务】20260321-结构治理与通讯录基线整编.md"
+    },
+    {
+      "code": "20260321-standard-runtime",
+      "channel_name": "子级01-运行时与后端",
+      "status": "待开始",
+      "title": "标准项目运行时与Bootstrap支撑校准",
+      "path": "examples/standard-project/tasks/子级01-运行时与后端/任务/【待开始】【任务】20260321-标准项目运行时与Bootstrap支撑校准.md"
+    },
+    {
+      "code": "20260321-standard-frontend",
+      "channel_name": "子级02-前端与交互",
+      "status": "待开始",
+      "title": "标准项目页面入口与项目可见性校准",
+      "path": "examples/standard-project/tasks/子级02-前端与交互/任务/【待开始】【任务】20260321-标准项目页面入口与项目可见性校准.md"
+    },
+    {
+      "code": "20260321-standard-data",
+      "channel_name": "子级03-数据与契约",
+      "status": "待开始",
+      "title": "标准项目Seed与契约字段校验",
+      "path": "examples/standard-project/tasks/子级03-数据与契约/任务/【待开始】【任务】20260321-标准项目Seed与契约字段校验.md"
+    },
+    {
+      "code": "20260321-standard-test",
+      "channel_name": "子级04-测试与验收",
+      "status": "待开始",
+      "title": "标准项目Bootstrap与健康验收",
+      "path": "examples/standard-project/tasks/子级04-测试与验收/任务/【待开始】【任务】20260321-标准项目Bootstrap与健康验收.md"
+    },
+    {
+      "code": "20260321-standard-docs",
+      "channel_name": "辅助02-文档与知识沉淀",
+      "status": "待开始",
+      "title": "标准项目说明与知识索引整理",
+      "path": "examples/standard-project/tasks/辅助02-文档与知识沉淀/任务/【待开始】【任务】20260321-标准项目说明与知识索引整理.md"
+    },
+    {
+      "code": "20260321-standard-user",
+      "channel_name": "辅助03-用户镜像与业务判断",
+      "status": "待开始",
+      "title": "标准项目业务判断与推荐结构说明",
+      "path": "examples/standard-project/tasks/辅助03-用户镜像与业务判断/任务/【待开始】【任务】20260321-标准项目业务判断与推荐结构说明.md"
+    },
+    {
+      "code": "20260321-standard-git",
+      "channel_name": "辅助04-Git桥接与发布同步",
+      "status": "待开始",
+      "title": "标准项目同步边界与只读预检",
+      "path": "examples/standard-project/tasks/辅助04-Git桥接与发布同步/任务/【待开始】【任务】20260321-标准项目同步边界与只读预检.md"
+    },
+    {
+      "code": "20260321-standard-skills",
+      "channel_name": "辅助05-团队协作Skills治理",
+      "status": "待开始",
+      "title": "Skills治理规范与培训基线接入",
+      "path": "examples/standard-project/tasks/辅助05-团队协作Skills治理/任务/【待开始】【任务】20260321-Skills治理规范与培训基线接入.md"
+    },
+    {
+      "code": "20260321-standard-ops",
+      "channel_name": "辅助06-项目运维",
+      "status": "待开始",
+      "title": "会话健康巡检与轮换修复基线接入",
+      "path": "examples/standard-project/tasks/辅助06-项目运维/任务/【待开始】【任务】20260321-会话健康巡检与轮换修复基线接入.md"
+    },
+    {
+      "code": "20260321-standard-system",
+      "channel_name": "系统01-信息梳理",
+      "status": "待开始",
+      "title": "任务文件健康检查与知识盘点基线接入",
+      "path": "examples/standard-project/tasks/系统01-信息梳理/任务/【待开始】【任务】20260321-任务文件健康检查与知识盘点基线接入.md"
+    }
+  ]
+}

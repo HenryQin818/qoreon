@@ -1,0 +1,454 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>一版给外部试用的版本，是怎么在三个项目里做出来的：Qoreon 跨项目协作现场</title>
+  <style>
+    :root {
+      --bg: #f5efe6;
+      --panel: rgba(255, 251, 245, 0.94);
+      --panel-2: rgba(255, 255, 255, 0.76);
+      --ink: #1f2a28;
+      --muted: #63726c;
+      --line: rgba(33, 49, 44, 0.12);
+      --accent: #aa5a33;
+      --accent-2: #214d46;
+      --gold: #d0a35f;
+      --shadow: 0 24px 60px rgba(48, 35, 23, 0.12);
+      --radius-xl: 28px;
+      --radius-lg: 20px;
+      --radius-md: 16px;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      font-family: "Avenir Next", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      line-height: 1.76;
+      background:
+        radial-gradient(circle at 0% 0%, rgba(208,163,95,0.18), transparent 22%),
+        radial-gradient(circle at 100% 6%, rgba(170,90,51,0.14), transparent 24%),
+        linear-gradient(180deg, #f8f4ed 0%, #f1e8dc 44%, #ebe0d2 100%);
+    }
+    .page { width: min(1280px, calc(100% - 32px)); margin: 0 auto; padding: 28px 0 60px; }
+    .hero, .layout, .closing { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-xl); box-shadow: var(--shadow); backdrop-filter: blur(10px); }
+    .hero { padding: 34px; position: relative; overflow: hidden; }
+    .hero::after {
+      content: "";
+      position: absolute;
+      right: -86px;
+      top: -50px;
+      width: 260px;
+      height: 260px;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(33,77,70,0.18), transparent 68%);
+      pointer-events: none;
+    }
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 14px;
+      border-radius: 999px;
+      background: rgba(33,77,70,0.08);
+      color: var(--accent-2);
+      font-size: 13px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+    h1, h2, h3, h4 { margin: 0; font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", "Songti SC", serif; line-height: 1.14; }
+    h1 { margin-top: 18px; font-size: clamp(34px, 5.4vw, 62px); max-width: 13em; }
+    h2 { font-size: 34px; }
+    h3 { font-size: 26px; }
+    p { margin: 0; }
+    .lead { margin-top: 16px; max-width: 54em; font-size: 18px; color: #35433e; }
+    .hero-grid {
+      margin-top: 24px;
+      display: grid;
+      grid-template-columns: 1.1fr 0.9fr;
+      gap: 18px;
+      position: relative;
+      z-index: 1;
+    }
+    .hero-main, .hero-side-card, .project-card, .term-card, .scene, .feature-card, .closing-card, .meta-card {
+      border: 1px solid var(--line);
+      border-radius: var(--radius-lg);
+      background: var(--panel-2);
+    }
+    .hero-main { padding: 22px; background: linear-gradient(180deg, rgba(255,255,255,0.84), rgba(249,243,234,0.94)); }
+    .hero-main strong { display: block; color: var(--accent-2); margin-bottom: 8px; font-size: 16px; }
+    .hero-main p { color: var(--muted); }
+    .hero-side { display: grid; gap: 14px; }
+    .hero-side-card { padding: 18px; }
+    .hero-side-card strong { display: block; font-size: 24px; color: var(--accent-2); margin-bottom: 6px; }
+    .layout { margin-top: 22px; padding: 22px; display: grid; grid-template-columns: 280px 1fr; gap: 22px; }
+    .toc {
+      position: sticky;
+      top: 18px;
+      align-self: start;
+      padding: 20px;
+      border-radius: 22px;
+      background: linear-gradient(180deg, rgba(255,255,255,0.84), rgba(248,241,231,0.92));
+      border: 1px solid var(--line);
+    }
+    .toc h3 { font-size: 24px; margin-bottom: 12px; }
+    .toc p { margin: 0 0 14px; font-size: 14px; color: var(--muted); }
+    .toc a {
+      display: block;
+      padding: 10px 12px;
+      margin-bottom: 8px;
+      border-radius: 14px;
+      text-decoration: none;
+      color: var(--ink);
+      background: rgba(255,255,255,0.58);
+      border: 1px solid transparent;
+      transition: transform 160ms ease, border-color 160ms ease, background 160ms ease;
+    }
+    .toc a:hover { transform: translateX(4px); border-color: rgba(33,77,70,0.16); background: rgba(255,255,255,0.88); }
+    .toc .hint { margin-top: 16px; padding-top: 14px; border-top: 1px dashed var(--line); font-size: 13px; color: var(--muted); }
+    .content { display: grid; gap: 18px; }
+    .section { padding: 24px; border-radius: var(--radius-xl); border: 1px solid var(--line); background: rgba(255,251,245,0.92); box-shadow: var(--shadow); }
+    .section-head { display: flex; justify-content: space-between; gap: 16px; align-items: end; margin-bottom: 18px; }
+    .section-head p { margin-top: 8px; color: var(--muted); max-width: 48em; }
+    .kicker { color: var(--accent); font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; font-weight: 700; }
+    .project-grid, .term-grid, .meta-grid { display: grid; gap: 14px; }
+    .project-grid { grid-template-columns: repeat(3, 1fr); }
+    .term-grid { grid-template-columns: repeat(3, 1fr); }
+    .meta-grid { grid-template-columns: repeat(5, 1fr); }
+    .project-card, .term-card, .meta-card { padding: 18px; }
+    .project-card h3, .term-card h3, .meta-card h3 { font-size: 22px; margin-bottom: 10px; }
+    .project-card p, .term-card p, .meta-card p { color: #35423d; }
+    .badge { display: inline-flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 999px; font-size: 12px; background: rgba(33,77,70,0.09); color: var(--accent-2); margin-bottom: 10px; }
+    .scene-stack { display: grid; gap: 16px; }
+    .scene {
+      padding: 18px;
+      display: grid;
+      grid-template-columns: 1.14fr 0.86fr;
+      gap: 18px;
+      background: linear-gradient(180deg, rgba(255,255,255,0.82), rgba(249,244,236,0.92));
+    }
+    .scene-story { padding: 6px 2px 6px 4px; }
+    .scene-story .scene-no {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 42px;
+      height: 42px;
+      border-radius: 14px;
+      background: rgba(33,77,70,0.10);
+      color: var(--accent-2);
+      font-weight: 700;
+      margin-bottom: 12px;
+    }
+    .scene-story h3 { margin-bottom: 12px; }
+    .scene-story p + p { margin-top: 12px; }
+    .scene-story p { color: #31403b; }
+    .scene-side { display: grid; gap: 14px; }
+    .feature-card { padding: 16px; background: rgba(255,255,255,0.76); }
+    .feature-card h4 { font-size: 20px; margin-bottom: 10px; }
+    .feature-card ul { margin: 0; padding-left: 1.15em; }
+    .feature-card li { margin: 6px 0; color: #33413c; }
+    .figure { overflow: hidden; }
+    .figure img { display: block; width: 100%; border-radius: 14px; border: 1px solid var(--line); }
+    .figure p { margin-top: 10px; font-size: 14px; color: var(--muted); }
+    .quote-strip {
+      margin-top: 14px;
+      padding: 14px 16px;
+      border-radius: 18px;
+      background: rgba(170,90,51,0.06);
+      border: 1px solid rgba(170,90,51,0.12);
+      color: #543b31;
+    }
+    .guide-grid { display: grid; gap: 14px; grid-template-columns: repeat(5, 1fr); }
+    .guide-card { padding: 16px; border-radius: 18px; border: 1px solid var(--line); background: rgba(255,255,255,0.76); }
+    .guide-card strong { display: block; color: var(--accent-2); margin-bottom: 8px; }
+    .closing { margin-top: 22px; padding: 24px; display: grid; grid-template-columns: 1.05fr 0.95fr; gap: 18px; }
+    .closing-card { padding: 20px; }
+    .closing-card h3 { margin-bottom: 10px; }
+    .closing-card p { color: #33413c; }
+    .closing-card ul { margin: 12px 0 0; padding-left: 1.15em; }
+    .closing-card li { margin: 6px 0; }
+    .muted { color: var(--muted); }
+    .tiny { font-size: 13px; }
+    @media (max-width: 1020px) {
+      .hero-grid, .layout, .scene, .closing, .project-grid, .term-grid, .meta-grid, .guide-grid { grid-template-columns: 1fr; }
+      .toc { position: static; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <section class="hero">
+      <div class="eyebrow">Qoreon / 跨项目协作 / 一个真实场景</div>
+      <h1>一版给外部试用的版本，是怎么在三个项目里做出来的</h1>
+      <p class="lead">这页直接讲一件最近真实发生过的事：内部主工程还在继续开发，另一个项目开始整理对外版本，最后再把结果交到对外仓库。左边是事情怎么一步步推进的，右边是每一步在系统里具体用了什么功能。</p>
+      <div class="hero-grid">
+        <div class="hero-main">
+          <strong>这件事到底在做什么</strong>
+          <p>简单说，就是把内部还在变化的工程内容，整理成一版能发给外部试用的版本。难点不在“发出去”，而在于别让入口变乱、别让任务分散、别让最后的结果收不回来。</p>
+          <div class="quote-strip">这页不讲抽象概念，只讲一个完整场景：谁先接任务，谁去补文档，谁做测试，结果最后怎么重新收回来。</div>
+        </div>
+        <div class="hero-side">
+          <div class="hero-side-card">
+            <strong>这里有三个地方</strong>
+            <p>一个地方继续开发，一个地方负责整理对外版本，最后一个地方负责把结果交给外部人。它们不是三个重复目录，而是三段不同职责的工作现场。</p>
+          </div>
+          <div class="hero-side-card">
+            <strong>这件事最容易乱的地方</strong>
+            <p>大家可能会在不同地方同时推进，但最后如果说不清这件事该在哪儿收口、结果该回给谁，协作就会变成表面热闹。</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="layout">
+      <aside class="toc">
+        <h3>阅读顺序</h3>
+        <p>先看背景，再顺着五幕故事往下读。每一幕右边都有“这一幕在系统里怎么做”。</p>
+        <a href="#background">01. 背景与角色</a>
+        <a href="#scene-1">02. 第一幕：先把入口收成一个</a>
+        <a href="#scene-2">03. 第二幕：先固定这一版要对外发的内容</a>
+        <a href="#scene-3">04. 第三幕：几条线同时开工</a>
+        <a href="#scene-4">05. 第四幕：让陌生人也能走通</a>
+        <a href="#scene-5">06. 第五幕：结果重新收回来</a>
+        <a href="#takeaway">07. 这个故事到底说明了什么</a>
+        <div class="hint">如果你是第一次看 Qoreon，重点抓住这三件事：一个平台里可以有多个项目、每个项目里可以有多个 Agent、跨项目协作必须有明确回执和收口点。</div>
+      </aside>
+
+      <div class="content">
+        <section class="section" id="background">
+          <div class="section-head">
+            <div>
+              <div class="kicker">故事背景</div>
+              <h2>这件事里，谁在什么位置</h2>
+              <p>不是所有人都在同一个项目里说话。先把这三个地方和几个关键角色讲清楚，后面故事才不会看乱。</p>
+            </div>
+          </div>
+
+          <div class="project-grid">
+            <article class="project-card">
+              <div class="badge">项目 01</div>
+              <h3>内部主工程</h3>
+              <p>这里是真正每天还在继续开发、修问题、改页面的地方。所有共享能力先在这里演进，不直接拿“当前目录”对外发。</p>
+            </article>
+            <article class="project-card">
+              <div class="badge">项目 02</div>
+              <h3>开源执行项目</h3>
+              <p>这是台前的工作台。对外版本这条线的任务、消息、回执和最终收口，都应该回到这里，而不是分散在多个地方。</p>
+            </article>
+            <article class="project-card">
+              <div class="badge">项目 03</div>
+              <h3>对外仓库</h3>
+              <p>这是外部人最后看到的版本。它不是研发现场，也不承接所有内部历史，只接收整理过、验收过的对外版本结果。</p>
+            </article>
+          </div>
+
+          <div class="term-grid" style="margin-top:14px;">
+            <article class="term-card">
+              <div class="badge">角色</div>
+              <h3>总控</h3>
+              <p>负责看整轮协作是否能继续往前走，最后能不能收口，不替代所有执行工作。</p>
+            </article>
+            <article class="term-card">
+              <div class="badge">角色</div>
+              <h3>仓库同步 / 桥接位</h3>
+              <p>负责把内部主工程里的变化有边界地交给开源执行项目，保证消息和结果都能回到正确的人那里。</p>
+            </article>
+            <article class="term-card">
+              <div class="badge">角色</div>
+              <h3>导出 / 文档 / 测试</h3>
+              <p>分别负责公开边界、外部说明、最小启动链与放行前检查。它们不是重复劳动，而是三段不同的接力。</p>
+            </article>
+          </div>
+
+          <div class="meta-grid" style="margin-top:14px;">
+            <article class="meta-card"><h3>多项目</h3><p>同平台可并行承载多个项目。</p></article>
+            <article class="meta-card"><h3>多通道</h3><p>每个项目里能按职责继续拆分。</p></article>
+            <article class="meta-card"><h3>多 Agent</h3><p>每条线都能有自己的执行者。</p></article>
+            <article class="meta-card"><h3>消息协作</h3><p>Agent 之间可直接互发消息。</p></article>
+            <article class="meta-card"><h3>结果回执</h3><p>结果会重新回到发起方。</p></article>
+          </div>
+        </section>
+
+        <section class="section">
+          <div class="section-head">
+            <div>
+              <div class="kicker">主故事</div>
+              <h2>这一轮跨项目协作，是怎么真的跑起来的</h2>
+              <p>下面五幕是同一个故事，不是五个案例。右侧卡片会把这一幕在系统里对应的功能点和动作翻译出来。</p>
+            </div>
+          </div>
+
+          <div class="scene-stack">
+            <article class="scene" id="scene-1">
+              <div class="scene-story">
+                <div class="scene-no">01</div>
+                <h3>先把入口收成一个</h3>
+                <p>这次事情一开始暴露的问题，其实很日常：大家一度不知道该在哪个项目里继续干活。和对外版本有关的事，原先分散在台前工作台和后台筹备区两个地方。短期看起来都能用，但一旦人多起来，谁接任务、谁收口、结果到底算在哪儿，就开始变得含糊。</p>
+                <p>团队先做的不是导仓，也不是补说明，而是先把入口收成一个。台前只留一个真正承担日常推进的开源执行项目；后台那边退回去，只保留宿主、留痕和迁移支持职责，不再继续承担日常派发。从那一刻开始，大家终于不用再反复确认“这件事到底该在哪儿说”。</p>
+              </div>
+              <div class="scene-side">
+                <div class="feature-card figure">
+                  <h4>这一幕的真实界面</h4>
+                  <img src="assets/cross-project-collab/open-source-sync-board-live.png" alt="Qoreon 开源同步与协作排程页面截图" />
+                  <p>这张看板不是装饰图，它正好对应这次协作里“入口、阶段、责任归属”被重新收清楚后的状态。</p>
+                </div>
+                <div class="feature-card">
+                  <h4>这一幕，在系统里怎么做</h4>
+                  <ul>
+                    <li>先在平台里把“内部主工程”和“开源执行项目”分开，不让它们混在一个项目里说话。</li>
+                    <li>再给开源执行项目保留唯一可见的总控入口，让任务、消息和验收都往同一个地方回。</li>
+                    <li>后台项目保留留痕与筹备材料，但不再继续承担日常派发。</li>
+                  </ul>
+                </div>
+              </div>
+            </article>
+
+            <article class="scene" id="scene-2">
+              <div class="scene-story">
+              <div class="scene-no">02</div>
+              <h3>先把这一版要对外发的内容固定下来</h3>
+              <p>入口收清楚之后，第二个问题也很快摆到桌面上：内部主工程还在继续变化。有人在修页面，有人在补脚本，还有人继续压结构。如果这时候直接把当前工作目录拿出去，外部看到的就不是一个整理过的版本，而是一片仍在施工的现场。</p>
+              <p>于是负责仓库同步的那位 Agent 很快把规则卡死：不能直接拿当前工作树外发，必须先固定这一版要对外发的内容。这个动作把“哪个目录看起来比较新”变成了“这一版到底包含什么、后面所有整理都围着谁来做”。</p>
+              </div>
+              <div class="scene-side">
+                <div class="feature-card">
+                  <h4>这一步用到的功能点</h4>
+                  <ul>
+                    <li>跨项目桥接：把内部主工程的进展有边界地交给开源执行项目。</li>
+                    <li>任务主线：先用任务明确“这一版对外版本要包含什么范围”。</li>
+                    <li>产出物留痕：固定下来的范围、导出结论、白名单规则都能被回看。</li>
+                  </ul>
+                </div>
+                <div class="feature-card">
+                  <h4>观众可以怎么理解</h4>
+                  <ul>
+                    <li>内部主工程 = 每天都在动的研发现场。</li>
+                    <li>固定范围 = 先把这一版到底发什么讲清楚。</li>
+                    <li>对外仓库 = 最后给别人看的地方，不是施工现场本身。</li>
+                  </ul>
+                </div>
+              </div>
+            </article>
+
+            <article class="scene" id="scene-3">
+              <div class="scene-story">
+                <div class="scene-no">03</div>
+                <h3>几条线同时开工，但没有人需要盯住全部细节</h3>
+                <p>等这一版要对外发的范围固定下来以后，开源执行项目里很快分成了几条并行线：一条盯公开边界，一条盯文档和示例，一条盯测试和最小启动链。每个人干的都不是“大而全”的工作，而是一段非常具体的工作。</p>
+                <p>这时候多 Agent 协作的价值就出来了。真正需要补信息时，不是等人来回传话，而是 Agent 之间直接发消息、带回执要求去推进。于是每条线都知道自己的输入是什么、输出要交给谁，忙，但是不乱。</p>
+              </div>
+              <div class="scene-side">
+                <div class="feature-card figure">
+                  <h4>过程里，消息怎么串起来</h4>
+                  <img src="assets/worklog-20260320/message-list-hub.png" alt="消息列表与协作界面示意" />
+                  <p>这类界面负责承接“谁去找谁、这条消息要不要回执、结果最后回给谁”。不是所有沟通都要人手工来回转述。</p>
+                </div>
+                <div class="feature-card">
+                  <h4>这一幕，在系统里怎么做</h4>
+                  <ul>
+                    <li>一个项目里拆成多个通道，让导出、文档、测试能并行推进。</li>
+                    <li>每个通道里挂自己的 Agent，任务下到具体执行位，不堆在总控身上。</li>
+                    <li>遇到信息缺口时，Agent 之间直接互发消息协作，而不是重新开一轮大讨论。</li>
+                  </ul>
+                </div>
+              </div>
+            </article>
+
+            <article class="scene" id="scene-4">
+              <div class="scene-story">
+                <div class="scene-no">04</div>
+                <h3>真正的检验，不是内部觉得差不多</h3>
+                <p>做到这里，最容易出现一种错觉：页面已经有了，说明也补了，示例项目看上去也能用了，好像这件事已经差不多了。但团队很清楚，内部人看着顺手，不等于外部第一次拿到时也能走通。</p>
+                <p>所以测试与验收那条线在这里特别关键。它关心的不是“像不像完成了”，而是最现实的几个问题：初始化路径能不能跑通、最小示例能不能用、一条基本协作链能不能走完、失败时别人能不能知道卡在哪里。到这一步，这件事才从“内部已经理解的成果”，变成“外部也能接住的产品”。</p>
+              </div>
+              <div class="scene-side">
+                <div class="feature-card">
+                  <h4>这一幕的功能点</h4>
+                  <ul>
+                    <li>测试 / 验收 Agent：不是顺手看一眼，而是明确负责放行前检查。</li>
+                    <li>运行结果回看：做了什么、跑到哪一步、失败在哪，都能回顾。</li>
+                    <li>最小主链验证：不只看页面，连消息、运行、回看也要能串起来。</li>
+                  </ul>
+                </div>
+                <div class="feature-card">
+                  <h4>为什么这一步重要</h4>
+                  <ul>
+                    <li>它把“内部觉得差不多”变成“外部真的能用”。</li>
+                    <li>它会逼团队面对真正的卡点：不是缺一句口号，而是缺一条能走通的路径。</li>
+                  </ul>
+                </div>
+              </div>
+            </article>
+
+            <article class="scene" id="scene-5">
+              <div class="scene-story">
+                <div class="scene-no">05</div>
+                <h3>协作成立，不是因为都做了事，而是因为结果回到了同一个地方</h3>
+                <p>最后真正让这轮协作成立的，不是每条线都交了一点东西，而是这些结果重新回到了一个统一的地方。有人交回导出和脱敏结论，有人交回文档和示例状态，有人交回测试结果，最后由开源执行项目里的总控来判断：这一版对外版本能不能成立，还差哪一块，下一步该谁继续动。</p>
+                <p>这也是这次故事最想说明的一点：多项目协作不是“多开几个项目、多放几个 Agent”就自动成立。它成立的前提是，入口清楚，边界清楚，结果回得来。</p>
+              </div>
+              <div class="scene-side">
+                <div class="feature-card figure">
+                  <h4>结果回来的样子</h4>
+                  <img src="assets/worklog-20260320/receipt-demo.png" alt="回执原型示意" />
+                  <p>这类回执让结果不是散落在多个对话里，而是能重新汇回发起方，形成真正可以继续消费的结论。</p>
+                </div>
+                <div class="feature-card">
+                  <h4>这一幕，在系统里怎么做</h4>
+                  <ul>
+                    <li>消息带回执要求，明确结果最后要回给谁。</li>
+                    <li>各通道交回的不是一句“已处理”，而是结构化结论、阻塞和下一步。</li>
+                    <li>总控根据回来的结果做收口，而不是再去翻每条消息自己拼现场。</li>
+                  </ul>
+                </div>
+              </div>
+            </article>
+          </div>
+        </section>
+
+        <section class="section" id="takeaway">
+          <div class="section-head">
+            <div>
+              <div class="kicker">看完这页，观众最该带走什么</div>
+              <h2>这个故事说明的，不只是“能协作”</h2>
+              <p>它真正让人看到的是：Qoreon 不是让多个 Agent 同时说话，而是让多个项目、多条线、多段结果最后还能重新被组织起来。</p>
+            </div>
+          </div>
+
+          <div class="guide-grid">
+            <article class="guide-card"><strong>1. 一个平台里可以有多个项目</strong><span>比如内部主工程、开源执行项目、公开仓配套工作区，它们不是复制品，而是不同职责的现场。</span></article>
+            <article class="guide-card"><strong>2. 每个项目里可以有很多 Agent</strong><span>总控、导出、文档、测试都可以各守自己那一段，不必所有事都压在一个人身上。</span></article>
+            <article class="guide-card"><strong>3. Agent 可以直接协作</strong><span>消息可以直接发给另一个 Agent，并且要求它带结果回执，不需要全靠人工传话。</span></article>
+            <article class="guide-card"><strong>4. 任务、消息、产出物各管一层事</strong><span>任务承接主线，消息推进过程，产出物留下证据，三者不是一回事。</span></article>
+            <article class="guide-card"><strong>5. 跨项目协作的关键是边界和回收</strong><span>不是把内容到处复制，而是知道什么从哪来、交给谁、最后回到哪里。</span></article>
+          </div>
+        </section>
+      </div>
+    </section>
+
+    <section class="closing">
+      <article class="closing-card">
+        <h3>如果你想在自己的项目里复刻这一套</h3>
+        <ul>
+          <li>先分清楚：哪些是日常研发现场，哪些是对外整理工作台，哪些是最终给外部看的版本。</li>
+          <li>再分清楚：哪些 Agent 负责总控，哪些负责导出、文档、测试、桥接。</li>
+          <li>过程里优先用消息推进，结果一定要能回收，不要把收口建立在“人脑记得住”上。</li>
+        </ul>
+      </article>
+      <article class="closing-card">
+        <h3>这页采用的真实材料</h3>
+        <p class="muted">写作依据来自最近这轮真实的开源同步与执行材料，包括同步看板、开源管理沉淀、桥接职责和公开仓初始化口径。</p>
+        <ul class="tiny">
+          <li><code>docs/status-report/open-source-sync-board.json</code></li>
+          <li><code>docs/status-report/open-source-sync-board.json</code></li>
+          <li><code>docs/public/release-draft-v1-candidate.md</code></li>
+          <li><code>examples/standard-project/tasks/主体-总控/产出物/沉淀/03-标准项目通讯录与分工表.md</code></li>
+        </ul>
+      </article>
+    </section>
+  </div>
+</body>
+</html>

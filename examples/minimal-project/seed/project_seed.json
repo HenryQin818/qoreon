@@ -4,10 +4,37 @@
   "project": {
     "id": "minimal_project",
     "name": "Minimal Project",
-    "description": "公开版内置示例项目，用于完成一轮最小协作闭环。",
+    "description": "公开版内置推荐示例项目，用于完成一轮最小协作闭环，并展示 2+4+X 的推荐项目结构。",
     "project_root_rel": "examples/minimal-project",
     "task_root_rel": "examples/minimal-project/tasks",
     "runtime_root_rel": "examples/minimal-project/.runtime/demo"
+  },
+  "recommended_structure": {
+    "model": "2+4+X",
+    "central_roles": [
+      "主体-总控",
+      "辅助01-架构与结构治理"
+    ],
+    "core_execution_channels": [
+      "子级01-运行时与后端",
+      "子级02-前端与交互",
+      "子级03-数据与契约",
+      "子级04-测试与验收"
+    ],
+    "support_channels": [
+      "辅助02-文档与知识沉淀",
+      "辅助03-用户镜像与业务判断",
+      "辅助04-Git桥接与发布同步"
+    ],
+    "default_active_channels": [
+      "主体-总控",
+      "辅助01-架构与结构治理",
+      "子级01-运行时与后端",
+      "子级02-前端与交互",
+      "子级03-数据与契约",
+      "子级04-测试与验收"
+    ],
+    "reference_doc": "docs/onboarding/project-worksplit-playbook.md"
   },
   "execution_defaults": {
     "default_enabled": true,

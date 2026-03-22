@@ -1,0 +1,936 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>基础项目开发如何做分工：Qoreon 通道分工方法</title>
+  <style>
+    :root {
+      --bg: #f6f0e7;
+      --panel: rgba(255, 251, 245, 0.92);
+      --ink: #1f2d29;
+      --muted: #64716b;
+      --line: rgba(40, 55, 49, 0.12);
+      --accent: #ac5a33;
+      --accent-2: #214d46;
+      --gold: #cf9d55;
+      --slate: #42545a;
+      --shadow: 0 24px 60px rgba(48, 35, 23, 0.11);
+      --radius-xl: 28px;
+      --radius-lg: 20px;
+      --radius-md: 16px;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      font-family: "Avenir Next", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      line-height: 1.72;
+      background:
+        radial-gradient(circle at 0% 0%, rgba(207,157,85,0.18), transparent 24%),
+        radial-gradient(circle at 100% 10%, rgba(172,90,51,0.14), transparent 22%),
+        linear-gradient(180deg, #f8f3eb 0%, #f2ebe0 44%, #ece2d5 100%);
+    }
+    .page {
+      width: min(1260px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 30px 0 56px;
+    }
+    .hero, .layout, .section, .closing {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius-xl);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(10px);
+    }
+    .hero {
+      padding: 34px;
+      position: relative;
+      overflow: hidden;
+    }
+    .hero::after {
+      content: "";
+      position: absolute;
+      right: -90px;
+      top: -50px;
+      width: 260px;
+      height: 260px;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(33,77,70,0.18), transparent 70%);
+      pointer-events: none;
+    }
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 14px;
+      border-radius: 999px;
+      background: rgba(33,77,70,0.08);
+      color: var(--accent-2);
+      font-size: 13px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+    h1, h2, h3, h4 {
+      margin: 0;
+      font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", "Songti SC", serif;
+      line-height: 1.14;
+    }
+    h1 { margin-top: 18px; font-size: clamp(34px, 5.3vw, 62px); max-width: 12em; }
+    .lead {
+      margin: 16px 0 0;
+      max-width: 52em;
+      font-size: 18px;
+      color: #34403b;
+    }
+    .hero-grid {
+      margin-top: 24px;
+      display: grid;
+      grid-template-columns: 1.16fr 0.84fr;
+      gap: 18px;
+      position: relative;
+      z-index: 1;
+    }
+    .hero-main,
+    .hero-side-card,
+    .card,
+    .layer-card,
+    .duty-card,
+    .decision-card,
+    .map-card,
+    .bad-card,
+    .flow-card,
+    .summary-card {
+      border: 1px solid var(--line);
+      border-radius: var(--radius-lg);
+      background: rgba(255,255,255,0.72);
+    }
+    .hero-main {
+      padding: 20px;
+      background: linear-gradient(180deg, rgba(255,255,255,0.82), rgba(249,243,234,0.92));
+    }
+    .hero-main strong {
+      display: block;
+      color: var(--accent-2);
+      font-size: 16px;
+      margin-bottom: 6px;
+    }
+    .hero-main p { margin: 0; color: var(--muted); }
+    .hero-side { display: grid; gap: 14px; }
+    .hero-side-card { padding: 18px; }
+    .hero-side-card strong {
+      display: block;
+      font-size: 24px;
+      color: var(--accent-2);
+      margin-bottom: 6px;
+    }
+    .layout {
+      margin-top: 22px;
+      padding: 22px;
+      display: grid;
+      grid-template-columns: 280px 1fr;
+      gap: 22px;
+    }
+    .toc {
+      position: sticky;
+      top: 18px;
+      align-self: start;
+      padding: 20px;
+      border-radius: 22px;
+      background: linear-gradient(180deg, rgba(255,255,255,0.84), rgba(248,241,231,0.92));
+      border: 1px solid var(--line);
+    }
+    .toc h3 { font-size: 24px; margin-bottom: 12px; }
+    .toc p { margin: 0 0 14px; font-size: 14px; color: var(--muted); }
+    .toc a {
+      display: block;
+      padding: 10px 12px;
+      margin-bottom: 8px;
+      border-radius: 14px;
+      text-decoration: none;
+      color: var(--ink);
+      background: rgba(255,255,255,0.55);
+      border: 1px solid transparent;
+      transition: transform 160ms ease, border-color 160ms ease, background 160ms ease;
+    }
+    .toc a:hover {
+      transform: translateX(4px);
+      border-color: rgba(33,77,70,0.16);
+      background: rgba(255,255,255,0.86);
+    }
+    .toc .hint {
+      margin-top: 16px;
+      padding-top: 14px;
+      border-top: 1px dashed var(--line);
+      font-size: 13px;
+      color: var(--muted);
+    }
+    .content { display: grid; gap: 18px; }
+    .section { padding: 24px; }
+    .section-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: end;
+      margin-bottom: 18px;
+    }
+    .section-head p { margin: 8px 0 0; color: var(--muted); max-width: 50em; }
+    .kicker {
+      color: var(--accent);
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      font-weight: 700;
+    }
+    .pain-grid,
+    .layers,
+    .decision-grid,
+    .map-grid,
+    .bad-grid,
+    .summary-grid {
+      display: grid;
+      gap: 14px;
+    }
+    .pain-grid { grid-template-columns: repeat(3, 1fr); }
+    .layers { grid-template-columns: 0.8fr 1.05fr 1.15fr; }
+    .decision-grid { grid-template-columns: repeat(3, 1fr); }
+    .map-grid { grid-template-columns: repeat(2, 1fr); }
+    .bad-grid { grid-template-columns: repeat(3, 1fr); }
+    .summary-grid { grid-template-columns: repeat(3, 1fr); }
+    .card, .layer-card, .duty-card, .decision-card, .map-card, .bad-card, .flow-card, .summary-card { padding: 18px; }
+    .card h3, .layer-card h3, .duty-card h3, .decision-card h3, .map-card h3, .bad-card h3, .flow-card h3, .summary-card h3 { font-size: 24px; margin-bottom: 10px; }
+    .card p, .layer-card p, .duty-card p, .decision-card p, .map-card p, .bad-card p, .flow-card p, .summary-card p { margin: 0; color: #33413c; }
+    .num {
+      width: 40px;
+      height: 40px;
+      border-radius: 12px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      background: rgba(33,77,70,0.10);
+      color: var(--accent-2);
+      margin-bottom: 12px;
+    }
+    .layer-card.central { background: linear-gradient(180deg, rgba(33,77,70,0.92), rgba(23,55,49,0.96)); color: #f8f3ea; }
+    .layer-card.central p, .layer-card.central li { color: rgba(248,243,234,0.9); }
+    .layer-card.core { background: linear-gradient(180deg, rgba(172,90,51,0.92), rgba(138,66,35,0.96)); color: #fcf4ea; }
+    .layer-card.core p, .layer-card.core li { color: rgba(252,244,234,0.92); }
+    .layer-card.ext { background: linear-gradient(180deg, rgba(207,157,85,0.30), rgba(255,255,255,0.72)); }
+    .chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 12px;
+    }
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      padding: 7px 10px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,0.78);
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .layer-card.central .chip,
+    .layer-card.core .chip {
+      background: rgba(255,255,255,0.12);
+      color: rgba(255,255,255,0.88);
+      border-color: rgba(255,255,255,0.16);
+    }
+    .duty-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 14px;
+      margin-top: 14px;
+    }
+    .duty-columns {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 12px;
+      margin-top: 12px;
+    }
+    .copy-action-bar {
+      margin-top: 18px;
+      padding: 18px;
+      border-radius: 20px;
+      border: 1px solid var(--line);
+      background: linear-gradient(180deg, rgba(255,255,255,0.86), rgba(247,241,232,0.96));
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 16px;
+      align-items: center;
+    }
+    .copy-action-bar strong {
+      display: block;
+      font-size: 20px;
+      color: var(--accent-2);
+      margin-bottom: 6px;
+      font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", "Songti SC", serif;
+    }
+    .copy-action-bar p {
+      margin: 0;
+      color: var(--muted);
+    }
+    .copy-action-button {
+      appearance: none;
+      border: 0;
+      border-radius: 999px;
+      padding: 14px 20px;
+      background: linear-gradient(180deg, rgba(172,90,51,0.96), rgba(143,69,37,1));
+      color: #fff8f0;
+      font-size: 14px;
+      font-weight: 700;
+      cursor: pointer;
+      box-shadow: 0 12px 24px rgba(143, 69, 37, 0.18);
+      transition: transform 160ms ease, box-shadow 160ms ease, opacity 160ms ease;
+    }
+    .copy-action-button:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 16px 28px rgba(143, 69, 37, 0.22);
+    }
+    .copy-action-button:active {
+      transform: translateY(0);
+    }
+    .copy-status {
+      margin-top: 10px;
+      min-height: 22px;
+      color: var(--accent-2);
+      font-size: 13px;
+    }
+    .duty-box {
+      border-radius: 16px;
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,0.62);
+      padding: 14px;
+    }
+    .duty-box strong { display: block; margin-bottom: 8px; font-size: 14px; color: var(--accent-2); }
+    .list {
+      margin: 10px 0 0;
+      padding-left: 18px;
+      color: #33413c;
+    }
+    .list li { margin: 6px 0; }
+    .decision-card.good { background: linear-gradient(180deg, rgba(33,77,70,0.92), rgba(24,58,52,0.95)); color: #f6f1e9; }
+    .decision-card.good p, .decision-card.good li { color: rgba(246,241,233,0.92); }
+    .decision-card.neutral { background: linear-gradient(180deg, rgba(255,255,255,0.86), rgba(247,241,231,0.94)); }
+    .decision-card.formula { background: linear-gradient(180deg, rgba(172,90,51,0.92), rgba(138,66,35,0.96)); color: #fcf4ea; }
+    .decision-card.formula p, .decision-card.formula li { color: rgba(252,244,234,0.92); }
+    .decision-card.formula .formula-text {
+      margin-top: 10px;
+      font-size: 18px;
+      line-height: 1.6;
+      font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", "Songti SC", serif;
+    }
+    .flow-strip {
+      display: grid;
+      grid-template-columns: repeat(7, 1fr);
+      gap: 12px;
+      margin-top: 14px;
+    }
+    .flow-card { position: relative; min-height: 220px; }
+    .flow-card::after {
+      content: "";
+      position: absolute;
+      top: 34px;
+      right: -18px;
+      width: 36px;
+      height: 2px;
+      background: linear-gradient(90deg, rgba(33,77,70,0.22), transparent);
+    }
+    .flow-strip .flow-card:last-child::after { display: none; }
+    .map-card .subhead {
+      display: block;
+      margin-top: 8px;
+      margin-bottom: 10px;
+      color: var(--accent);
+      font-size: 13px;
+      font-weight: 700;
+    }
+    .closing {
+      margin-top: 20px;
+      padding: 28px;
+      background: linear-gradient(180deg, rgba(255,251,246,0.94), rgba(247,241,232,0.96));
+    }
+    .closing h2 { font-size: clamp(28px, 4vw, 44px); margin-bottom: 12px; }
+    .closing p { margin: 0; font-size: 17px; color: #33413c; max-width: 52em; }
+    .footer-note {
+      margin-top: 18px;
+      padding-top: 16px;
+      border-top: 1px dashed var(--line);
+      font-size: 13px;
+      color: var(--muted);
+    }
+    @media (max-width: 1100px) {
+      .layout, .hero-grid, .pain-grid, .layers, .duty-grid, .decision-grid, .map-grid, .bad-grid, .summary-grid, .flow-strip, .duty-columns, .copy-action-bar {
+        grid-template-columns: 1fr;
+      }
+      .layout { padding: 16px; }
+      .toc { position: static; }
+      .flow-card::after { display: none; }
+      .page { width: min(100% - 20px, 1260px); padding-top: 18px; }
+      .hero, .layout, .section, .closing { border-radius: 22px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="hero">
+      <span class="eyebrow">Platform Article · Qoreon · Work Split Playbook</span>
+      <h1>基础项目开发如何做分工：<br/>Qoreon 通道分工方法</h1>
+      <p class="lead">这篇文章不讲“通道越多越专业”，而是回答一个更有用的问题：一个基础项目开发，到底应该怎样分工，哪些通道是最小必需，哪些是按复杂度扩展，什么时候该建通道，什么时候其实只该建 Agent 或建任务。</p>
+      <div class="hero-grid">
+        <div class="hero-main">
+          <strong>核心结论</strong>
+          <p>推荐采用 `2 + 4 + X` 分工模型：`总控 + 架构` 两个中央角色，`运行时 + 前端 + 数据 + 测试` 四个核心执行通道，再按项目复杂度扩 `PMO / 运维 / 原型 / 技能 / 巡检 / Git / 桥接 / 用户镜像` 等横向支撑。</p>
+        </div>
+        <div class="hero-side">
+          <article class="hero-side-card">
+            <strong>适用阶段</strong>
+            <p>新项目起步、分工失序重整、开源版最小通道集设计、已有多 Agent 但责任面混乱的阶段。</p>
+          </article>
+          <article class="hero-side-card">
+            <strong>这篇的价值</strong>
+            <p>不是罗列 Qoreon 当前 22 个通道，而是从方法论上讲清楚：什么是长期职责，什么是一次性事项，什么才配叫一个独立通道。</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="layout">
+      <aside class="toc">
+        <h3>阅读导航</h3>
+        <p>建议按“问题 -> 模型 -> 职责 -> 判断 -> 映射 -> 流程”顺序阅读。</p>
+        <a href="#why">01. 为什么分工会失控</a>
+        <a href="#model">02. 2 + 4 + X 模型</a>
+        <a href="#duties">03. 通道职责怎么分</a>
+        <a href="#decision">04. 何时建通道 / Agent / 任务</a>
+        <a href="#mapping">05. Qoreon 当前映射</a>
+        <a href="#flow">06. 一条需求怎么穿过这些通道</a>
+        <a href="#bad">07. 最常见的坏模式</a>
+        <div class="hint">当前口径来自 Qoreon 现有通讯录、主责制模型、桥接实践与消息主驱动协作规则。</div>
+      </aside>
+
+      <div class="content">
+        <section class="section" id="why">
+          <div class="section-head">
+            <div>
+              <div class="kicker">Why</div>
+              <h2>01. 为什么项目分工会越来越乱</h2>
+              <p>项目一复杂，组织方式如果还停留在“谁空谁上”，就会开始失控。最典型的问题其实就三类。</p>
+            </div>
+          </div>
+          <div class="pain-grid">
+            <article class="card">
+              <div class="num">1</div>
+              <h3>知识沉淀不下来</h3>
+              <p>没有固定责任面时，同一块业务每轮都要重新理解。人一换，背景就断，推进会越来越慢。</p>
+            </article>
+            <article class="card">
+              <div class="num">2</div>
+              <h3>责任边界会变糊</h3>
+              <p>出了问题先找谁、谁来补证据、谁来收口都说不清。最后总控和架构被迫接住所有烂尾。</p>
+            </article>
+            <article class="card">
+              <div class="num">3</div>
+              <h3>通道会越建越碎</h3>
+              <p>如果没有判断门槛，一个临时问题就建一个通道，最后组织成本会高于问题本身。</p>
+            </article>
+          </div>
+        </section>
+
+        <section class="section" id="model">
+          <div class="section-head">
+            <div>
+              <div class="kicker">Model</div>
+              <h2>02. 推荐采用：2 + 4 + X 的分工模型</h2>
+              <p>这不是“唯一正确答案”，但对于大多数基础软件项目，它已经足够稳，也足够克制。</p>
+            </div>
+          </div>
+          <div class="layers">
+            <article class="layer-card central">
+              <h3>2 个中央角色</h3>
+              <p>项目必须先有中央层，负责控制方向和边界，而不是长期替代执行。</p>
+              <div class="chips">
+                <span class="chip">总控 / 产品主线</span>
+                <span class="chip">架构 / 技术门禁</span>
+              </div>
+              <ul class="list">
+                <li>控目标与优先级</li>
+                <li>控边界与门禁</li>
+                <li>控冲突裁决与收口</li>
+              </ul>
+            </article>
+            <article class="layer-card core">
+              <h3>4 个核心执行通道</h3>
+              <p>这是一个基础软件项目最小可运行的交付面，已经覆盖了大部分真实工作。</p>
+              <div class="chips">
+                <span class="chip">运行时 / 后端</span>
+                <span class="chip">前端 / 交互</span>
+                <span class="chip">数据 / 契约</span>
+                <span class="chip">测试 / 验收</span>
+              </div>
+              <ul class="list">
+                <li>后端负责能力与链路</li>
+                <li>前端负责可见结果</li>
+                <li>数据负责字段与兼容</li>
+                <li>测试负责独立终验与放行</li>
+              </ul>
+            </article>
+            <article class="layer-card ext">
+              <h3>X 个按需扩展通道</h3>
+              <p>当项目复杂度上升时，再把横向支撑能力从主线执行里剥出来。</p>
+              <div class="chips">
+                <span class="chip">PMO</span>
+                <span class="chip">结构治理</span>
+                <span class="chip">技能治理</span>
+                <span class="chip">原型承接</span>
+                <span class="chip">项目运维</span>
+                <span class="chip">Git / 开源</span>
+                <span class="chip">自动化巡检</span>
+                <span class="chip">跨项目桥接</span>
+                <span class="chip">用户镜像</span>
+              </div>
+            </article>
+          </div>
+        </section>
+
+        <section class="section" id="duties">
+          <div class="section-head">
+            <div>
+              <div class="kicker">Duties</div>
+              <h2>03. 每一类通道分别负责什么，不负责什么</h2>
+              <p>这部分一定要写清楚。因为很多协作问题，不是能力不够，而是职责边界没冻结。</p>
+            </div>
+          </div>
+          <div class="duty-grid">
+            <article class="duty-card">
+              <h3>总控 / 产品主线</h3>
+              <p>决定现在推进什么，什么优先，什么时候收口。</p>
+              <div class="duty-columns">
+                <div class="duty-box">
+                  <strong>负责</strong>
+                  <ul class="list">
+                    <li>主线和批次</li>
+                    <li>优先级与放行</li>
+                    <li>跨板块冲突裁决</li>
+                  </ul>
+                </div>
+                <div class="duty-box">
+                  <strong>不负责</strong>
+                  <ul class="list">
+                    <li>长期替代执行通道实现</li>
+                    <li>把所有问题都留给自己</li>
+                  </ul>
+                </div>
+              </div>
+            </article>
+            <article class="duty-card">
+              <h3>架构 / 技术门禁</h3>
+              <p>控制技术路线、结构边界、契约风险和高风险变更门禁。</p>
+              <div class="duty-columns">
+                <div class="duty-box">
+                  <strong>负责</strong>
+                  <ul class="list">
+                    <li>技术路线判断</li>
+                    <li>结构边界冻结</li>
+                    <li>发布与回滚门禁</li>
+                  </ul>
+                </div>
+                <div class="duty-box">
+                  <strong>不负责</strong>
+                  <ul class="list">
+                    <li>持续替每个模块写代码</li>
+                    <li>承接全部日常推进</li>
+                  </ul>
+                </div>
+              </div>
+            </article>
+            <article class="duty-card">
+              <h3>运行时 / 后端</h3>
+              <p>负责 server、调度、API、并发、安全和执行环境。</p>
+              <div class="duty-columns">
+                <div class="duty-box">
+                  <strong>输入</strong>
+                  <ul class="list">
+                    <li>需求与接口约束</li>
+                    <li>架构门禁</li>
+                  </ul>
+                </div>
+                <div class="duty-box">
+                  <strong>输出</strong>
+                  <ul class="list">
+                    <li>后端实现</li>
+                    <li>接口能力</li>
+                    <li>运行证据</li>
+                  </ul>
+                </div>
+              </div>
+            </article>
+            <article class="duty-card">
+              <h3>前端 / 交互</h3>
+              <p>负责页面结构、信息层级、导航组织和用户看得到的结果。</p>
+              <div class="duty-columns">
+                <div class="duty-box">
+                  <strong>输入</strong>
+                  <ul class="list">
+                    <li>业务目标</li>
+                    <li>原型与接口</li>
+                  </ul>
+                </div>
+                <div class="duty-box">
+                  <strong>输出</strong>
+                  <ul class="list">
+                    <li>页面与交互</li>
+                    <li>可见验证结果</li>
+                  </ul>
+                </div>
+              </div>
+            </article>
+            <article class="duty-card">
+              <h3>数据 / 契约</h3>
+              <p>负责字段口径、数据一致性、兼容策略和回滚约束。</p>
+              <div class="duty-columns">
+                <div class="duty-box">
+                  <strong>负责</strong>
+                  <ul class="list">
+                    <li>字段与白名单</li>
+                    <li>契约校验</li>
+                    <li>兼容治理</li>
+                  </ul>
+                </div>
+                <div class="duty-box">
+                  <strong>不负责</strong>
+                  <ul class="list">
+                    <li>替前后端推进全部实现</li>
+                    <li>替总控判断业务通过</li>
+                  </ul>
+                </div>
+              </div>
+            </article>
+            <article class="duty-card">
+              <h3>测试 / 验收</h3>
+              <p>负责独立终验、最小放行检查，以及“是否通过”的清晰结论。</p>
+              <div class="duty-columns">
+                <div class="duty-box">
+                  <strong>负责</strong>
+                  <ul class="list">
+                    <li>功能 / 回归验证</li>
+                    <li>阻塞识别</li>
+                    <li>放行意见</li>
+                  </ul>
+                </div>
+                <div class="duty-box">
+                  <strong>不负责</strong>
+                  <ul class="list">
+                    <li>替执行方补实现</li>
+                    <li>把自测当终验</li>
+                  </ul>
+                </div>
+              </div>
+            </article>
+          </div>
+          <div class="copy-action-bar">
+            <div>
+              <strong>准备按这套标准建项目？</strong>
+              <p>点击后会复制一份“通道创建模板”。模板只讲两件事：目标通道结构应该长什么样，以及创建时该怎么做。</p>
+            </div>
+            <button class="copy-action-button" id="copyChannelTemplateBtn" type="button">复制创建全部通道的模板</button>
+          </div>
+          <div class="copy-status" id="copyChannelTemplateStatus" aria-live="polite"></div>
+        </section>
+
+        <section class="section" id="decision">
+          <div class="section-head">
+            <div>
+              <div class="kicker">Decision Gate</div>
+              <h2>04. 什么时候应该新建通道，什么时候其实只该建 Agent 或建任务</h2>
+              <p>这是最容易做错的一层。组织一旦膨胀得比问题还快，系统就会越来越难管理。</p>
+            </div>
+          </div>
+          <div class="decision-grid">
+            <article class="decision-card good">
+              <h3>该建通道</h3>
+              <p>满足任意两条，才建议新建通道：</p>
+              <ul class="list">
+                <li>工作会长期存在</li>
+                <li>有稳定输入和输出</li>
+                <li>需要独立知识沉淀</li>
+                <li>会反复服务多个主线</li>
+                <li>继续塞进现有通道会造成混责</li>
+              </ul>
+            </article>
+            <article class="decision-card neutral">
+              <h3>不该建通道</h3>
+              <p>下面这些通常只需要建任务或建 Agent：</p>
+              <ul class="list">
+                <li>只是临时任务</li>
+                <li>只是某通道里的专项动作</li>
+                <li>只是某个 Agent 忙不过来</li>
+                <li>只是补一轮讨论、联调或验收</li>
+              </ul>
+            </article>
+            <article class="decision-card formula">
+              <h3>一条判断公式</h3>
+              <div class="formula-text">
+                长期职责，建通道。<br/>
+                同一职责下的不同执行者，建 Agent。<br/>
+                这轮要做的一件事，建任务。
+              </div>
+            </article>
+          </div>
+        </section>
+
+        <section class="section" id="mapping">
+          <div class="section-head">
+            <div>
+              <div class="kicker">Qoreon Mapping</div>
+              <h2>05. 用这套模型回看 Qoreon 当前体系，会发现什么</h2>
+              <p>Qoreon 现在已经不是一个只有前后端的小项目。它的中央层、执行层、治理层和桥接层都已经比较明显，问题不在“有没有通道”，而在“哪些通道该承担长期责任、哪些只是支撑位”。</p>
+            </div>
+          </div>
+          <div class="map-grid">
+            <article class="map-card">
+              <h3>中央层</h3>
+              <span class="subhead">控制主线与技术边界</span>
+              <div class="chips">
+                <span class="chip">主体-总控（合并与验收）</span>
+                <span class="chip">子级01-Build引擎（架构师）</span>
+              </div>
+              <p>这两个位置已经承担了典型的“总控 + 架构”角色。后续应继续强化门禁职责，而不是下沉成长期执行替代者。</p>
+            </article>
+            <article class="map-card">
+              <h3>核心执行层</h3>
+              <span class="subhead">最像基础项目开发四件套</span>
+              <div class="chips">
+                <span class="chip">子级02-CCB运行时</span>
+                <span class="chip">子级04-前端体验</span>
+                <span class="chip">子级06-数据治理与契约</span>
+                <span class="chip">子级08-测试与验收</span>
+              </div>
+              <p>这四个通道已经构成最小执行面。对外讲 Qoreon 的基础研发组织，优先就讲这四个，不要一上来铺 20 多个通道。</p>
+            </article>
+            <article class="map-card">
+              <h3>平台增强层</h3>
+              <span class="subhead">不是基础交付，但对平台很关键</span>
+              <div class="chips">
+                <span class="chip">子级03-多CLI适配器</span>
+                <span class="chip">子级05-任务巡检与留痕</span>
+                <span class="chip">子级07-可视化看板</span>
+              </div>
+              <p>它们承担的是 Qoreon 的平台化特征，而不是传统项目都会有的基础研发职责。</p>
+            </article>
+            <article class="map-card">
+              <h3>支撑治理层</h3>
+              <span class="subhead">让系统可复制、可维护、可扩展</span>
+              <div class="chips">
+                <span class="chip">辅助01-项目结构治理</span>
+                <span class="chip">辅助02-团队协作Skills治理</span>
+                <span class="chip">辅助04-原型设计</span>
+                <span class="chip">辅助05-PMO</span>
+                <span class="chip">辅助06-项目运维</span>
+                <span class="chip">辅助07-Git仓库管理</span>
+              </div>
+              <p>这组通道说明 Qoreon 已经从“做功能”进入“做系统”的阶段，所以治理支撑已经不是可有可无，而是必要层。</p>
+            </article>
+            <article class="map-card">
+              <h3>特殊协作层</h3>
+              <span class="subhead">不是传统研发必备，但对当前系统很有价值</span>
+              <div class="chips">
+                <span class="chip">辅助03-用户镜像</span>
+                <span class="chip">辅助08-开源执行桥接</span>
+                <span class="chip">主体04-开源筹备联控（65主操作面）</span>
+              </div>
+              <p>一个偏业务判断和规划支撑，一个偏跨项目桥接和开源执行联控。这是 Qoreon 特有的组织能力。</p>
+            </article>
+            <article class="map-card">
+              <h3>当前最值得收敛的点</h3>
+              <span class="subhead">不是继续加通道，而是稳住主责和门禁</span>
+              <ul class="list">
+                <li>先固定板块主责</li>
+                <li>让支撑通道回到支撑位</li>
+                <li>让总控和架构更多做门禁</li>
+                <li>把跨项目桥接继续独立化</li>
+              </ul>
+            </article>
+          </div>
+        </section>
+
+        <section class="section" id="flow">
+          <div class="section-head">
+            <div>
+              <div class="kicker">Flow</div>
+              <h2>06. 一条需求应该怎样穿过这些通道</h2>
+              <p>真正稳定的协作，不是所有通道都参与，而是让“主线、支撑、门禁、收口”各自站对位置。</p>
+            </div>
+          </div>
+          <div class="flow-strip">
+            <article class="flow-card">
+              <div class="num">1</div>
+              <h3>提出目标</h3>
+              <p>用户、产品或业务提出目标，先判断是不是正式主线。</p>
+            </article>
+            <article class="flow-card">
+              <div class="num">2</div>
+              <h3>总控定主线</h3>
+              <p>决定优先级、批次和主负责通道，不让问题一上来就全局扩散。</p>
+            </article>
+            <article class="flow-card">
+              <div class="num">3</div>
+              <h3>架构定边界</h3>
+              <p>冻结高风险约束、技术路线和契约边界，减少后面返工。</p>
+            </article>
+            <article class="flow-card">
+              <div class="num">4</div>
+              <h3>执行通道推进</h3>
+              <p>后端、前端、数据等主线通道开始推进，形成实际交付。</p>
+            </article>
+            <article class="flow-card">
+              <div class="num">5</div>
+              <h3>支撑通道介入</h3>
+              <p>当需要结构、技能、原型、运维、Git 等能力时，再接入横向支撑。</p>
+            </article>
+            <article class="flow-card">
+              <div class="num">6</div>
+              <h3>测试与验收</h3>
+              <p>由独立验收通道判断是否通过，明确唯一阻塞和放行意见。</p>
+            </article>
+            <article class="flow-card">
+              <div class="num">7</div>
+              <h3>跨项目桥接</h3>
+              <p>如果涉及生产、开发、开源执行等多项目，再由桥接通道建立正确链路。</p>
+            </article>
+          </div>
+        </section>
+
+        <section class="section" id="bad">
+          <div class="section-head">
+            <div>
+              <div class="kicker">Anti-Patterns</div>
+              <h2>07. 这套分工里最常见的坏模式</h2>
+              <p>如果你已经感觉系统很忙、通道很多、结果却还是不顺，通常不是能力不足，而是落进了这些模式。</p>
+            </div>
+          </div>
+          <div class="bad-grid">
+            <article class="bad-card">
+              <h3>总控长期包办执行</h3>
+              <p>短期看很快，长期一定堵。总控一旦兼任全部主责，系统会把所有复杂度都挤到一个点上。</p>
+            </article>
+            <article class="bad-card">
+              <h3>架构师变成全栈打杂</h3>
+              <p>架构如果长期承担所有模块实施，就没时间做真正重要的边界和风险控制。</p>
+            </article>
+            <article class="bad-card">
+              <h3>支撑通道替代业务主责</h3>
+              <p>结构、PMO、运维、技能治理都是支撑位，不该反客为主替业务通道长期推进业务本身。</p>
+            </article>
+            <article class="bad-card">
+              <h3>一出问题就新建通道</h3>
+              <p>没有长期职责判断，就会把通道当临时垃圾桶，组织成本会迅速超过问题本身。</p>
+            </article>
+            <article class="bad-card">
+              <h3>跨项目直接混写真源</h3>
+              <p>项目之间一旦不通过桥接层而直接混写，会让来源、回执、上下文全部失真。</p>
+            </article>
+            <article class="bad-card">
+              <h3>过程只靠反馈文件</h3>
+              <p>过程协作不走消息主驱动，就会出现任务已完成、反馈仍待验收的双状态并存问题。</p>
+            </article>
+          </div>
+        </section>
+
+        <section class="section">
+          <div class="section-head">
+            <div>
+              <div class="kicker">Takeaways</div>
+              <h2>08. 最后，给基础项目开发的三条直接建议</h2>
+              <p>如果你现在正在设计项目分工，不用一上来建满体系，先把最关键的骨架立住。</p>
+            </div>
+          </div>
+          <div class="summary-grid">
+            <article class="summary-card">
+              <h3>先立住中央层</h3>
+              <p>先有 `总控 + 架构`，再谈执行通道。没有中央层，后面所有通道都会变成谁在忙谁接锅。</p>
+            </article>
+            <article class="summary-card">
+              <h3>先跑通基础四件套</h3>
+              <p>先把 `后端 + 前端 + 数据 + 测试` 跑顺，再按需要增加治理和支撑，不要反过来。</p>
+            </article>
+            <article class="summary-card">
+              <h3>扩组织前先问一句</h3>
+              <p>这到底是长期职责，还是这轮事项？回答不清楚，就先别建新通道。</p>
+            </article>
+          </div>
+        </section>
+      </div>
+    </section>
+
+    <section class="closing">
+      <h2>一句话总结</h2>
+      <p>真正有效的分工，不是通道越多越高级，而是主线有人负责、支撑有人承接、门禁有人把关、收口有人拍板。Qoreon 当前的价值，不只是已经有很多通道，而是它已经长出了把这些层次组织起来的基础骨架。</p>
+      <div class="footer-note">文章依据：Qoreon 当前通讯录视图、业务板块主责制与中央协同门禁模型、跨项目桥接 README、子级 Agent 协作口径。</div>
+    </section>
+  </main>
+  <script>
+    const channelCreationTemplate = `请按下面的标准，为当前项目创建或补齐通道。只需要说明两件事：通道结构是什么，以及怎么创建。不要展开额外策划内容。
+
+【一、目标通道结构】
+每个通道创建完成后，目录结构固定为：
+- \`README.md\`：通道职责说明、目录索引
+- \`沟通-收件箱.md\`：通道消息收件入口
+- \`任务/\`：后续任务拆解与执行
+- \`产出物/沉淀/\`：阶段成果与经验沉淀
+- \`反馈/\`：反馈与验收回执
+- \`问题/\`：问题留痕与聚合
+- \`讨论空间/\`：协作讨论与澄清
+
+\`README.md\` 至少写清楚：
+- 通道是做什么的
+- 通道不负责什么
+- 目录里每一块是做什么的
+
+【二、创建步骤】
+1. 先创建空通道框架，只补齐上面这套固定目录和文件。
+2. 再补 \`README.md\`，把通道职责、边界、目录说明写清楚。
+3. \`沟通-收件箱.md\` 作为收件入口保留，不要塞无关正文。
+4. 不要在创建通道时顺手补主任务、主对话或无关专项内容。
+5. 如果同名通道已经存在，就按这套结构补齐缺失项，不要重复新建。
+6. 创建完成后，只回以下结果：
+
+当前结论:
+通道名称:
+创建结果路径:
+已补齐结构:
+下一步动作:`;
+
+    window.__channelCreationTemplate = channelCreationTemplate;
+
+    async function copyChannelCreationTemplate() {
+      const statusEl = document.getElementById('copyChannelTemplateStatus');
+      try {
+        if (navigator.clipboard && window.isSecureContext) {
+          await navigator.clipboard.writeText(channelCreationTemplate);
+        } else {
+          const temp = document.createElement('textarea');
+          temp.value = channelCreationTemplate;
+          temp.setAttribute('readonly', '');
+          temp.style.position = 'absolute';
+          temp.style.left = '-9999px';
+          document.body.appendChild(temp);
+          temp.select();
+          document.execCommand('copy');
+          document.body.removeChild(temp);
+        }
+        window.__lastCopiedChannelTemplate = channelCreationTemplate;
+        statusEl.textContent = '已复制。可直接发送给总控、结构治理或项目启动类 Agent 执行。';
+      } catch (error) {
+        statusEl.textContent = '复制失败，请手动复制页面中的模板说明。';
+      }
+    }
+
+    document.getElementById('copyChannelTemplateBtn').addEventListener('click', copyChannelCreationTemplate);
+  </script>
+</body>
+</html>

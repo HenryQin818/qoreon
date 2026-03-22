@@ -3,32 +3,67 @@
   "public_safe": true,
   "tasks": [
     {
-      "code": "20260320-bootstrap",
+      "code": "20260321-master-kickoff",
       "channel_name": "主体-总控",
       "status": "进行中",
-      "title": "最小协作闭环启动",
-      "path": "examples/minimal-project/tasks/主体-总控/任务/【进行中】【任务】20260320-最小协作闭环启动.md"
+      "title": "推荐项目结构落位与开箱路径收口",
+      "path": "examples/minimal-project/tasks/主体-总控/任务/【进行中】【任务】20260321-推荐项目结构落位与开箱路径收口.md"
     },
     {
-      "code": "20260320-execute",
-      "channel_name": "子级01-执行",
+      "code": "20260321-architecture",
+      "channel_name": "辅助01-架构与结构治理",
       "status": "待开始",
-      "title": "补一条最小执行样例",
-      "path": "examples/minimal-project/tasks/子级01-执行/任务/【待开始】【任务】20260320-补一条最小执行样例.md"
+      "title": "公开示例结构边界冻结",
+      "path": "examples/minimal-project/tasks/辅助01-架构与结构治理/任务/【待开始】【任务】20260321-公开示例结构边界冻结.md"
     },
     {
-      "code": "20260320-docs",
-      "channel_name": "子级02-文档",
+      "code": "20260321-runtime",
+      "channel_name": "子级01-运行时与后端",
       "status": "待开始",
-      "title": "补齐说明与回执模板",
-      "path": "examples/minimal-project/tasks/子级02-文档/任务/【待开始】【任务】20260320-补齐说明与回执模板.md"
+      "title": "Bootstrap 与服务最小链路自检",
+      "path": "examples/minimal-project/tasks/子级01-运行时与后端/任务/【待开始】【任务】20260321-Bootstrap与服务最小链路自检.md"
     },
     {
-      "code": "20260320-test",
-      "channel_name": "子级03-测试",
+      "code": "20260321-frontend",
+      "channel_name": "子级02-前端与交互",
       "status": "待开始",
-      "title": "Clean Room Smoke",
-      "path": "examples/minimal-project/tasks/子级03-测试/任务/【待开始】【任务】20260320-clean-room-smoke.md"
+      "title": "示例项目页面入口与可见结果校准",
+      "path": "examples/minimal-project/tasks/子级02-前端与交互/任务/【待开始】【任务】20260321-示例项目页面入口与可见结果校准.md"
+    },
+    {
+      "code": "20260321-data-contract",
+      "channel_name": "子级03-数据与契约",
+      "status": "待开始",
+      "title": "Seed 与契约字段校验",
+      "path": "examples/minimal-project/tasks/子级03-数据与契约/任务/【待开始】【任务】20260321-Seed与契约字段校验.md"
+    },
+    {
+      "code": "20260321-test",
+      "channel_name": "子级04-测试与验收",
+      "status": "待开始",
+      "title": "Clean Room 与 AI 接管双验收",
+      "path": "examples/minimal-project/tasks/子级04-测试与验收/任务/【待开始】【任务】20260321-Clean-Room与AI接管双验收.md"
+    },
+    {
+      "code": "20260321-docs",
+      "channel_name": "辅助02-文档与知识沉淀",
+      "status": "待开始",
+      "title": "README 与 AI 初始化说明对齐",
+      "path": "examples/minimal-project/tasks/辅助02-文档与知识沉淀/任务/【待开始】【任务】20260321-README与AI初始化说明对齐.md"
+    },
+    {
+      "code": "20260321-user-mirror",
+      "channel_name": "辅助03-用户镜像与业务判断",
+      "status": "待开始",
+      "title": "推荐结构与业务判断补齐",
+      "path": "examples/minimal-project/tasks/辅助03-用户镜像与业务判断/任务/【待开始】【任务】20260321-推荐结构与业务判断补齐.md"
+    },
+    {
+      "code": "20260321-git",
+      "channel_name": "辅助04-Git桥接与发布同步",
+      "status": "待开始",
+      "title": "公开差异与同步边界只读预检",
+      "path": "examples/minimal-project/tasks/辅助04-Git桥接与发布同步/任务/【待开始】【任务】20260321-公开差异与同步边界只读预检.md"
     }
   ]
 }

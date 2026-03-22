@@ -3,6 +3,9 @@
   "public_safe": true,
   "project_id": "minimal_project",
   "files": [
+    "docs/public/ai-bootstrap.md",
+    "docs/onboarding/project-worksplit-playbook.md",
+    "examples/minimal-project/README.md",
     "examples/minimal-project/seed/project_seed.json",
     "examples/minimal-project/seed/channels_seed.json",
     "examples/minimal-project/seed/agents_seed.json",
@@ -11,15 +14,20 @@
   ],
   "skills": [
     "master-control",
-    "executor",
+    "architecture-gatekeeper",
+    "runtime-backend",
+    "frontend-interaction",
+    "data-contract",
     "docs-maintainer",
     "test-release",
-    "structure-governance",
+    "user-mirror",
     "git-bridge-readonly"
   ],
   "notes": [
     "先读 ai-bootstrap，再读本清单。",
     "只使用公开安全的 seed，不要自行补真实 session/run。",
+    "默认激活集是 6 个核心通道，支撑通道按需点亮。",
+    "默认按 2+4+X 结构启动，不要自行回退到旧的 6 通道模型。",
     "Git 桥接技能默认关闭。"
   ]
 }

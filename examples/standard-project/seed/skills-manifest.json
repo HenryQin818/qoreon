@@ -1,0 +1,86 @@
+{
+  "schema_version": "1.0",
+  "public_safe": true,
+  "skills": [
+    {
+      "name": "project-startup-collab-suite",
+      "path": "examples/standard-project/skills/project-startup-collab-suite/SKILL.md",
+      "default_enabled": true,
+      "capabilities": ["startup_batch", "ccr_read", "startup_dispatch"],
+      "side_effect_level": "low",
+      "default_mode": "review_then_execute",
+      "requires_manual_confirm": false,
+      "has_external_dependency": false
+    },
+    {
+      "name": "agent-init-training-playbook",
+      "path": "examples/standard-project/skills/agent-init-training-playbook/SKILL.md",
+      "default_enabled": true,
+      "capabilities": ["agent_training", "responsibility_restatement", "first_action_setup"],
+      "side_effect_level": "low",
+      "default_mode": "review_then_execute",
+      "requires_manual_confirm": false,
+      "has_external_dependency": false
+    },
+    {
+      "name": "collab-message-send",
+      "path": "examples/standard-project/skills/collab-message-send/SKILL.md",
+      "default_enabled": true,
+      "capabilities": ["message_send", "receipt", "handoff_update"],
+      "side_effect_level": "low",
+      "default_mode": "review_then_execute",
+      "requires_manual_confirm": false,
+      "has_external_dependency": false
+    },
+    {
+      "name": "ccr-update-playbook",
+      "path": "examples/standard-project/skills/ccr-update-playbook/SKILL.md",
+      "default_enabled": true,
+      "capabilities": ["ccr_update", "channel_registry", "source_alignment"],
+      "side_effect_level": "low",
+      "default_mode": "review_then_write",
+      "requires_manual_confirm": false,
+      "has_external_dependency": false
+    },
+    {
+      "name": "skills-governance-upgrade",
+      "path": "examples/standard-project/skills/skills-governance-upgrade/SKILL.md",
+      "default_enabled": true,
+      "capabilities": ["skill_audit", "skill_upgrade", "skill_training_gate"],
+      "side_effect_level": "low",
+      "default_mode": "review_then_write",
+      "requires_manual_confirm": false,
+      "has_external_dependency": false
+    },
+    {
+      "name": "session-health-inspector",
+      "path": "examples/standard-project/skills/session-health-inspector/SKILL.md",
+      "default_enabled": true,
+      "capabilities": ["session_health", "runtime_check", "degradation_judgement"],
+      "side_effect_level": "low",
+      "default_mode": "review_only",
+      "requires_manual_confirm": false,
+      "has_external_dependency": false
+    },
+    {
+      "name": "session-rotation-handoff",
+      "path": "examples/standard-project/skills/session-rotation-handoff/SKILL.md",
+      "default_enabled": false,
+      "capabilities": ["session_rotation", "handoff", "binding_switch"],
+      "side_effect_level": "medium",
+      "default_mode": "review_then_execute",
+      "requires_manual_confirm": true,
+      "has_external_dependency": false
+    },
+    {
+      "name": "task-health-organizer",
+      "path": "examples/standard-project/skills/task-health-organizer/SKILL.md",
+      "default_enabled": true,
+      "capabilities": ["task_scan", "knowledge_inventory", "structure_cleanup_plan"],
+      "side_effect_level": "low",
+      "default_mode": "review_then_write",
+      "requires_manual_confirm": false,
+      "has_external_dependency": false
+    }
+  ]
+}

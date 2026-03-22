@@ -3,23 +3,31 @@ title = "Qoreon"
 subtitle = "连接人类意图与 AI 执行的本地协同与控制层"
 
 [[projects]]
-id = "minimal_project"
-name = "Minimal Project"
-description = "公开示例项目，展示最小协作结构、任务数据、种子包与技能包。"
-color = "#145f4a"
-project_root_rel = "examples/minimal-project"
-task_root_rel = "examples/minimal-project/tasks"
-runtime_root_rel = "examples/minimal-project/.runtime/demo"
-execution_context = { profile = "sandboxed", environment = "demo", worktree_root = "examples/minimal-project", workdir = "examples/minimal-project", runtime_root = "examples/minimal-project/.runtime/demo", sessions_root = "examples/minimal-project/.runtime/demo/.sessions", runs_root = "examples/minimal-project/.runtime/demo/.runs", server_port = "18770", health_source = "/__health" }
+id = "standard_project"
+name = "Qoreon Standard Project"
+description = "公开版唯一标准项目入口，补齐治理辅助通道、长期协作结构与公开安全知识卡片。"
+color = "#0f4c81"
+project_root_rel = "examples/standard-project"
+task_root_rel = "examples/standard-project/tasks"
+runtime_root_rel = "examples/standard-project/.runtime/demo"
+execution_context = { profile = "sandboxed", environment = "demo", worktree_root = "examples/standard-project", workdir = "examples/standard-project", runtime_root = "examples/standard-project/.runtime/demo", sessions_root = "examples/standard-project/.runtime/demo/.sessions", runs_root = "examples/standard-project/.runtime/demo/.runs", server_port = "18770", health_source = "/__health" }
 channels = [
   { name = "主体-总控", desc = "收敛范围、冻结节奏、发起验收。", cli_type = "codex", enable_requirements = true },
-  { name = "子级01-执行", desc = "承接功能实现与最小数据准备。", cli_type = "codex" },
-  { name = "子级02-文档", desc = "维护 README、示例说明和 AI 初始化文档。", cli_type = "codex" },
-  { name = "子级03-测试", desc = "负责 clean-room bootstrap 与主链路 smoke。", cli_type = "codex" },
-  { name = "辅助01-结构治理与项目接入", desc = "冻结项目结构、种子 schema 与接入边界。", cli_type = "codex", enable_requirements = true },
-  { name = "辅助02-Git桥接与发布同步", desc = "只读核查导出差异与发布同步口径。", cli_type = "codex" }
+  { name = "辅助01-结构治理与项目接入", desc = "负责结构接入、通讯录更新与真源边界。", cli_type = "codex", enable_requirements = true },
+  { name = "子级01-运行时与后端", desc = "负责 bootstrap、build、server 与最小 API 链路。", cli_type = "codex" },
+  { name = "子级02-前端与交互", desc = "负责页面入口、可见结果与用户操作路径。", cli_type = "codex" },
+  { name = "子级03-数据与契约", desc = "负责 seed、契约字段与引用校验。", cli_type = "codex" },
+  { name = "子级04-测试与验收", desc = "负责 bootstrap 与健康验收。", cli_type = "codex" },
+  { name = "辅助02-文档与知识沉淀", desc = "维护 README、Bootstrap 文档与知识索引。", cli_type = "codex" },
+  { name = "辅助03-用户镜像与业务判断", desc = "提供用户视角、启动顺序和业务判断支撑。", cli_type = "codex" },
+  { name = "辅助04-Git桥接与发布同步", desc = "只读核查标准项目同步边界。", cli_type = "codex" },
+  { name = "辅助05-团队协作Skills治理", desc = "负责技能升级、技能培训与技能集维护。", cli_type = "codex" },
+  { name = "辅助06-项目运维", desc = "负责会话健康巡检、轮换建议与运行检查。", cli_type = "codex" },
+  { name = "系统01-信息梳理", desc = "负责任务文件健康检查、知识盘点和只读转派。", cli_type = "codex" }
 ]
 links = [
   { label = "AI Bootstrap", url = "docs/public/ai-bootstrap.md" },
-  { label = "Example Project", url = "examples/minimal-project/README.md" }
+  { label = "Standard Project", url = "examples/standard-project/README.md" },
+  { label = "Start Standard Project", url = "scripts/start_standard_project.py" },
+  { label = "Project Worksplit", url = "docs/onboarding/project-worksplit-playbook.md" }
 ]

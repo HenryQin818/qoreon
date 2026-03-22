@@ -1,0 +1,16 @@
+{
+  "schema_version": "1.0",
+  "public_safe": true,
+  "project": {
+    "id": "standard_project",
+    "name": "Standard Project",
+    "description": "公开版完整标准项目模板，包含总控、执行通道与治理辅助通道。",
+    "project_root_rel": "examples/standard-project",
+    "task_root_rel": "examples/standard-project/tasks",
+    "runtime_root_rel": "examples/standard-project/.runtime/demo"
+  },
+  "recommended_structure": {
+    "model": "2+4+X+governance",
+    "reference_doc": "docs/onboarding/project-worksplit-playbook.md"
+  }
+}

@@ -200,6 +200,7 @@
       filesBySessionKey: Object.create(null), // projectId::sessionId -> { count, items, updatedAt, fetchedAt }
       fileStarredBySessionKey: loadSessionScopedMap(CONV_FILE_STARRED_KEY), // projectId::sessionId -> { fileKey:true }
       trainingSentBySessionKey: loadSessionScopedMap(CONV_TRAINING_SENT_KEY), // projectId::sessionId -> sentAt
+      trainingDismissedBySessionKey: Object.create(null), // projectId::sessionId -> true
       fileOnlyStarredBySessionKey: Object.create(null),
       fileSortBySessionKey: Object.create(null),
       fileTypeFilterBySessionKey: Object.create(null),
@@ -549,6 +550,7 @@
       const trainingCount = document.getElementById("convTrainingCount");
       const trainingDesc = document.getElementById("convTrainingDesc");
       const trainingSendBtn = document.getElementById("convTrainingSendBtn");
+      const trainingCloseBtn = document.getElementById("convTrainingCloseBtn");
       let recentAgentContainer = document.getElementById("convRecentAgents");
       let recentAgentToggle = document.getElementById("convRecentAgentsGlobalToggle");
       let mentionContainer = document.getElementById("convMentions");
@@ -639,6 +641,7 @@
         trainingCount,
         trainingDesc,
         trainingSendBtn,
+        trainingCloseBtn,
         mentionContainer,
         replyContainer,
         mentionSuggest,
@@ -1145,6 +1148,14 @@
         ctb.addEventListener("click", (e) => {
           e.preventDefault();
           sendConversationTrainingMessage();
+        });
+      }
+      const ccb = document.getElementById("convTrainingCloseBtn");
+      if (ccb && !ccb.__convTrainingCloseBound) {
+        ccb.__convTrainingCloseBound = true;
+        ccb.addEventListener("click", (e) => {
+          e.preventDefault();
+          dismissConversationTrainingPrompt();
         });
       }
       const cms = document.getElementById("convMemoSaveBtn");
@@ -1674,7 +1685,9 @@
       const fileInput = document.getElementById("convFileInput");
       const convMsg = document.getElementById("convMsg");
       const composer = document.querySelector(".convcomposer");
+      const convWrap = document.getElementById("convWrap");
       const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
+      const CONV_COMPOSER_DROP_HOTZONE = { top: 52, right: 16, bottom: 14, left: 16 };
 
       if (!uploadBtn || !fileInput) return;
 
@@ -1734,6 +1747,58 @@
         } catch (_) {
           return null;
         }
+      }
+
+      function getComposerTransferPayload(dataTransfer) {
+        const mentionTarget = parseMentionTargetFromDataTransfer(dataTransfer);
+        const hasFiles = hasTransferFiles(dataTransfer);
+        if (!hasFiles && !mentionTarget) return null;
+        return { mentionTarget, hasFiles };
+      }
+
+      function composerDropHotzoneRect() {
+        if (!composer || typeof composer.getBoundingClientRect !== "function") return null;
+        const rect = composer.getBoundingClientRect();
+        return {
+          top: rect.top - CONV_COMPOSER_DROP_HOTZONE.top,
+          right: rect.right + CONV_COMPOSER_DROP_HOTZONE.right,
+          bottom: rect.bottom + CONV_COMPOSER_DROP_HOTZONE.bottom,
+          left: rect.left - CONV_COMPOSER_DROP_HOTZONE.left,
+        };
+      }
+
+      function isPointInComposerDropHotzone(clientX, clientY) {
+        const rect = composerDropHotzoneRect();
+        if (!rect) return false;
+        const x = Number(clientX || 0);
+        const y = Number(clientY || 0);
+        return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+      }
+
+      function setComposerDropActive(active) {
+        if (!composer) return;
+        composer.classList.toggle("drop-active", !!active);
+      }
+
+      async function handleComposerDrop(e, mentionTarget) {
+        const files = e && e.dataTransfer && e.dataTransfer.files ? Array.from(e.dataTransfer.files) : [];
+        if (!files.length && !mentionTarget) return;
+        e.preventDefault();
+        e.stopPropagation();
+        setComposerDropActive(false);
+        if (mentionTarget) {
+          const draftKey = currentConvComposerDraftKey();
+          if (!draftKey) {
+            setHintText("conv", "请先选择对话后再添加协同对象。");
+            return;
+          }
+          const inserted = insertMentionToComposerInput(mentionTarget);
+          if (inserted.ok) {
+            setHintText("conv", "已插入协同对象：@" + String(inserted.label || mentionInsertLabel(mentionTarget) || ""));
+          }
+          return;
+        }
+        await uploadFilesToComposer(files, "拖拽");
       }
 
       async function uploadFilesToComposer(files, sourceLabel) {
@@ -1832,45 +1897,65 @@
           hideConvMentionSuggest();
         });
         composer.addEventListener("dragenter", (e) => {
-          const mentionTarget = parseMentionTargetFromDataTransfer(e.dataTransfer);
-          if (!hasTransferFiles(e.dataTransfer) && !mentionTarget) return;
+          const payload = getComposerTransferPayload(e.dataTransfer);
+          if (!payload) return;
           e.preventDefault();
-          composer.classList.add("drop-active");
+          setComposerDropActive(true);
         });
         composer.addEventListener("dragover", (e) => {
-          const mentionTarget = parseMentionTargetFromDataTransfer(e.dataTransfer);
-          if (!hasTransferFiles(e.dataTransfer) && !mentionTarget) return;
+          const payload = getComposerTransferPayload(e.dataTransfer);
+          if (!payload) return;
           e.preventDefault();
           if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
-          composer.classList.add("drop-active");
+          setComposerDropActive(true);
         });
         composer.addEventListener("dragleave", (e) => {
           const current = e.currentTarget;
           const related = e.relatedTarget;
           if (current && related && current.contains && current.contains(related)) return;
-          composer.classList.remove("drop-active");
+          setComposerDropActive(false);
         });
         composer.addEventListener("drop", async (e) => {
-          const mentionTarget = parseMentionTargetFromDataTransfer(e.dataTransfer);
-          const files = e && e.dataTransfer && e.dataTransfer.files ? Array.from(e.dataTransfer.files) : [];
-          if (!files.length && !mentionTarget) return;
+          const payload = getComposerTransferPayload(e.dataTransfer);
+          if (!payload) return;
+          await handleComposerDrop(e, payload.mentionTarget);
+        });
+      }
+      if (convWrap && composer && convWrap !== composer) {
+        convWrap.addEventListener("dragenter", (e) => {
+          const payload = getComposerTransferPayload(e.dataTransfer);
+          if (!payload) return;
+          if (!isPointInComposerDropHotzone(e.clientX, e.clientY)) return;
           e.preventDefault();
-          e.stopPropagation();
-          composer.classList.remove("drop-active");
-          if (mentionTarget) {
-            const draftKey = currentConvComposerDraftKey();
-            if (!draftKey) {
-              setHintText("conv", "请先选择对话后再添加协同对象。");
-              return;
-            }
-            const inserted = insertMentionToComposerInput(mentionTarget);
-            if (inserted.ok) {
-              setHintText("conv", "已插入协同对象：@" + String(inserted.label || mentionInsertLabel(mentionTarget) || ""));
-            }
+          setComposerDropActive(true);
+        });
+        convWrap.addEventListener("dragover", (e) => {
+          const payload = getComposerTransferPayload(e.dataTransfer);
+          if (!payload) return;
+          const inHotzone = isPointInComposerDropHotzone(e.clientX, e.clientY);
+          setComposerDropActive(inHotzone);
+          if (!inHotzone) return;
+          e.preventDefault();
+          if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+        });
+        convWrap.addEventListener("dragleave", (e) => {
+          const current = e.currentTarget;
+          const related = e.relatedTarget;
+          if (current && related && current.contains && current.contains(related)) return;
+          setComposerDropActive(false);
+        });
+        convWrap.addEventListener("drop", async (e) => {
+          if (e.defaultPrevented) return;
+          const payload = getComposerTransferPayload(e.dataTransfer);
+          if (!payload) return;
+          if (!isPointInComposerDropHotzone(e.clientX, e.clientY)) {
+            setComposerDropActive(false);
             return;
           }
-          await uploadFilesToComposer(files, "拖拽");
+          await handleComposerDrop(e, payload.mentionTarget);
         });
+        window.addEventListener("dragend", () => setComposerDropActive(false), true);
+        window.addEventListener("drop", () => setComposerDropActive(false), true);
       }
     }
 

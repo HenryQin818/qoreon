@@ -1,0 +1,18 @@
+{
+  "schema_version": "1.0",
+  "public_safe": true,
+  "channels": [
+    {"name": "主体-总控", "default_enabled": true},
+    {"name": "辅助01-结构治理与项目接入", "default_enabled": true},
+    {"name": "子级01-运行时与后端", "default_enabled": true},
+    {"name": "子级02-前端与交互", "default_enabled": true},
+    {"name": "子级03-数据与契约", "default_enabled": true},
+    {"name": "子级04-测试与验收", "default_enabled": true},
+    {"name": "辅助02-文档与知识沉淀", "default_enabled": false},
+    {"name": "辅助03-用户镜像与业务判断", "default_enabled": false},
+    {"name": "辅助04-Git桥接与发布同步", "default_enabled": false},
+    {"name": "辅助05-团队协作Skills治理", "default_enabled": false},
+    {"name": "辅助06-项目运维", "default_enabled": false},
+    {"name": "系统01-信息梳理", "default_enabled": false}
+  ]
+}

@@ -820,36 +820,8 @@
       const runtimeShadowMeta = buildConversationRuntimeShadowMeta(currentRuntimeState, runs);
       const runtimeShadowRuns = buildConversationRuntimeShadowRuns(ctx, currentSession, currentRuntimeState, runtimeShadowMeta);
       const liveRunHint = buildConversationLiveRunHint(runs);
-      if (liveRunHint) {
-        const preview = String(liveRunHint.preview || "").trim();
-        const progressText = progressElapsedText(liveRunHint.latestProgressAt);
-        const hintParts = [
-          "当前 Agent 正在回复",
-          wasNearBottom ? "最新输出已生成" : "底部有新输出",
-        ];
-        if (preview) hintParts.push("预览：" + preview);
-        if (progressText && progressText !== "-") hintParts.push("更新于" + progressText);
-        if (liveRunHint.runId) hintParts.push("活跃 run: " + shortId(liveRunHint.runId));
-        hintEl.textContent = hintParts.join(" · ");
-        hintEl.title = [
-          "当前 Agent 正在回复",
-          liveRunHint.runId ? ("run: " + liveRunHint.runId) : "",
-          preview ? ("最新输出预览: " + preview) : "",
-        ].filter(Boolean).join("\n");
-      } else {
-        const runtimeShadowHint = buildConversationRuntimeShadowHint(runtimeShadowMeta);
-        if (runtimeShadowHint) {
-          hintEl.textContent = runtimeShadowHint.text;
-          hintEl.title = runtimeShadowHint.title || "";
-        } else {
-          hintEl.title = "";
-        }
-      }
-      renderConversationQuickTips(ctx, runs);
-      renderConversationTrainingPrompt(ctx, runs);
-      refreshConversationRecentAgentsFromRuns(ctx, runs);
-      renderConvComposerRunActions(ctx, runs);
-
+      hintEl.textContent = "";
+      hintEl.title = "";
       const timelineLoading = PCONV.timelineLoadingKey === timelineKey;
       const timelineLoadingBefore = PCONV.timelineBeforeLoadingKey === timelineKey;
       const timelineBeforeError = String(PCONV.timelineBeforeErrorByKey[timelineKey] || "");
@@ -858,6 +830,10 @@
       const timelineHasMoreBefore = hasStoredBeforeFlag
         ? !!PCONV.timelineBeforeHasMoreByKey[timelineKey]
         : (hasSessionTimelineCache ? runs.length >= CONV_PAGE.timelineInitial : runs.length > 0);
+      renderConversationQuickTips(ctx, runs);
+      renderConversationTrainingPrompt(ctx, runs, { timelineReady: hasSessionTimelineCache });
+      refreshConversationRecentAgentsFromRuns(ctx, runs);
+      renderConvComposerRunActions(ctx, runs);
       // 找到“最新可展开”的 AI 正文：
       // 1) 只考虑终态消息；
       // 2) 系统回执/恢复摘要不抢自动展开位；

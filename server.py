@@ -1335,9 +1335,28 @@ def _parse_adapter_output_line(adapter_cls: Any, payload: str) -> Optional[dict[
 
 
 def _error_hint(err: str) -> str:
-    e = str(err or "").strip().lower()
+    raw = str(err or "").strip()
+    e = raw.lower()
     if not e:
         return ""
+    if "no such file or directory" in e:
+        missing_path = ""
+        m = re.search(r"No such file or directory:\s*['\"]([^'\"]+)['\"]", raw, re.IGNORECASE)
+        if m:
+            missing_path = str(m.group(1) or "").strip()
+        command = ""
+        if missing_path:
+            try:
+                command = Path(missing_path).name.strip()
+            except Exception:
+                command = ""
+        label = cli_bin_command_name(command or "cli") if command else "CLI"
+        path_desc = f"“{missing_path}”" if missing_path else "当前配置路径"
+        return (
+            f"{label} 启动路径无效：未找到 {path_desc}。"
+            f"请在右上角“系统设置”→“CLI 联通”里修正 {label} 的本机覆盖路径；"
+            "若本机已加入 PATH，可直接清空该项改为自动发现。保存后重启本机服务再重试。"
+        )
     if "timeout>" in e:
         return "执行超时：任务可能已部分完成，但最终总结未写回。可用“回收结果”快速收口。"
     if "interrupted" in e:
@@ -3131,6 +3150,11 @@ def create_cli_session(
     spawn_cmd = list(spawn_bundle.get("cmd") or cmd)
     spawn_cwd = Path(spawn_bundle.get("spawn_cwd") or run_cwd)
     spawn_env = dict(spawn_bundle.get("spawn_env") or os.environ)
+    if cli_type == "codex" and str(spawn_bundle.get("mode") or "") == "codex_ascii_workspace_mirror":
+        # Session creation itself is more reliable in the real project directory.
+        # The ASCII mirror helps some run/announce flows, but Codex create-session
+        # in the mirrored path can fail to resolve the local wrapper correctly.
+        spawn_cwd = run_cwd
 
     try:
         proc = subprocess.run(
