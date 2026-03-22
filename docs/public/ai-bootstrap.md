@@ -19,6 +19,13 @@
 - 如果当前电脑的 `codex` 已准备好，默认启动批次文件能指导 AI 拉起 12 个通道的 Agent
 - 每个通道的 Agent 知道先去看自己负责通道中的文件和知识沉淀
 
+补充边界：
+
+- Qoreon 本身不内置 AI CLI
+- 它依赖用户电脑本地已经安装可用的 CLI
+- 当前预览版默认和推荐优先使用 `codex`
+- 其他适配类型如 `claude` / `opencode` / `gemini` / `trae` 属于可扩展路径，不是当前默认启动路径
+
 ## 1. 先读这几份文件
 
 1. `AGENTS.md`
@@ -46,6 +53,8 @@ python3 scripts/start_standard_project.py
 ```
 
 这是默认的完整安装入口。目标不是“只把页面起起来”，而是让 `standard_project` 在安装完成后就带默认通道会话。
+
+这里的默认会话创建，本质上是在调用用户电脑本地的 `codex` CLI。
 
 这条命令会做 5 件事：
 

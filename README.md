@@ -13,6 +13,26 @@ You no longer use one AI directly. You manage an AI team.
 
 Run locally, connect Codex and other CLI agents, and add one unified coordination layer on top.
 
+## CLI Dependency / CLI 依赖说明
+
+Qoreon 本身不会内置 `codex`、Claude Code、OpenCode、Gemini CLI 或 Trae CLI。
+它依赖目标电脑本地已经安装并可用的 AI CLI。
+
+Qoreon does not bundle `codex`, Claude Code, OpenCode, Gemini CLI, or Trae CLI.
+It depends on AI CLIs that are already installed and usable on the target computer.
+
+当前预览版的默认与推荐路径是：
+
+- 优先使用 `Codex CLI`
+- 当前公开安装文档和默认示例项目主要按 `codex` 验证
+- 如果你要切到其他 CLI，需要自己调整 `standard_project` 对应通道的 `cli_type`
+
+For this preview release, the recommended path is:
+
+- use `Codex CLI` first
+- the public install path and default example project are mainly validated against `codex`
+- if you want another CLI, update the relevant `cli_type` values in `standard_project`
+
 ## Why Qoreon
 
 大多数 AI 工具停留在“一次提问，一次回答”。
@@ -98,10 +118,11 @@ This is the recommended path if you want to test the public package on another m
 
 1. Use Python `3.11+`
 2. If you only want to run the pages and standard project, Python is enough.
-3. If you also want to activate the built-in example agents, the current public example defaults to `codex`:
+3. If you also want to activate the built-in example agents, this software still depends on a local AI CLI. The current public example defaults to `codex`:
    - install and log in to Codex CLI first
    - make sure `~/.codex/sessions` is writable
    - if you want another CLI, change the example project's `cli_type` before activation
+   - other CLI types can be adapted, but this preview release recommends Codex first
 4. Copy config if needed:
 
 ```bash

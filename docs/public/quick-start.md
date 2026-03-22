@@ -3,12 +3,16 @@
 ## 1. 准备环境
 
 - Python 3.11+
+- Qoreon 不会内置 AI CLI，本机需要自己安装可用的 CLI
+- 当前支持适配的类型包括：`codex`、`claude`、`opencode`、`gemini`、`trae`
+- 但当前预览版的默认与推荐路径是：优先使用 `codex`
 - 如果你只想先把页面和标准项目跑起来，Python 就够了
 - 如果你还想激活内置 Agent，当前公开示例默认使用 `codex`
 - 激活前请确认：
   - `codex` 已安装并完成登录
   - `~/.codex/sessions` 可写
   - 若你要改成 `claude` / `gemini` / `opencode` / `trae`，先修改标准项目对应通道的 `cli_type`
+  - 其他 CLI 可以接入，但这版对外文档、默认种子和主要验证链路都优先按 `codex` 给出
 
 ## 2. 新电脑推荐路径
 
@@ -21,6 +25,8 @@ python3 scripts/start_standard_project.py
 ```
 
 这是“完整安装”入口。目标结果是：页面启动后，`standard_project` 里直接带默认通道 Agent 会话。
+
+这里的“默认 Agent 会话”依赖本机 `codex` CLI 可用，不是 Qoreon 自带了一个内置执行器。
 
 这条命令会完成：
 
@@ -52,6 +58,7 @@ python3 scripts/start_standard_project.py --with-agents
 - 如果这个探测通过，就继续把默认 12 个通道会话建出来。
 - 如果这个探测被认证/环境阻塞，安装器不会一直卡住；它会保留页面安装结果，并明确提示你把 `startup-batch.md` 交给本机 AI 接手。
 - 所以“能打开 codex CLI”是一个好信号，但不等于“后台无交互批量建会话”一定没问题。
+- 如果你后面要切到 Claude Code、OpenCode、Gemini CLI 或 Trae CLI，请把它视为“进阶接入”，不要当成当前预览版的默认路径。
 
 ## 2.1 页面模式和完整模式的区别
 
