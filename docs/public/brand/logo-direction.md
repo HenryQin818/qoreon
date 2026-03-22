@@ -2,6 +2,10 @@
 
 这不是最终品牌手册，而是 Qoreon 第一轮可执行 Logo 方向。
 
+当前公开仓默认品牌图已切到：
+
+- `assets/brand/qoreon-logo-primary.png`
+
 ## 品牌判断
 
 Qoreon 的核心不是“聊天”，而是“控制层”。
@@ -81,10 +85,11 @@ Qoreon 的核心不是“聊天”，而是“控制层”。
 - 中文说明：中性无衬线
 - 不建议圆润可爱风
 
-## 已落地的草图文件
+## 已落地的品牌资产
 
-- `assets/brand/qoreon-symbol.svg`
-- `assets/brand/qoreon-banner.svg`
+- 当前主图：`assets/brand/qoreon-logo-primary.png`
+- 历史草图：`assets/brand/qoreon-symbol.svg`
+- 历史横幅：`assets/brand/qoreon-banner.svg`
 
 ## 使用建议
 
@@ -92,13 +97,21 @@ Qoreon 的核心不是“聊天”，而是“控制层”。
 
 优先使用：
 
-- 深底版本 `qoreon-symbol.svg`
+- `qoreon-logo-primary.png`
 
 ### README 首屏
 
 优先使用：
 
-- 横幅版本 `qoreon-banner.svg`
+- `qoreon-logo-primary.png`
+
+### 系统配图页
+
+与 Logo 一起使用的系统截图固定为：
+
+- `assets/screenshots/home-project-list.png`
+- `assets/screenshots/project-dialog-detail.png`
+- `assets/screenshots/message-flow-board.png`
 
 ### 后续官网
 

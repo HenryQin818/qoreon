@@ -1,6 +1,6 @@
 # Qoreon v1 Candidate
 
-![Qoreon Banner](../../assets/brand/qoreon-banner.svg)
+![Qoreon Logo](../../assets/brand/qoreon-logo-primary.png)
 
 Qoreon is the control layer between human intent and AI execution.
 
@@ -26,27 +26,25 @@ The first thing it is trying to prove is simpler:
 
 ## What It Looks Like
 
-### Overview
+### Home Project List
 
-![Overview Dashboard](../../assets/screenshots/overview-dashboard.png)
+![Home Project List](../../assets/screenshots/home-project-list.png)
 
-This is the first “understand the project” page.
+This is the first “understand the public project” page.
 
-### Task Workspace
+### Project Dialog Detail
 
-![Task Workspace](../../assets/screenshots/task-detail.png)
+![Project Dialog Detail](../../assets/screenshots/project-dialog-detail.png)
 
 This is where channels, task files, receipts, and AI execution meet.
 
-### Agent Directory
+### Message Flow Board
 
-![Agent Directory](../../assets/screenshots/agent-directory.png)
+![Message Flow Board](../../assets/screenshots/message-flow-board.png)
 
-This is where the public project shows roles, ownership, and collaboration boundaries.
+This is where the public project shows dispatch, blocked states, and cross-channel message movement.
 
 ## The Public Install Path
-
-![Install Flow](../../assets/diagrams/install-flow.svg)
 
 Recommended path on a new computer:
 
@@ -67,8 +65,6 @@ Then open:
 - `http://127.0.0.1:18770/__health`
 
 ## Why The Public Package Converges To `standard_project`
-
-![Standard Project Map](../../assets/diagrams/standard-project-map.svg)
 
 This repository intentionally converges to one default public project:
 
@@ -101,6 +97,11 @@ Inside `standard_project`, the public package already ships:
 - install and startup scripts
 - AI bootstrap instructions
 - screenshots and brand assets for GitHub presentation
+- core display assets:
+  - `assets/brand/qoreon-logo-primary.png`
+  - `assets/screenshots/home-project-list.png`
+  - `assets/screenshots/project-dialog-detail.png`
+  - `assets/screenshots/message-flow-board.png`
 
 ## What Does Not Ship
 

@@ -2,6 +2,10 @@
 
 这份文件用于把 Qoreon 的 GitHub 仓首页一次性配齐。
 
+当前正式线上仓库：
+
+- `https://github.com/HenryQin818/qoreon`
+
 ## 1. 仓名建议
 
 截至 2026-03-20，本地核查与 GitHub 页面观察结果是：
@@ -56,7 +60,22 @@
 
 `Run an AI team locally. Organize channels, tasks, seed packs, and execution in one control layer.`
 
-## 4. README 首屏目标
+## 4. 首页核心图片资源
+
+当前 GitHub 首页与发布说明只使用这 4 张核心图片：
+
+- 品牌主图：`assets/brand/qoreon-logo-primary.png`
+- 首页项目清单：`assets/screenshots/home-project-list.png`
+- 项目对话详情：`assets/screenshots/project-dialog-detail.png`
+- 消息发送情况：`assets/screenshots/message-flow-board.png`
+
+约束：
+
+- 不再混用旧的横幅草图、流程图、结构图
+- 首页最多展示 `1` 张 Logo + `3` 张系统截图
+- 截图顺序固定为：项目清单 -> 对话详情 -> 消息发送
+
+## 5. README 首屏目标
 
 GitHub 首页首屏只做 4 件事：
 
@@ -65,7 +84,7 @@ GitHub 首页首屏只做 4 件事：
 3. 给出 3 步试跑路径
 4. 让外部 AI 或开发者知道先看 `ai-bootstrap`
 
-## 5. 首屏必须保留的内容
+## 6. 首屏必须保留的内容
 
 - 品牌图
 - 一句话定位
@@ -74,7 +93,7 @@ GitHub 首页首屏只做 4 件事：
 - 文档阅读顺序
 - 公开边界声明
 
-## 6. 不建议放在首页首屏的内容
+## 7. 不建议放在首页首屏的内容
 
 - 长篇背景故事
 - 复杂架构图

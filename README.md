@@ -1,6 +1,6 @@
 # Qoreon
 
-![Qoreon Banner](assets/brand/qoreon-banner.svg)
+![Qoreon Logo](assets/brand/qoreon-logo-primary.png)
 
 Qoreon is the control layer between human intent and AI execution.
 
@@ -20,23 +20,23 @@ Most AI tooling stops at "one prompt, one answer". Qoreon is built for a differe
 
 ## What It Looks Like
 
-### Overview Dashboard
+### Home Project List
 
-![Overview Dashboard](assets/screenshots/overview-dashboard.png)
+![Home Project List](assets/screenshots/home-project-list.png)
 
-The overview page is where a user understands the current project shape, key workstreams, and what to open next.
+The home page is where a new user sees the public project list, the default standard project, and the first entry points they should open.
 
-### Task Workspace
+### Project Dialog Detail
 
-![Task Workspace](assets/screenshots/task-detail.png)
+![Project Dialog Detail](assets/screenshots/project-dialog-detail.png)
 
-The task workspace is where channels, tasks, receipts, and AI collaboration happen in one place.
+The dialog detail page is where channels, tasks, receipts, training prompts, and AI collaboration stay visible together.
 
-### Agent Directory
+### Message Flow Board
 
-![Agent Directory](assets/screenshots/agent-directory.png)
+![Message Flow Board](assets/screenshots/message-flow-board.png)
 
-The agent directory makes roles, ownership, and collaboration boundaries visible instead of hiding them in prompts.
+The message flow board makes multi-agent dispatch, receipts, blocked states, and cross-channel coordination visible at a glance.
 
 ## What Ships In V1
 
@@ -64,17 +64,11 @@ What is already embedded in `standard_project`:
 - AI startup batch path
 - installation and bootstrap docs
 
-### Standard Project Map
-
-![Standard Project Map](assets/diagrams/standard-project-map.svg)
-
 The public package is intentionally centered on one default project so installation, AI bootstrap, governance, and validation all point to the same workspace.
 
 ## Install On A New Computer
 
 This is the recommended path if you want to test the public package on another machine.
-
-![Install Flow](assets/diagrams/install-flow.svg)
 
 1. Use Python `3.11+`
 2. If you only want to run the pages and standard project, Python is enough.
@@ -172,6 +166,11 @@ The current public delivery line is prepared as a GitHub preview release.
 - default project: `standard_project`
 - recommended install: `python3 scripts/start_standard_project.py`
 - fallback behavior: if background Codex session creation is blocked, keep the page install result and hand `startup-batch.md` to the local AI
+- core display assets:
+  - `assets/brand/qoreon-logo-primary.png`
+  - `assets/screenshots/home-project-list.png`
+  - `assets/screenshots/project-dialog-detail.png`
+  - `assets/screenshots/message-flow-board.png`
 
 ## First Page Pointers For GitHub Visitors
 
