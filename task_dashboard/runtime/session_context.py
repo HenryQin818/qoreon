@@ -24,6 +24,19 @@ _PROJECT_SOURCE_CONTEXT_CACHE: dict[tuple[str, str, str], dict[str, Any]] = {}
 _WORK_CONTEXT_CACHE_LOCK = threading.Lock()
 
 
+def clear_work_context_cache(project_id: str = "") -> None:
+    pid = str(project_id or "").strip()
+    with _WORK_CONTEXT_CACHE_LOCK:
+        if not pid:
+            _SERVER_DEFAULT_CONTEXT_CACHE.clear()
+            _PROJECT_SOURCE_CONTEXT_CACHE.clear()
+            return
+        for cache in (_SERVER_DEFAULT_CONTEXT_CACHE, _PROJECT_SOURCE_CONTEXT_CACHE):
+            stale_keys = [key for key in cache.keys() if str((key or ("", "", ""))[0] or "").strip() == pid]
+            for key in stale_keys:
+                cache.pop(key, None)
+
+
 def _cache_get(
     cache: dict[tuple[str, str, str], dict[str, Any]],
     key: tuple[str, str, str],
@@ -296,22 +309,13 @@ def apply_session_work_context(
     load_project_execution_context: Callable[..., dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     row = dict(session if isinstance(session, dict) else {})
-    stored_context = row.get("project_execution_context") if isinstance(row.get("project_execution_context"), dict) else {}
-    looks_persisted_session = bool(
-        str(row.get("id") or "").strip()
-        or str(row.get("created_at") or "").strip()
-        or str(row.get("status") or "").strip()
-    )
-    effective_project_context_loader = load_project_execution_context
-    if looks_persisted_session:
-        effective_project_context_loader = None
     bundle = _resolve_session_work_context_bundle(
         row,
         project_id=project_id,
         environment_name=environment_name,
         worktree_root=worktree_root,
         resolve_project_workdir=resolve_project_workdir,
-        load_project_execution_context=effective_project_context_loader,
+        load_project_execution_context=load_project_execution_context,
     )
     effective_context = dict(bundle.get("effective_context") or {})
     source_context = dict(bundle.get("source_context") or {})

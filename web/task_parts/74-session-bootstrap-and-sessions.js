@@ -84,6 +84,200 @@
       }
     }
 
+    function resolveConversationSessionPresentation(raw, channelName, sessionId) {
+      const alias = String((raw && raw.alias) || "").trim();
+      const channel = String(channelName || "").trim();
+      const sid = String(sessionId || "").trim();
+      const explicitDisplayChannel = String(
+        (raw && (
+          raw.displayChannel ||
+          raw.display_channel ||
+          raw.display_name
+        )) || ""
+      ).trim();
+      const explicitDisplayName = String(
+        (raw && (
+          raw.displayName ||
+          raw.display_name ||
+          raw.displayChannel ||
+          raw.display_channel
+        )) || ""
+      ).trim();
+      let displayNameSource = String(
+        (raw && (
+          raw.displayNameSource ||
+          raw.display_name_source
+        )) || ""
+      ).trim();
+      const displayChannel = alias || explicitDisplayChannel || channel || sid;
+      const displayName = alias || explicitDisplayName || displayChannel || channel || sid;
+      if (alias) displayNameSource = "alias";
+      else if (!displayNameSource && explicitDisplayName) displayNameSource = "display_name";
+      else if (!displayNameSource && channel) displayNameSource = "channel_name";
+      else if (!displayNameSource && sid) displayNameSource = "session_id";
+      return {
+        alias,
+        displayChannel,
+        displayName,
+        displayNameSource,
+      };
+    }
+
+    function ensureConversationSessionDirectoryStateMaps() {
+      if (!PCONV.sessionDirectoryByProject || typeof PCONV.sessionDirectoryByProject !== "object") {
+        PCONV.sessionDirectoryByProject = Object.create(null);
+      }
+      if (!PCONV.sessionDirectoryMetaByProject || typeof PCONV.sessionDirectoryMetaByProject !== "object") {
+        PCONV.sessionDirectoryMetaByProject = Object.create(null);
+      }
+      if (!PCONV.sessionDirectoryPromiseByProject || typeof PCONV.sessionDirectoryPromiseByProject !== "object") {
+        PCONV.sessionDirectoryPromiseByProject = Object.create(null);
+      }
+    }
+
+    function markConversationSessionDirectoryMeta(projectId, extra = {}) {
+      const pid = String(projectId || "").trim();
+      if (!pid) return;
+      ensureConversationSessionDirectoryStateMaps();
+      const current = (PCONV.sessionDirectoryMetaByProject && PCONV.sessionDirectoryMetaByProject[pid]) || {};
+      PCONV.sessionDirectoryMetaByProject[pid] = {
+        ...current,
+        ...extra,
+        liveLoaded: extra && Object.prototype.hasOwnProperty.call(extra, "liveLoaded")
+          ? !!extra.liveLoaded
+          : !!current.liveLoaded,
+        loadedAt: String((extra && extra.loadedAt) || current.loadedAt || new Date().toISOString()),
+        source: String((extra && extra.source) || current.source || ""),
+        error: String((extra && extra.error) || ""),
+      };
+    }
+
+    function formatConversationSessionsFromApi(projectId, sessions) {
+      const pid = String(projectId || "").trim();
+      return (Array.isArray(sessions) ? sessions : []).map((s) => {
+        const sid = firstNonEmptyText([s.id, s.session_id, s.sessionId]);
+        const channelName = String(s.channel_name || "");
+        const presentation = resolveConversationSessionPresentation(s, channelName, sid);
+        const runtimeState = normalizeRuntimeState(s.runtime_state || s.runtimeState || null);
+        const latestRunSummary = normalizeLatestRunSummary(s.latest_run_summary || s.latestRunSummary || null);
+        const sessionDisplayState = normalizeDisplayState(
+          firstNonEmptyText([s.session_display_state, s.sessionDisplayState, runtimeState.display_state]) || "idle",
+          "idle"
+        );
+        const rawHeartbeat = (s.heartbeat && typeof s.heartbeat === "object") ? s.heartbeat : {};
+        const heartbeatItems = Array.isArray(rawHeartbeat.items)
+          ? normalizeHeartbeatTaskItemsClient(rawHeartbeat.items, pid, rawHeartbeat)
+          : [];
+        const heartbeatSummary = normalizeHeartbeatSummaryClient(
+          s.heartbeat_summary || s.heartbeatSummary || rawHeartbeat.summary || {},
+          heartbeatItems
+        );
+        return {
+          sessionId: String(sid || ""),
+          id: String(sid || ""),
+          project_id: pid,
+          channel_name: channelName,
+          environment: String(s.environment || "stable"),
+          worktree_root: String(s.worktree_root || s.worktreeRoot || ""),
+          workdir: String(s.workdir || ""),
+          branch: String(s.branch || ""),
+          primaryChannel: channelName,
+          channels: [channelName],
+          alias: presentation.alias,
+          displayChannel: presentation.displayChannel,
+          displayName: presentation.displayName,
+          displayNameSource: presentation.displayNameSource,
+          codexTitle: String(s.codex_title || ""),
+          cli_type: String(s.cli_type || "codex"),
+          model: normalizeSessionModel(s.model),
+          reasoning_effort: normalizeReasoningEffort(s.reasoning_effort || s.reasoningEffort),
+          status: String(s.status || "active"),
+          created_at: String(s.created_at || ""),
+          last_used_at: String(s.last_used_at || ""),
+          is_primary: !!s.is_primary,
+          source: String(s.source || ""),
+          lastActiveAt: String(s.lastActiveAt || latestRunSummary.updated_at || s.last_used_at || ""),
+          lastStatus: sessionDisplayState,
+          lastPreview: String(s.lastPreview || latestRunSummary.preview || ""),
+          lastTimeout: false,
+          lastError: String(s.lastError || latestRunSummary.error || ""),
+          lastErrorHint: "",
+          lastSpeaker: String(s.lastSpeaker || latestRunSummary.speaker || "assistant"),
+          lastSenderType: String(s.lastSenderType || latestRunSummary.sender_type || "legacy"),
+          lastSenderName: String(s.lastSenderName || latestRunSummary.sender_name || ""),
+          lastSenderSource: String(s.lastSenderSource || latestRunSummary.sender_source || "legacy"),
+          runCount: Math.max(0, Number(s.runCount || latestRunSummary.run_count || 0) || 0),
+          latestUserMsg: String(s.latestUserMsg || latestRunSummary.latest_user_msg || ""),
+          latestAiMsg: String(s.latestAiMsg || latestRunSummary.latest_ai_msg || ""),
+          session_display_state: sessionDisplayState,
+          session_display_reason: String(firstNonEmptyText([s.session_display_reason, s.sessionDisplayReason]) || ""),
+          latest_run_summary: latestRunSummary,
+          runtime_state: runtimeState,
+          heartbeat_summary: heartbeatSummary,
+        };
+      });
+    }
+
+    async function fetchConversationSessionsFromApi(projectId, channelName) {
+      const pid = String(projectId || "").trim();
+      if (!pid || pid === "overview") return [];
+      const qs = new URLSearchParams();
+      qs.set("project_id", pid);
+      if (channelName) qs.set("channel_name", String(channelName));
+      const r = await fetch("/api/sessions?" + qs.toString(), { cache: "no-store" });
+      if (!r.ok) {
+        throw new Error("loadChannelSessions failed: " + String(r.status || "unknown"));
+      }
+      const j = await r.json();
+      const sessions = Array.isArray(j && j.sessions) ? j.sessions : [];
+      return formatConversationSessionsFromApi(pid, sessions);
+    }
+
+    async function ensureConversationProjectSessionDirectory(projectId, opts = {}) {
+      const pid = String(projectId || "").trim();
+      if (!pid || pid === "overview") return [];
+      ensureConversationSessionDirectoryStateMaps();
+      const force = !!(opts && opts.force);
+      const existing = Array.isArray(PCONV.sessionDirectoryByProject[pid])
+        ? PCONV.sessionDirectoryByProject[pid].slice()
+        : [];
+      const meta = PCONV.sessionDirectoryMetaByProject[pid] || null;
+      if (!force && meta && meta.liveLoaded && Array.isArray(PCONV.sessionDirectoryByProject[pid])) {
+        return existing;
+      }
+      if (!force && PCONV.sessionDirectoryPromiseByProject[pid]) {
+        return PCONV.sessionDirectoryPromiseByProject[pid];
+      }
+      const task = (async () => {
+        try {
+          const serverSessions = await fetchConversationSessionsFromApi(pid, "");
+          const merged = mergeConversationSessions(configuredProjectConversations(pid), serverSessions);
+          PCONV.sessionDirectoryByProject[pid] = merged.slice();
+          markConversationSessionDirectoryMeta(pid, {
+            liveLoaded: true,
+            source: "api",
+            loadedAt: new Date().toISOString(),
+            error: "",
+          });
+          return merged.slice();
+        } catch (err) {
+          const fallback = existing.length ? existing : mergeConversationSessions(configuredProjectConversations(pid), []);
+          if (!existing.length) PCONV.sessionDirectoryByProject[pid] = fallback.slice();
+          markConversationSessionDirectoryMeta(pid, {
+            liveLoaded: false,
+            source: existing.length ? "cache" : "config",
+            loadedAt: new Date().toISOString(),
+            error: String((err && err.message) || err || "unknown"),
+          });
+          return fallback.slice();
+        } finally {
+          delete PCONV.sessionDirectoryPromiseByProject[pid];
+        }
+      })();
+      PCONV.sessionDirectoryPromiseByProject[pid] = task;
+      return task;
+    }
+
     async function createNewConversation() {
       const projSelect = document.getElementById("newConvProject");
       const chSelect = document.getElementById("newConvChannel");
@@ -92,6 +286,7 @@
       const sidInput = document.getElementById("newConvSessionId");
       const modelInput = document.getElementById("newConvModel");
       const purposeInput = document.getElementById("newConvPurpose");
+      const aliasInput = document.getElementById("newConvAlias");
       const sessionRoleInput = document.getElementById("newConvSessionRole");
       const reuseStrategyInput = document.getElementById("newConvReuseStrategy");
       const environmentInput = document.getElementById("newConvEnvironment");
@@ -107,6 +302,7 @@
       const sidFromInput = String((sidInput && sidInput.value) || "").trim();
       const model = normalizeSessionModel(modelInput && modelInput.value);
       const purpose = String((purposeInput && purposeInput.value) || "").trim();
+      const alias = String((aliasInput && aliasInput.value) || "").trim();
       const sessionRole = String((sessionRoleInput && sessionRoleInput.value) || "child").trim() || "child";
       const reuseStrategy = String((reuseStrategyInput && reuseStrategyInput.value) || "create_new").trim() || "create_new";
       const environment = normalizeSessionEnvironmentValue((environmentInput && environmentInput.value) || "stable");
@@ -159,6 +355,7 @@
               session_id: sidFromInput,
               cli_type: cli,
               model,
+              alias,
               purpose,
               session_role: sessionRole,
               reuse_strategy: "attach_existing",
@@ -211,6 +408,7 @@
               channel_name: ch,
               cli_type: cli,
               model,
+              alias,
               purpose,
               session_role: sessionRole,
               reuse_strategy: reuseStrategy,
@@ -317,76 +515,7 @@
         return;
       }
       try {
-        const qs = new URLSearchParams();
-        qs.set("project_id", String(projectId));
-        if (channelName) qs.set("channel_name", String(channelName));
-        const r = await fetch("/api/sessions?" + qs.toString(), { cache: "no-store" });
-        if (!r.ok) {
-          console.error("loadChannelSessions failed:", r.status);
-          return;
-        }
-        const j = await r.json();
-        const sessions = Array.isArray(j && j.sessions) ? j.sessions : [];
-        // 转换为前端统一格式
-        const formatted = sessions.map(s => {
-          const sid = firstNonEmptyText([s.id, s.session_id, s.sessionId]);
-          const runtimeState = normalizeRuntimeState(s.runtime_state || s.runtimeState || null);
-          const latestRunSummary = normalizeLatestRunSummary(s.latest_run_summary || s.latestRunSummary || null);
-          const sessionDisplayState = normalizeDisplayState(
-            firstNonEmptyText([s.session_display_state, s.sessionDisplayState, runtimeState.display_state]) || "idle",
-            "idle"
-          );
-          const rawHeartbeat = (s.heartbeat && typeof s.heartbeat === "object") ? s.heartbeat : {};
-          const heartbeatItems = Array.isArray(rawHeartbeat.items)
-            ? normalizeHeartbeatTaskItemsClient(rawHeartbeat.items, String(projectId || STATE.project || "").trim(), rawHeartbeat)
-            : [];
-          const heartbeatSummary = normalizeHeartbeatSummaryClient(
-            s.heartbeat_summary || s.heartbeatSummary || rawHeartbeat.summary || {},
-            heartbeatItems
-          );
-          return {
-            sessionId: String(sid || ""),
-            id: String(sid || ""),
-            channel_name: String(s.channel_name || ""),
-            environment: String(s.environment || "stable"),
-            worktree_root: String(s.worktree_root || s.worktreeRoot || ""),
-            workdir: String(s.workdir || ""),
-            branch: String(s.branch || ""),
-            primaryChannel: String(s.channel_name || ""),
-            channels: [String(s.channel_name || "")],
-            alias: String(s.alias || s.display_name || s.channel_name || ""),
-            displayChannel: String(s.display_name || s.alias || s.channel_name || ""),
-            displayName: String(s.display_name || s.alias || s.channel_name || ""),
-            displayNameSource: String(s.display_name_source || ""),
-            codexTitle: String(s.codex_title || ""),
-            cli_type: String(s.cli_type || "codex"),
-            model: normalizeSessionModel(s.model),
-            reasoning_effort: normalizeReasoningEffort(s.reasoning_effort || s.reasoningEffort),
-            status: String(s.status || "active"),
-            created_at: String(s.created_at || ""),
-            last_used_at: String(s.last_used_at || ""),
-            is_primary: !!s.is_primary,
-            source: String(s.source || ""),
-            lastActiveAt: String(s.lastActiveAt || latestRunSummary.updated_at || s.last_used_at || ""),
-            lastStatus: sessionDisplayState,
-            lastPreview: String(s.lastPreview || latestRunSummary.preview || ""),
-            lastTimeout: false,
-            lastError: String(s.lastError || latestRunSummary.error || ""),
-            lastErrorHint: "",
-            lastSpeaker: String(s.lastSpeaker || latestRunSummary.speaker || "assistant"),
-            lastSenderType: String(s.lastSenderType || latestRunSummary.sender_type || "legacy"),
-            lastSenderName: String(s.lastSenderName || latestRunSummary.sender_name || ""),
-            lastSenderSource: String(s.lastSenderSource || latestRunSummary.sender_source || "legacy"),
-            runCount: Math.max(0, Number(s.runCount || latestRunSummary.run_count || 0) || 0),
-            latestUserMsg: String(s.latestUserMsg || latestRunSummary.latest_user_msg || ""),
-            latestAiMsg: String(s.latestAiMsg || latestRunSummary.latest_ai_msg || ""),
-            session_display_state: sessionDisplayState,
-            session_display_reason: String(firstNonEmptyText([s.session_display_reason, s.sessionDisplayReason]) || ""),
-            latest_run_summary: latestRunSummary,
-            runtime_state: runtimeState,
-            heartbeat_summary: heartbeatSummary,
-          };
-        });
+        const formatted = await fetchConversationSessionsFromApi(projectId, channelName);
         // 更新 PCONV.sessions
         if (channelName) {
           // 只更新当前通道的会话，保留其他通道的会话
@@ -394,6 +523,14 @@
           PCONV.sessions = [...otherSessions, ...formatted];
         } else {
           PCONV.sessions = formatted;
+          ensureConversationSessionDirectoryStateMaps();
+          PCONV.sessionDirectoryByProject[String(projectId)] = mergeConversationSessions(configuredProjectConversations(projectId), formatted);
+          markConversationSessionDirectoryMeta(projectId, {
+            liveLoaded: true,
+            source: "api",
+            loadedAt: new Date().toISOString(),
+            error: "",
+          });
         }
         PCONV.lastRefreshAt = new Date().toLocaleTimeString("zh-CN", { hour12: false });
       } catch (err) {
@@ -409,6 +546,7 @@
         raw.channel_name || raw.primaryChannel || raw.name ||
         (Array.isArray(raw.channels) && raw.channels.length ? raw.channels[0] : "")
       ).trim();
+      const presentation = resolveConversationSessionPresentation(raw, channelName, sid);
       const channels = Array.isArray(raw.channels)
         ? raw.channels.map(x => String(x || "").trim()).filter(Boolean)
         : [];
@@ -428,10 +566,10 @@
         channel_name: channelName,
         primaryChannel: channelName || "",
         channels,
-        alias: String(raw.alias || raw.display_name || raw.displayChannel || channelName || sid),
-        displayChannel: String(raw.displayChannel || raw.display_name || channelName || raw.alias || sid),
-        displayName: String(raw.displayName || raw.display_name || raw.displayChannel || raw.alias || channelName || sid),
-        displayNameSource: String(raw.displayNameSource || raw.display_name_source || ""),
+        alias: presentation.alias,
+        displayChannel: presentation.displayChannel,
+        displayName: presentation.displayName,
+        displayNameSource: presentation.displayNameSource,
         codexTitle: String(raw.codexTitle || raw.codex_title || ""),
         environment: normalizeSessionEnvironmentValue(raw.environment || raw.environmentName || "stable"),
         worktree_root: String(raw.worktree_root || raw.worktreeRoot || ""),
@@ -526,17 +664,25 @@
           firstNonEmptyText([n.session_display_state, n.sessionDisplayState, nextRuntime.display_state]) || "idle",
           "idle"
         );
+        const mergedAlias = String(n.alias || prev.alias || "").trim();
+        const mergedChannelName = String(n.channel_name || prev.channel_name || "").trim();
+        const mergedPresentation = resolveConversationSessionPresentation({
+          alias: mergedAlias,
+          displayChannel: n.displayChannel || prev.displayChannel || "",
+          displayName: n.displayName || prev.displayName || "",
+          display_name_source: n.displayNameSource || prev.displayNameSource || "",
+        }, mergedChannelName, n.sessionId);
         map.set(n.sessionId, {
           ...prev,
           ...n,
           channels,
           channel_name: n.channel_name || prev.channel_name,
           primaryChannel: n.primaryChannel || prev.primaryChannel,
-          displayChannel: n.displayChannel || prev.displayChannel,
-          displayName: n.displayName || prev.displayName,
-          displayNameSource: n.displayNameSource || prev.displayNameSource,
+          displayChannel: mergedPresentation.displayChannel,
+          displayName: mergedPresentation.displayName,
+          displayNameSource: mergedPresentation.displayNameSource,
           codexTitle: n.codexTitle || prev.codexTitle,
-          alias: n.alias || prev.alias,
+          alias: mergedAlias,
           cli_type: n.cli_type || prev.cli_type,
           model: normalizeSessionModel(n.model || prev.model),
           reasoning_effort: normalizeReasoningEffort(n.reasoning_effort || prev.reasoning_effort),

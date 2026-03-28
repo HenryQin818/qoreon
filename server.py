@@ -73,6 +73,7 @@ from task_dashboard.session_health import (
 )
 from task_dashboard.runtime.session_context import (
     apply_session_work_context as runtime_apply_session_work_context,
+    clear_work_context_cache as runtime_clear_work_context_cache,
     detect_git_branch as runtime_detect_git_branch,
     derive_session_work_context as runtime_derive_session_work_context,
     resolve_run_work_context as runtime_resolve_run_work_context,
@@ -1705,6 +1706,7 @@ def _clear_dashboard_cfg_cache() -> None:
         _DASHBOARD_CFG_CACHE["signature"] = ()
         _DASHBOARD_CFG_CACHE["with_local"] = False
         _DASHBOARD_CFG_CACHE["checked_at_mono"] = 0.0
+    runtime_clear_work_context_cache()
 
 
 def _schedule_queue_cache_enabled() -> bool:
@@ -1875,19 +1877,27 @@ def _resolve_runtime_project_id(
     preferred = str(os.environ.get("TASK_DASHBOARD_PROJECT_ID") or "").strip()
     if preferred and preferred in ids:
         return preferred
-    port_map = {
-        18765: "task_dashboard_prod",
-        18766: "task_dashboard_dev",
-        18767: "task_dashboard_prod_mirror",
+    port_candidates = {
+        18765: ("task_dashboard", "task_dashboard_prod"),
+        18766: ("task_dashboard_dev",),
+        18767: ("task_dashboard_prod_mirror",),
+        18768: ("task_dashboard_dev_control", "task_dashboard_dev"),
+        18769: ("task_dashboard_prod_debug",),
     }
-    mapped = port_map.get(int(port or 0), "")
-    if mapped and mapped in ids:
-        return mapped
+    for candidate in port_candidates.get(int(port or 0), ()):
+        if candidate in ids:
+            return candidate
     env_slug = str(environment_name or "").strip().lower()
-    if env_slug == "dev" and "task_dashboard_dev" in ids:
-        return "task_dashboard_dev"
-    if env_slug == "stable" and "task_dashboard_prod" in ids:
-        return "task_dashboard_prod"
+    if env_slug == "dev":
+        for candidate in ("task_dashboard_dev_control", "task_dashboard_dev"):
+            if candidate in ids:
+                return candidate
+    if env_slug == "stable":
+        for candidate in ("task_dashboard", "task_dashboard_prod"):
+            if candidate in ids:
+                return candidate
+    if env_slug == "refactor" and "task_dashboard_prod_debug" in ids:
+        return "task_dashboard_prod_debug"
     return _default_project_id_from_cfg(cfg)
 
 
@@ -2516,6 +2526,8 @@ def _reveal_allowed_roots() -> list[Path]:
             task_root_rel = str(p.get("task_root_rel") or "").strip()
             _add_root(_resolve_dir(project_root_rel, repo_root))
             _add_root(_resolve_dir(task_root_rel, repo_root))
+    for extra_root in _extra_allowed_fs_roots():
+        _add_root(extra_root)
     return roots
 
 
@@ -2527,6 +2539,81 @@ _TEXT_PREVIEW_EXTS = {
 }
 _FS_PREVIEW_MAX_BYTES = 120_000
 _FS_PREVIEW_DIR_LIMIT = 80
+
+
+def _truthy_flag(raw: Any) -> bool:
+    if isinstance(raw, bool):
+        return raw
+    return str(raw or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _fs_access_cfg() -> dict[str, Any]:
+    cfg = _load_dashboard_cfg_current()
+    raw = cfg.get("fs_access")
+    return raw if isinstance(raw, dict) else {}
+
+
+def _extra_allowed_fs_roots() -> list[Path]:
+    repo_root = _repo_root()
+    roots: list[Path] = []
+    seen: set[str] = set()
+
+    def _add_spec(raw: Any) -> None:
+        spec = _safe_text(raw, 4000).strip()
+        if not spec:
+            return
+        try:
+            candidate = Path(spec).expanduser()
+            resolved = candidate.resolve() if candidate.is_absolute() else (repo_root / candidate).resolve()
+        except Exception:
+            return
+        if not resolved.exists():
+            return
+        key = str(resolved)
+        if key in seen:
+            return
+        seen.add(key)
+        roots.append(resolved)
+
+    env_raw = str(os.environ.get("TASK_DASHBOARD_EXTRA_FS_ROOTS") or "").strip()
+    if env_raw:
+        for part in env_raw.split(os.pathsep):
+            _add_spec(part)
+
+    cfg_roots = _fs_access_cfg().get("extra_allowed_roots")
+    if isinstance(cfg_roots, (list, tuple)):
+        for item in cfg_roots:
+            _add_spec(item)
+    elif isinstance(cfg_roots, str):
+        for item in cfg_roots.splitlines():
+            _add_spec(item)
+
+    return roots
+
+
+def _repair_project_prefixed_path(path: Path) -> Path:
+    try:
+        parts = path.parts
+    except Exception:
+        return path
+    if not parts:
+        return path
+    for idx in range(1, len(parts)):
+        parent_name = parts[idx - 1]
+        name = parts[idx]
+        if parent_name != "项目管理-小秘书":
+            continue
+        if not name or name.startswith("【项目】"):
+            continue
+        try:
+            candidate = Path(*parts[:idx]) / f"【项目】{name}"
+            for tail in parts[idx + 1:]:
+                candidate /= tail
+            if candidate.exists():
+                return candidate.resolve()
+        except Exception:
+            continue
+    return path
 
 
 def _resolve_allowed_fs_path(path_raw: str) -> Path:
@@ -2543,7 +2630,11 @@ def _resolve_allowed_fs_path(path_raw: str) -> Path:
         candidate_workspace = (ws_root / p).resolve()
         pr = candidate_dashboard if candidate_dashboard.exists() else candidate_workspace
     if not pr.exists():
-        raise FileNotFoundError("path not found")
+        repaired = _repair_project_prefixed_path(pr)
+        if repaired.exists():
+            pr = repaired
+        else:
+            raise FileNotFoundError("path not found")
     allowed_roots = _reveal_allowed_roots() or [ws_root]
     allowed = any((pr == root or root in pr.parents) for root in allowed_roots)
     if not allowed:
@@ -3151,9 +3242,7 @@ def create_cli_session(
     spawn_cwd = Path(spawn_bundle.get("spawn_cwd") or run_cwd)
     spawn_env = dict(spawn_bundle.get("spawn_env") or os.environ)
     if cli_type == "codex" and str(spawn_bundle.get("mode") or "") == "codex_ascii_workspace_mirror":
-        # Session creation itself is more reliable in the real project directory.
-        # The ASCII mirror helps some run/announce flows, but Codex create-session
-        # in the mirrored path can fail to resolve the local wrapper correctly.
+        # 创建会话时仍优先在真实项目目录执行，避免镜像目录下本地 wrapper 解析不稳定。
         spawn_cwd = run_cwd
 
     try:

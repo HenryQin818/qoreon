@@ -69,6 +69,7 @@ from task_dashboard.runtime.heartbeat_registry import (
     _clear_dashboard_cfg_cache as runtime_clear_dashboard_cfg_cache,
     _change_task_status as runtime_change_task_status,
     _dispatch_task_status_auto_start as runtime_dispatch_task_status_auto_start,
+    _evaluate_task_status_gate as runtime_evaluate_task_status_gate,
 )
 from task_dashboard.runtime.heartbeat_routes import (
     create_or_update_project_heartbeat_task_response,
@@ -326,15 +327,19 @@ def _hydrate_reply_to_fields_from_store(store: Any, run_extra_fields: dict[str, 
         sender_name = ""
         if preview_role == "assistant":
             sender_name = str(
-                source_meta.get("channelName")
-                or source_meta.get("sender_name")
+                source_meta.get("sender_name")
                 or source_meta.get("senderName")
+                or source_meta.get("source_agent_alias")
+                or source_meta.get("sourceAgentAlias")
+                or source_meta.get("channelName")
                 or ""
             ).strip()
         else:
             sender_name = str(
                 source_meta.get("sender_name")
                 or source_meta.get("senderName")
+                or source_meta.get("source_agent_alias")
+                or source_meta.get("sourceAgentAlias")
                 or source_meta.get("channelName")
                 or ""
             ).strip()
@@ -1453,12 +1458,19 @@ class RouteDispatcher:
     ) -> None:
         """Handle GET /api/sessions/bindings."""
         project_id = (qs.get("projectId") or [""])[0]
+        compat_meta = {
+            "compatibility_entry": True,
+            "entry_role": "compatibility_management",
+            "writable": True,
+            "primary_truth_hint": "/api/sessions + /api/agent-candidates",
+        }
         bindings = self.ctx.session_binding_store.list_bindings(
             project_id if project_id else None
         )
         out_bindings: list[dict[str, Any]] = []
         for row in bindings:
             item = dict(row if isinstance(row, dict) else {})
+            item.update(compat_meta)
             session_id = str(item.get("sessionId") or "").strip()
             session = self.ctx.session_store.get_session(session_id) if session_id else None
             if isinstance(session, dict):
@@ -1472,7 +1484,7 @@ class RouteDispatcher:
                     (enriched.get("project_execution_context") or {}) if isinstance(enriched, dict) else {}
                 )
             out_bindings.append(item)
-        self.ctx.json_response(handler, 200, {"bindings": out_bindings})
+        self.ctx.json_response(handler, 200, {"bindings": out_bindings, **compat_meta})
 
     def _handle_session_binding_get(
         self, handler: "BaseHTTPRequestHandler", path: str
@@ -2474,12 +2486,34 @@ class RouteDispatcher:
             body.get("auto_start_message") if "auto_start_message" in body else body.get("autoStartMessage"),
             20_000,
         ).strip()
+        force_raw = body.get("force") if "force" in body else body.get("forceTransition")
+        force_transition = self.ctx.coerce_bool(force_raw, False)
 
         if not task_path or not new_status:
             self.ctx.json_response(handler, 400, {"error": "missing path or status"})
             return
 
         try:
+            gate = runtime_evaluate_task_status_gate(
+                task_path,
+                new_status,
+                project_id_hint=project_id_hint,
+            )
+            gate["force_requested"] = bool(force_transition)
+            if bool(gate.get("applies")) and not bool(gate.get("passed")):
+                if force_transition:
+                    gate["forced"] = True
+                    gate["bypassed"] = True
+                else:
+                    self.ctx.json_response(
+                        handler,
+                        409,
+                        {
+                            "error": str(gate.get("summary") or "任务状态软门禁未通过"),
+                            "gate": gate,
+                        },
+                    )
+                    return
             result = runtime_change_task_status(task_path, new_status)
             auto_start = runtime_dispatch_task_status_auto_start(
                 store=self.ctx.store,
@@ -2493,6 +2527,7 @@ class RouteDispatcher:
                 project_id_hint=project_id_hint,
             )
             result["auto_start"] = auto_start
+            result["gate"] = gate
             self.ctx.json_response(handler, 200, result)
         except Exception as e:
             self.ctx.json_response(handler, 400, {"error": str(e)})
@@ -2705,21 +2740,16 @@ class RouteDispatcher:
             return
 
         try:
-            workspace_root = self.ctx.repo_root().resolve()
-            candidate = Path(path_raw).expanduser()
-            resolved = (workspace_root / candidate).resolve() if not candidate.is_absolute() else candidate.resolve()
-            if not resolved.exists():
-                self.ctx.json_response(handler, 404, {"error": "path not found"})
-                return
-
-            allowed_roots = self.ctx.reveal_allowed_roots() or [workspace_root]
-            allowed = any((resolved == root or root in resolved.parents) for root in allowed_roots)
-            if not allowed:
-                self.ctx.json_response(handler, 403, {"error": "path not allowed"})
-                return
+            resolved = self.ctx.resolve_allowed_fs_path(path_raw)
 
             cmd = ["open", str(resolved)] if resolved.is_dir() else ["open", "-R", str(resolved)]
             subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+        except FileNotFoundError:
+            self.ctx.json_response(handler, 404, {"error": "path not found"})
+            return
+        except ValueError as exc:
+            self.ctx.json_response(handler, 400, {"error": str(exc)})
+            return
         except Exception as e:
             self.ctx.json_response(handler, 500, {"error": f"reveal failed: {e}"})
             return
@@ -2972,12 +3002,7 @@ class RouteDispatcher:
                     or target_session.get("channelName")
                     or ""
                 ).strip(),
-                "alias": str(
-                    target_session.get("alias")
-                    or target_session.get("display_name")
-                    or target_session.get("displayName")
-                    or ""
-                ).strip(),
+                "alias": str(target_session.get("alias") or "").strip(),
                 "cliType": str(target_session.get("cli_type") or target_session.get("cliType") or "codex").strip(),
                 "model": str(target_session.get("model") or "").strip(),
                 "reasoningEffort": _normalize_reasoning_effort(
@@ -3014,12 +3039,7 @@ class RouteDispatcher:
                     or target_session.get("channelName")
                     or ""
                 ).strip(),
-                "alias": str(
-                    target_session.get("alias")
-                    or target_session.get("display_name")
-                    or target_session.get("displayName")
-                    or ""
-                ).strip(),
+                "alias": str(target_session.get("alias") or "").strip(),
                 "cliType": str(target_session.get("cli_type") or target_session.get("cliType") or "codex").strip(),
                 "model": str(target_session.get("model") or "").strip(),
                 "reasoningEffort": _normalize_reasoning_effort(
@@ -3217,7 +3237,7 @@ class RouteDispatcher:
             cli_type=target_cli_type,
             sender_type=str(sender_fields.get("sender_type") or "agent"),
             sender_id=str(sender_fields.get("sender_id") or source_agent_id or "task_dashboard"),
-            sender_name=str(sender_fields.get("sender_name") or source_agent_name or "任务看板"),
+            sender_name=str(sender_fields.get("sender_name") or source_agent_alias or source_agent_name or "任务看板"),
             extra_meta=run_extra_fields,
             reasoning_effort=target_reasoning_effort,
         )
@@ -3239,7 +3259,7 @@ class RouteDispatcher:
             "cliType": target_cli_type,
             "senderType": str(sender_fields.get("sender_type") or "agent"),
             "senderId": str(sender_fields.get("sender_id") or source_agent_id or "task_dashboard"),
-            "senderName": str(sender_fields.get("sender_name") or source_agent_name or "任务看板"),
+            "senderName": str(sender_fields.get("sender_name") or source_agent_alias or source_agent_name or "任务看板"),
             "messageKind": str((run_extra_fields or {}).get("message_kind") or "collab_update"),
             "interactionMode": str((run_extra_fields or {}).get("interaction_mode") or "task_with_receipt"),
             "sourceRef": (run_extra_fields or {}).get("source_ref") or {},
@@ -3371,7 +3391,7 @@ class RouteDispatcher:
             cli_type=target_cli_type,
             sender_type=str(sender_fields.get("sender_type") or "agent"),
             sender_id=str(sender_fields.get("sender_id") or source_agent_id or "task_dashboard"),
-            sender_name=str(sender_fields.get("sender_name") or source_agent_name or "任务看板"),
+            sender_name=str(sender_fields.get("sender_name") or source_agent_alias or source_agent_name or "任务看板"),
             extra_meta=run_extra_fields,
             reasoning_effort=target_reasoning_effort,
         )
@@ -3393,7 +3413,7 @@ class RouteDispatcher:
             "cliType": target_cli_type,
             "senderType": str(sender_fields.get("sender_type") or "agent"),
             "senderId": str(sender_fields.get("sender_id") or source_agent_id or "task_dashboard"),
-            "senderName": str(sender_fields.get("sender_name") or source_agent_name or "任务看板"),
+            "senderName": str(sender_fields.get("sender_name") or source_agent_alias or source_agent_name or "任务看板"),
             "messageKind": str((run_extra_fields or {}).get("message_kind") or "collab_update"),
             "interactionMode": str((run_extra_fields or {}).get("interaction_mode") or "task_with_receipt"),
             "sourceRef": (run_extra_fields or {}).get("source_ref") or {},

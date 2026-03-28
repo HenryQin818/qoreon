@@ -1,17 +1,14 @@
     const DATA = JSON.parse(document.getElementById("data").textContent);
     const OVER = DATA.overview || { totals: {}, projects: [] };
     const taskBase = (DATA.links && DATA.links.task_page) ? String(DATA.links.task_page) : "/share/project-task-dashboard.html";
-    const communicationBase = DATA.communication_page
-      ? String(DATA.communication_page)
-      : ((DATA.links && DATA.links.communication_page)
-      ? String(DATA.links.communication_page)
-      : "/share/project-communication-audit.html");
-    const statusReportBase = DATA.status_report_page
-      ? String(DATA.status_report_page)
-      : ((DATA.links && DATA.links.status_report_page)
-      ? String(DATA.links.status_report_page)
-      : "/share/project-status-report.html");
+    const agentCurtainBase = DATA.agent_curtain_page
+      ? String(DATA.agent_curtain_page)
+      : ((DATA.links && DATA.links.agent_curtain_page)
+      ? String(DATA.links.agent_curtain_page)
+      : "/share/project-agent-curtain.html");
     const TOKEN_KEY = "taskDashboard.token";
+    const PROJECT_FILTER_KEY = "overview.projectFilter";
+    const PROJECT_FILTER_KNOWN_IDS_KEY = "overview.projectFilterKnownIds";
     const STARRED_PROJECTS_KEY = "overview.starredProjects";
 
     const STATE = {
@@ -19,6 +16,7 @@
       showStats: true,
       sort: "risk",
       projectFilters: [],
+      projectFilterKnownIds: [],
       starredProjects: [],
     };
     const PROJECT_FILTER_UI = {
@@ -244,13 +242,19 @@
       params.set("vm", "w");
       return taskBase + "#" + params.toString();
     }
-    function openCommunicationPage() {
-      const url = String(communicationBase || "/share/project-communication-audit.html").trim();
-      if (!url) return;
-      window.open(url, "_blank", "noopener,noreferrer");
+    function buildGlobalCurtainUrl() {
+      const raw = String(agentCurtainBase || "/share/project-agent-curtain.html").trim();
+      if (!raw) return "";
+      try {
+        const url = new URL(raw, window.location.href);
+        url.searchParams.set("mode", "global");
+        return url.toString();
+      } catch (_) {
+        return raw + (raw.includes("?") ? "&" : "?") + "mode=global";
+      }
     }
-    function openStatusReportPage() {
-      const url = String(statusReportBase || "/share/project-status-report.html").trim();
+    function openAgentCurtainPage() {
+      const url = buildGlobalCurtainUrl();
       if (!url) return;
       window.open(url, "_blank", "noopener,noreferrer");
     }
@@ -301,6 +305,36 @@
         uniq.push(id);
       }
       return uniq;
+    }
+
+    function persistProjectFilterState(next, knownIds = null) {
+      const validIds = new Set(allProjectIds());
+      STATE.projectFilters = normalizeProjectFilterIds(next, validIds);
+      STATE.projectFilterKnownIds = normalizeProjectFilterIds(
+        knownIds == null ? allProjectIds() : knownIds
+      );
+      try {
+        localStorage.setItem(PROJECT_FILTER_KEY, JSON.stringify(STATE.projectFilters));
+        localStorage.setItem(PROJECT_FILTER_KNOWN_IDS_KEY, JSON.stringify(STATE.projectFilterKnownIds));
+      } catch (_) {}
+    }
+
+    function mergeProjectFilterWithKnownIds(selectedIds, knownIds, validIds = null) {
+      const validSet = validIds instanceof Set
+        ? validIds
+        : new Set(Array.isArray(validIds) ? validIds : allProjectIds());
+      const currentIds = Array.from(validSet);
+      const base = normalizeProjectFilterIds(selectedIds, validSet);
+      const knownSet = new Set(normalizeProjectFilterIds(knownIds));
+      if (!base.length || !currentIds.length || !knownSet.size) return base;
+      const next = base.slice();
+      const nextSet = new Set(next);
+      for (const id of currentIds) {
+        if (knownSet.has(id) || nextSet.has(id)) continue;
+        next.push(id);
+        nextSet.add(id);
+      }
+      return normalizeProjectFilterIds(next, validSet);
     }
 
     function selectedProjectFilterSet(source = null) {
@@ -405,8 +439,7 @@
     function applyProjectFilterFromValues(values) {
       const validIds = new Set((Array.isArray(OVER.projects) ? OVER.projects : []).map((p) => String((p && p.project_id) || "")));
       const next = normalizeProjectFilterIds(values, validIds);
-      STATE.projectFilters = next;
-      try { localStorage.setItem("overview.projectFilter", JSON.stringify(next)); } catch (_) {}
+      persistProjectFilterState(next);
       const btn = document.getElementById("projectFilterBtn");
       if (btn) {
         const active = isProjectFilterNarrowing(next);
@@ -468,6 +501,13 @@
     const TASK_DONE_STATUSES = new Set(["已完成", "已验收通过", "已消费", "已解决", "已关闭", "已停止", "已合并"]);
     const TASK_TODO_STATUSES = new Set(["待开始", "未开始", "待处理"]);
     const TASK_PAUSE_STATUSES = new Set(["已暂停", "暂缓"]);
+    const TASK_PRIMARY_STATUS_LABELS = {
+      todo: "待办",
+      in_progress: "进行中",
+      pending_acceptance: "待验收",
+      done: "已完成",
+      paused: "暂缓",
+    };
 
     function authHeaders(base = {}) {
       const h = Object.assign({}, base || {});
@@ -540,10 +580,11 @@
       const validIds = new Set((Array.isArray(OVER.projects) ? OVER.projects : []).map((p) => String((p && p.project_id) || "").trim()).filter(Boolean));
       const ensuredId = String(ensureProjectId || "").trim();
       STATE.projectFilters = normalizeProjectFilterIds(STATE.projectFilters, validIds);
+      STATE.projectFilters = mergeProjectFilterWithKnownIds(STATE.projectFilters, STATE.projectFilterKnownIds, validIds);
       if (ensuredId && validIds.has(ensuredId) && !STATE.projectFilters.includes(ensuredId)) {
         STATE.projectFilters = normalizeProjectFilterIds(STATE.projectFilters.concat([ensuredId]), validIds);
-        try { localStorage.setItem("overview.projectFilter", JSON.stringify(STATE.projectFilters)); } catch (_) {}
       }
+      persistProjectFilterState(STATE.projectFilters, Array.from(validIds));
       STATE.starredProjects = normalizeProjectFilterIds(STATE.starredProjects, validIds);
       PROJECT_FILTER_UI.draftIds = normalizeProjectFilterIds(STATE.projectFilters, validIds);
       renderProjectFilterOptions();
@@ -640,13 +681,62 @@
       return all.filter((p) => ids.has(String((p && p.project_id) || "").trim()));
     }
 
-    function classifyTaskStatus(raw) {
-      const text = String(raw || "").trim();
+    function taskPrimaryStatus(raw) {
+      const item = (raw && typeof raw === "object") ? raw : null;
+      const direct = String((item && item.primary_status) || "").trim();
+      if (direct) return direct;
+      const text = String((item && item.status) || raw || "").trim();
       if (!text) return "";
-      if (TASK_DONE_STATUSES.has(text)) return "done";
-      if (TASK_TODO_STATUSES.has(text)) return "todo";
-      if (TASK_PAUSE_STATUSES.has(text)) return "pause";
-      return "in_progress";
+      if (TASK_DONE_STATUSES.has(text)) return "已完成";
+      if (TASK_PAUSE_STATUSES.has(text)) return "暂缓";
+      if (text === "待验收" || text.toLowerCase() === "pending_acceptance") return "待验收";
+      if (text === "进行中" || text.toLowerCase() === "in_progress" || text.toLowerCase() === "running") return "进行中";
+      if (text === "待办") return "待办";
+      if (TASK_TODO_STATUSES.has(text)) return "待办";
+      return "进行中";
+    }
+
+    function taskStatusFlags(raw) {
+      const item = (raw && typeof raw === "object") ? raw : null;
+      const flags = (item && typeof item.status_flags === "object") ? item.status_flags : {};
+      const statusText = String((item && item.status) || raw || "").trim();
+      return {
+        supervised: !!(flags.supervised || statusText.includes("督办")),
+        blocked: !!(flags.blocked || statusText.includes("阻塞") || statusText.includes("异常")),
+      };
+    }
+
+    function primaryStatusCountsFromTotals(totals) {
+      const row = (totals && typeof totals === "object") ? totals : {};
+      const payload = (row.primary_status_counts && typeof row.primary_status_counts === "object")
+        ? row.primary_status_counts
+        : null;
+      if (payload) {
+        return {
+          todo: num(payload.todo),
+          in_progress: num(payload.in_progress),
+          pending_acceptance: num(payload.pending_acceptance),
+          done: num(payload.done),
+          paused: num(payload.paused),
+        };
+      }
+      return {
+        todo: num(row.todo),
+        in_progress: num(row.in_progress),
+        pending_acceptance: num(row.pending_acceptance),
+        done: num(row.done),
+        paused: num(row.paused),
+      };
+    }
+
+    function classifyTaskStatus(raw) {
+      const primary = taskPrimaryStatus(raw);
+      if (primary === "已完成") return "done";
+      if (primary === "暂缓") return "pause";
+      if (primary === "待验收") return "pending_acceptance";
+      if (primary === "待办") return "todo";
+      if (primary === "进行中") return "in_progress";
+      return "";
     }
 
     function formatCount(v) {
@@ -669,15 +759,18 @@
       const days = lastNDaysKeys(7);
       const inProgressMap = new Map(days.map((key) => [key, 0]));
       const todoMap = new Map(days.map((key) => [key, 0]));
+      const pendingAcceptanceMap = new Map(days.map((key) => [key, 0]));
       const doneMap = new Map(days.map((key) => [key, 0]));
       const changeMap = new Map(days.map((key) => [key, 0]));
-      const summary = { in_progress: 0, todo: 0, done: 0, changes7d: 0 };
+      const summary = { in_progress: 0, todo: 0, pending_acceptance: 0, done: 0, changes7d: 0 };
 
       for (const project of src) {
         const totals = (project && typeof project.totals === "object") ? project.totals : {};
-        summary.in_progress += num(totals.in_progress);
-        summary.todo += num(totals.todo);
-        summary.done += num(totals.done);
+        const primaryCounts = primaryStatusCountsFromTotals(totals);
+        summary.in_progress += primaryCounts.in_progress;
+        summary.todo += primaryCounts.todo;
+        summary.pending_acceptance += primaryCounts.pending_acceptance;
+        summary.done += primaryCounts.done;
       }
 
       const items = Array.isArray(DATA.items) ? DATA.items : [];
@@ -688,15 +781,17 @@
         if (!updatedAt) continue;
         const dayKey = dateKeyLocal(updatedAt);
         if (!inProgressMap.has(dayKey)) continue;
-        const state = classifyTaskStatus(item && item.status);
+        const state = classifyTaskStatus(item);
         changeMap.set(dayKey, changeMap.get(dayKey) + 1);
         if (state === "done") doneMap.set(dayKey, doneMap.get(dayKey) + 1);
         else if (state === "todo") todoMap.set(dayKey, todoMap.get(dayKey) + 1);
+        else if (state === "pending_acceptance") pendingAcceptanceMap.set(dayKey, pendingAcceptanceMap.get(dayKey) + 1);
         else if (state === "in_progress") inProgressMap.set(dayKey, inProgressMap.get(dayKey) + 1);
       }
 
       const inProgressDaily = days.map((key) => inProgressMap.get(key) || 0);
       const todoDaily = days.map((key) => todoMap.get(key) || 0);
+      const pendingAcceptanceDaily = days.map((key) => pendingAcceptanceMap.get(key) || 0);
       const doneDaily = days.map((key) => doneMap.get(key) || 0);
       const changesDaily = days.map((key) => changeMap.get(key) || 0);
       summary.changes7d = changesDaily.reduce((sum, value) => sum + value, 0);
@@ -707,6 +802,7 @@
         series: {
           stock_in_progress: buildStockSeries(summary.in_progress, inProgressDaily),
           stock_todo: buildStockSeries(summary.todo, todoDaily),
+          stock_pending_acceptance: buildStockSeries(summary.pending_acceptance, pendingAcceptanceDaily),
           stock_done: buildStockSeries(summary.done, doneDaily),
           changes: changesDaily,
         },
@@ -1661,10 +1757,10 @@
         ? window.location.origin
         : ((window.location.protocol && window.location.host)
           ? `${window.location.protocol}//${window.location.host}`
-          : "http://127.0.0.1");
+          : "http://127.0.0.1:18765");
       return {
         primary: new URL("/share/avatar-library.html", origin).toString(),
-        fallback: new URL("avatar-library.html", origin).toString(),
+        fallback: new URL("/dist/avatar-library.html", origin).toString(),
       };
     }
 
@@ -1866,17 +1962,21 @@
         if (st === "0") STATE.showStats = false;
         const sort = localStorage.getItem("overview.sort");
         if (sort === "name" || sort === "risk") STATE.sort = sort;
-        const projectFilter = localStorage.getItem("overview.projectFilter");
+        const projectFilter = localStorage.getItem(PROJECT_FILTER_KEY);
         if (projectFilter) STATE.projectFilters = normalizeProjectFilterIds(projectFilter);
+        const projectFilterKnownIds = localStorage.getItem(PROJECT_FILTER_KNOWN_IDS_KEY);
+        if (projectFilterKnownIds) STATE.projectFilterKnownIds = normalizeProjectFilterIds(projectFilterKnownIds);
         const starredProjects = localStorage.getItem(STARRED_PROJECTS_KEY);
         if (starredProjects) STATE.starredProjects = normalizeProjectFilterIds(starredProjects);
       } catch (_) {}
       const validIds = new Set((Array.isArray(OVER.projects) ? OVER.projects : []).map((p) => String((p && p.project_id) || "")));
       STATE.projectFilters = normalizeProjectFilterIds(STATE.projectFilters, validIds);
+      STATE.projectFilters = mergeProjectFilterWithKnownIds(STATE.projectFilters, STATE.projectFilterKnownIds, validIds);
       STATE.starredProjects = normalizeProjectFilterIds(STATE.starredProjects, validIds);
       if (!STATE.projectFilters.length) {
         STATE.projectFilters = normalizeProjectFilterIds(allProjectIds(), validIds);
       }
+      persistProjectFilterState(STATE.projectFilters, allProjectIds());
       PROJECT_FILTER_UI.draftIds = normalizeProjectFilterIds(STATE.projectFilters, validIds);
 
       const qEl = document.getElementById("q");
@@ -1982,8 +2082,7 @@
       const worklogBtn = document.getElementById("worklogBtn");
       const worklogCloseBtn = document.getElementById("worklogCloseBtn");
       const worklogMask = document.getElementById("worklogMask");
-      const statusReportBtn = document.getElementById("statusReportBtn");
-      const communicationBtn = document.getElementById("communicationBtn");
+      const agentCurtainBtn = document.getElementById("agentCurtainBtn");
       const cfgBtn = document.getElementById("configBtn");
       const closeBtn = document.getElementById("cfgCloseBtn");
       const mask = document.getElementById("cfgMask");
@@ -2001,8 +2100,7 @@
       };
       const closeDrawer = () => setCfgOpened(false);
 
-      if (statusReportBtn) statusReportBtn.addEventListener("click", openStatusReportPage);
-      if (communicationBtn) communicationBtn.addEventListener("click", openCommunicationPage);
+      if (agentCurtainBtn) agentCurtainBtn.addEventListener("click", openAgentCurtainPage);
       if (worklogBtn) worklogBtn.addEventListener("click", openWorklogDrawer);
       if (worklogCloseBtn) worklogCloseBtn.addEventListener("click", closeWorklogDrawer);
       if (worklogMask) worklogMask.addEventListener("click", closeWorklogDrawer);
@@ -2080,18 +2178,21 @@
         "任务情况趋势",
         [
           { label: "进行中", value: formatCount(taskModel.summary.in_progress) },
-          { label: "待开始", value: formatCount(taskModel.summary.todo) },
+          { label: "待办", value: formatCount(taskModel.summary.todo) },
+          { label: "待验收", value: formatCount(taskModel.summary.pending_acceptance) },
           { label: "近7天变更", value: formatCount(taskModel.summary.changes7d) },
         ],
         [
           { name: "日变更量", values: taskModel.series.changes, color: "#94a3b8", type: "bar" },
           { name: "进行中存量", values: taskModel.series.stock_in_progress, color: "#1f8f5f", type: "line", area: false },
-          { name: "待开始存量", values: taskModel.series.stock_todo, color: "#b36a00", type: "line", area: false },
+          { name: "待办存量", values: taskModel.series.stock_todo, color: "#b36a00", type: "line", area: false },
+          { name: "待验收存量", values: taskModel.series.stock_pending_acceptance, color: "#eab308", type: "line", area: false },
         ],
         taskModel.labels,
         [
           { color: "#1f8f5f", label: "进行中存量", shape: "line" },
-          { color: "#b36a00", label: "待开始存量", shape: "line" },
+          { color: "#b36a00", label: "待办存量", shape: "line" },
+          { color: "#eab308", label: "待验收存量", shape: "line" },
           { color: "#94a3b8", label: "日变更量", shape: "bar" },
         ]
       ));
@@ -2214,13 +2315,15 @@
         card.appendChild(titleRow);
 
         const totals = (p && typeof p.totals === "object") ? p.totals : {};
+        const primaryCounts = primaryStatusCountsFromTotals(totals);
         const channelsData = Array.isArray(p && p.channels_data) ? p.channels_data : [];
         const divisionCount = channelsData.length || num(totals.channels);
         const configuredAgentCount = channelsData.filter((item) => !!(item && item.session_configured)).length;
         card.appendChild(flatSection("任务", [
-          { label: "进行中", value: formatCount(totals.in_progress) },
-          { label: "待开始", value: formatCount(totals.todo) },
-          { label: "已完成", value: formatCount(totals.done) },
+          { label: "待办", value: formatCount(primaryCounts.todo) },
+          { label: "进行中", value: formatCount(primaryCounts.in_progress) },
+          { label: "待验收", value: formatCount(primaryCounts.pending_acceptance) },
+          { label: "已完成", value: formatCount(primaryCounts.done) },
         ]));
 
         const messageMetrics = messageMetricForProject(p.project_id);
@@ -2401,18 +2504,21 @@
     };
 
     const STATUS_COLORS = {
+      todo: "#b36a00",       // Amber
       in_progress: "#3b82f6", // Blue
       blocked: "#ef4444",     // Red
       pending_acceptance: "#eab308", // Yellow
       done: "#22c55e",        // Green
+      paused: "#64748b",      // Slate
       other: "#64748b"        // Gray
     };
 
     const TASK_STATUS_META = {
-      in_progress: { key: "in_progress", label: "进行中", order: 1 },
-      pending_acceptance: { key: "pending_acceptance", label: "待验收", order: 2 },
-      blocked: { key: "blocked", label: "阻塞", order: 3 },
+      todo: { key: "todo", label: "待办", order: 1 },
+      in_progress: { key: "in_progress", label: "进行中", order: 2 },
+      pending_acceptance: { key: "pending_acceptance", label: "待验收", order: 3 },
       done: { key: "done", label: "已完成", order: 4 },
+      paused: { key: "paused", label: "暂缓", order: 5 },
       other: { key: "other", label: "其他", order: 99 },
     };
 
@@ -4403,17 +4509,31 @@
 
     function resolveTaskStatusColor(taskNode) {
       let statusColor = STATUS_COLORS.other;
+      const flags = taskStatusFlags(taskNode);
+      if (flags.blocked) return STATUS_COLORS.blocked;
+      const primary = taskPrimaryStatus(taskNode);
+      if (primary === "待办") return STATUS_COLORS.todo;
+      if (primary === "进行中") return STATUS_COLORS.in_progress;
+      if (primary === "待验收") return STATUS_COLORS.pending_acceptance;
+      if (primary === "已完成") return STATUS_COLORS.done;
+      if (primary === "暂缓") return STATUS_COLORS.paused;
       const sb = String((taskNode && taskNode.status_bucket) || "").toLowerCase();
       if (STATUS_COLORS[sb]) return STATUS_COLORS[sb];
       const st = String((taskNode && taskNode.status) || "").toLowerCase();
       if (st.includes("完成") || st === "done" || st === "completed") statusColor = STATUS_COLORS.done;
-      else if (st.includes("进行中") || st === "in_progress" || st === "running") statusColor = STATUS_COLORS.in_progress;
-      else if (st.includes("督办") || st.includes("阻塞") || st === "blocked") statusColor = STATUS_COLORS.blocked;
       else if (st.includes("待验收") || st === "pending_acceptance") statusColor = STATUS_COLORS.pending_acceptance;
       return statusColor;
     }
 
     function resolveTaskStatusText(taskNode) {
+      const primary = taskPrimaryStatus(taskNode);
+      const flags = taskStatusFlags(taskNode);
+      if (primary) {
+        const labels = [primary];
+        if (flags.blocked) labels.push("阻塞");
+        else if (flags.supervised) labels.push("关注");
+        return labels.join(" · ");
+      }
       const sb = String((taskNode && taskNode.status_bucket) || "").trim();
       const st = String((taskNode && taskNode.status) || "").trim();
       return st || sb || "未标记";
@@ -4600,6 +4720,10 @@
     }
 
     function getTaskStatusMeta(taskNode) {
+      const primary = taskPrimaryStatus(taskNode);
+      const primaryKey = Object.keys(TASK_PRIMARY_STATUS_LABELS).find((key) => TASK_PRIMARY_STATUS_LABELS[key] === primary) || "";
+      if (primaryKey && TASK_STATUS_META[primaryKey]) return TASK_STATUS_META[primaryKey];
+
       const bucket = String((taskNode && taskNode.status_bucket) || "").trim().toLowerCase();
       if (TASK_STATUS_META[bucket]) return TASK_STATUS_META[bucket];
 

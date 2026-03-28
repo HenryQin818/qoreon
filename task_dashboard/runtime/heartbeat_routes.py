@@ -198,6 +198,9 @@ def run_or_delete_session_heartbeat_task_response(
             "record": record,
             "item": item,
         }
+    existing_item = heartbeat_runtime.get_session_task(project_id, session_id, heartbeat_task_id) or {}
+    if str(existing_item.get("source_scope") or "").strip() == "project":
+        return 409, {"error": "project scoped heartbeat task must be managed from project config"}
     heartbeat_cfg = load_session_heartbeat_config(session)
     current_tasks = heartbeat_tasks_for_write(heartbeat_cfg.get("tasks"))
     merged_tasks = [row for row in current_tasks if str(row.get("heartbeat_task_id") or "").strip() != heartbeat_task_id]

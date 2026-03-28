@@ -310,16 +310,13 @@
     }
 
     function isTaskBucketActive(bucket) {
-      return bucket === "督办"
+      return bucket === "待办"
         || bucket === "进行中"
-        || bucket === "待处理"
-        || bucket === "待验收"
-        || bucket === "待消费"
-        || bucket === "待开始";
+        || bucket === "待验收";
     }
 
     function taskChildMatchesSource(child, source) {
-      const b = bucketKeyForStatus(child && child.status);
+      const b = taskPrimaryStatus(child);
       const mode = normalizeTaskGroupSource(source);
       if (mode === "all") return true;
       if (mode === "done") return b === "已完成";
@@ -541,7 +538,7 @@
             if (group) {
               meta.appendChild(chip("子任务总数:" + Number(group.childTotal || childrenAll.length || 0), "muted"));
               meta.appendChild(chip("子任务显示:" + visibleChildren.length + "/" + childrenAll.length, "muted"));
-              const order = ["进行中", "待处理", "待开始", "已完成", "已暂停", "其他", "督办", "待验收", "待消费"];
+              const order = ["进行中", "待办", "待验收", "已完成", "暂缓"];
               for (const k of order) {
                 const c = Number((group.childCounts && group.childCounts[k]) || 0);
                 if (!c) continue;
@@ -2501,14 +2498,17 @@
           groupCard.appendChild(head);
 
           const statusMeta = el("div", { class: "m" });
-          statusMeta.appendChild(chip("主任务状态:" + g.masterBucket, toneForBucket(g.masterBucket)));
+          const masterFlags = taskStatusFlags(master);
+          statusMeta.appendChild(chip("主任务状态:" + g.masterBucket, taskPrimaryTone(g.masterBucket)));
+          if (masterFlags.supervised) statusMeta.appendChild(chip("关注", "bad"));
+          if (masterFlags.blocked) statusMeta.appendChild(chip("阻塞", "bad"));
           if (lane === "已完成") {
             statusMeta.appendChild(chip(doneViewed ? "已查看" : "未查看", doneViewed ? "good" : "warn"));
           }
           statusMeta.appendChild(chip("所属通道:" + resolveTaskGroupChannel(g), "muted"));
           statusMeta.appendChild(chip("子任务总数:" + g.childTotal, "muted"));
           statusMeta.appendChild(chip("子任务显示:" + visibleChildren.length + "/" + g.children.length, "muted"));
-          const order = ["进行中", "待处理", "待开始", "已完成", "已暂停", "其他", "督办", "待验收", "待消费"];
+          const order = ["进行中", "待办", "待验收", "已完成", "暂缓"];
           for (const k of order) {
             const c = Number(g.childCounts[k] || 0);
             if (!c) continue;

@@ -11,6 +11,7 @@ from typing import Any
 from urllib.parse import quote
 
 from .config import load_dashboard_config
+from .domain import normalize_task_status
 from .model import Item
 from .open_source_sync import build_open_source_sync_page_data
 from .overview import build_overview
@@ -862,25 +863,34 @@ def main(argv: list[str] | None = None) -> int:
     items_payload = []
     for it in items:
         sess = session_maps.get(it.project_id, {}).get(it.channel)
-        items_payload.append(
-            {
-                "project_id": it.project_id,
-                "project_name": it.project_name,
-                "channel": it.channel,
-                "channel_name": it.channel,
-                "status": it.status,
-                "type": it.type,
-                "title": it.title,
-                "code": it.code,
-                "path": it.path,
-                "updated_at": it.updated_at,
-                "owner": it.owner,
-                "due": it.due,
-                "excerpt": it.excerpt,
-                "tags": it.tags,
-                "session": sess or None,
-            }
-        )
+        row = {
+            "project_id": it.project_id,
+            "project_name": it.project_name,
+            "channel": it.channel,
+            "channel_name": it.channel,
+            "status": it.status,
+            "type": it.type,
+            "title": it.title,
+            "code": it.code,
+            "path": it.path,
+            "updated_at": it.updated_at,
+            "owner": it.owner,
+            "due": it.due,
+            "excerpt": it.excerpt,
+            "tags": it.tags,
+            "session": sess or None,
+        }
+        if _as_str(it.type).strip() == "任务":
+            task_status = normalize_task_status(it.status)
+            row.update(
+                {
+                    "primary_status": task_status.get("primary_status"),
+                    "lifecycle_state": task_status.get("lifecycle_state"),
+                    "counts_as_wip": bool(task_status.get("counts_as_wip")),
+                    "status_flags": task_status.get("status_flags") or {},
+                }
+            )
+        items_payload.append(row)
 
     overview_items_payload = []
     for it in items_payload:
@@ -1058,7 +1068,6 @@ def main(argv: list[str] | None = None) -> int:
         dashboard=task_data["dashboard"],
         links=task_data["links"],
     )
-
     task_html = render_from_template(script_dir, "template.html", task_data)
     out_task_path.write_text(task_html, encoding="utf-8")
     print(f"Wrote: {out_task_path}")

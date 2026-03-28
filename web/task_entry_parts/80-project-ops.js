@@ -1553,6 +1553,7 @@
         pending_job: _coerceBoolClient(row.pending_job, false),
         history_count: Math.max(0, Number(firstNonEmptyText([row.history_count, row.historyCount]) || 0)),
         updated_at: firstNonEmptyText([row.updated_at, row.updatedAt]),
+        source_scope: firstNonEmptyText([row.source_scope, row.sourceScope]).toLowerCase() === "session" ? "session" : "project",
         source: firstNonEmptyText([row.source, "heartbeat_tasks"]),
         project_id: String(projectId || "").trim(),
       };
@@ -4500,11 +4501,15 @@
         pre.textContent = normalized.lines.join("\n");
         if (runId) {
           const saved = Number((PCONV.debugLogScrollTop && PCONV.debugLogScrollTop[runId]) || 0);
-          if (saved > 0) pre.scrollTop = saved;
           pre.addEventListener("scroll", () => {
             if (!PCONV.debugLogScrollTop) PCONV.debugLogScrollTop = Object.create(null);
             PCONV.debugLogScrollTop[runId] = pre.scrollTop;
           }, { passive: true });
+          if (saved > 0) {
+            requestAnimationFrame(() => {
+              try { pre.scrollTop = saved; } catch (_) {}
+            });
+          }
         }
         logWrap.appendChild(pre);
         if (normalized.truncated) {
@@ -5303,15 +5308,60 @@
     }
 
     function conversationPreviewLine(s) {
-      const text = String((s && s.lastPreview) || "").trim();
+      const latestSummary = (s && typeof s.latest_run_summary === "object")
+        ? s.latest_run_summary
+        : ((s && typeof s.latestRunSummary === "object") ? s.latestRunSummary : null);
+      const sessionDisplayState = String(firstNonEmptyText([
+        s && s.session_display_state,
+        s && s.sessionDisplayState,
+        s && s.runtime_state && s.runtime_state.display_state,
+        s && s.runtimeState && s.runtimeState.display_state,
+      ]) || "").trim().toLowerCase();
+      const workingState = (
+        sessionDisplayState === "running"
+        || sessionDisplayState === "queued"
+        || sessionDisplayState === "retry_waiting"
+        || sessionDisplayState === "external_busy"
+      );
+      let text = String((s && s.lastPreview) || "").trim();
+      let role = String((s && s.lastSpeaker) || "assistant").toLowerCase() === "user" ? "user" : "assistant";
+      const cachedSenderType = firstNonEmptyText([
+        s && s.lastSenderType,
+        latestSummary && latestSummary.sender_type,
+      ]);
+      const looksSystemSummary = normalizeSenderType(cachedSenderType, role) === "system";
+      let useCachedSender = true;
+      if (workingState && (!text || looksSystemSummary)) {
+        const aiText = firstNonEmptyText([
+          s && s.latestAiMsg,
+          latestSummary && latestSummary.latest_ai_msg,
+        ]);
+        const userText = firstNonEmptyText([
+          s && s.latestUserMsg,
+          latestSummary && latestSummary.latest_user_msg,
+        ]);
+        const preferredText = aiText || userText;
+        if (preferredText) {
+          text = preferredText;
+          role = aiText ? "assistant" : "user";
+          useCachedSender = false;
+        }
+      }
       if (!text) return "系统: 暂无消息";
-      const role = String((s && s.lastSpeaker) || "assistant").toLowerCase() === "user" ? "user" : "assistant";
-      const cachedLabel = firstNonEmptyText([s && s.lastSenderName]);
+      const cachedLabel = useCachedSender
+        ? firstNonEmptyText([s && s.lastSenderName, latestSummary && latestSummary.sender_name])
+        : "";
       const sender = cachedLabel
         ? {
-            type: normalizeSenderType(firstNonEmptyText([s && s.lastSenderType]), role),
+            type: normalizeSenderType(firstNonEmptyText([
+              s && s.lastSenderType,
+              latestSummary && latestSummary.sender_type,
+            ]), role),
             label: cachedLabel,
-            source: firstNonEmptyText([s && s.lastSenderSource]) || "legacy",
+            source: firstNonEmptyText([
+              s && s.lastSenderSource,
+              latestSummary && latestSummary.sender_source,
+            ]) || "legacy",
           }
         : resolveMessageSender(s, {
             role,
@@ -5332,8 +5382,8 @@
       );
     }
 
-    // Session bindings (per project+channel) stored in .sessions/ directory (persistent).
-    // Also keep localStorage as fallback for quick access.
+    // Legacy compatibility management entry for session bindings (per project+channel).
+    // 主链真源已切到 /api/sessions 与 /api/agent-candidates；这里只保留兼容读取与维护动作。
     const BINDINGS_KEY = "taskDashboard.sessionBindings.v2";
     let PERSISTENT_BINDINGS_LOADED = false;
     let PERSISTENT_BINDINGS_LOADED_BY_PROJECT = Object.create(null);

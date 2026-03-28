@@ -104,6 +104,7 @@ _CALLBACK_WINDOW_LOCK = threading.Lock()
 _CALLBACK_WINDOWS: dict[str, dict[str, Any]] = {}
 _CALLBACK_DISPATCH_CLAIM_LOCK = threading.Lock()
 _CALLBACK_DISPATCH_INFLIGHT: set[str] = set()
+_RECEIPT_ACTIVE_RUNTIME_STATUSES = {"queued", "running", "retry_waiting", "external_busy"}
 
 
 def _normalize_message_ref_local(value: Any, *, allow_run_id: bool = False) -> dict[str, str]:
@@ -123,6 +124,20 @@ def _normalize_message_ref_local(value: Any, *, allow_run_id: bool = False) -> d
     if allow_run_id and run_id:
         out["run_id"] = run_id
     return out
+
+
+def _normalize_receipt_runtime_status(value: Any, *, event_type: str = "") -> str:
+    text = _safe_text(value, 80).strip().lower()
+    if text in {"dispatching", "collecting", "scanning"}:
+        return "running"
+    if text in {"created", "scheduled"}:
+        return "queued"
+    if text in _RECEIPT_ACTIVE_RUNTIME_STATUSES or text in {"done", "error", "interrupted"}:
+        return text
+    event = _safe_text(event_type, 40).strip().lower()
+    if event in {"done", "error", "interrupted"}:
+        return event
+    return ""
 
 
 def _callback_queue_aggregator_enabled() -> bool:
@@ -441,6 +456,7 @@ def _merge_callback_into_anchor(
     source_meta: dict[str, Any],
     anchor_key: str,
     merged_message: str,
+    display_host_run_id: str = "",
 ) -> tuple[bool, dict[str, Any], str]:
     run_id = str(anchor_run_id or "").strip()
     if not run_id:
@@ -482,6 +498,9 @@ def _merge_callback_into_anchor(
     anchor_meta["callback_aggregate_source_run_ids"] = base_ids[:120]
     anchor_meta["callback_summary_of"] = base_ids[:50]
     anchor_meta["callback_merge_mode"] = "queue_anchor_v2"
+    display_host = str(display_host_run_id or anchor_meta.get("display_host_run_id") or "").strip()
+    if display_host:
+        anchor_meta["display_host_run_id"] = display_host
 
     summary = anchor_meta.get("receipt_summary")
     summary_obj = dict(summary) if isinstance(summary, dict) else {}
@@ -533,6 +552,12 @@ def _try_merge_callback_into_queue_anchor(
         event_type=event_type,
         profile=profile,
     )
+    display_host_run_id = _resolve_display_host_run_id(
+        store,
+        source_meta=source_meta,
+        target=target,
+        route_resolution={},
+    )
     candidates = _iter_callback_anchor_candidates(
         store,
         project_id=project_id,
@@ -571,6 +596,7 @@ def _try_merge_callback_into_queue_anchor(
         source_meta=source_meta,
         anchor_key=anchor_key,
         merged_message=merged_message,
+        display_host_run_id=display_host_run_id,
     )
     if not ok:
         return {
@@ -954,6 +980,84 @@ def _resolve_receipt_host_run(
     return "", {}, "missing"
 
 
+def _resolve_display_host_run_id(
+    store,
+    *,
+    source_meta: dict[str, Any],
+    target: dict[str, Any],
+    route_resolution: Any,
+) -> str:
+    target_session_id = str(target.get("session_id") or "").strip()
+    target_channel = str(target.get("channel_name") or "").strip()
+    project_id = str(source_meta.get("projectId") or "").strip()
+    if not (target_session_id and target_channel and project_id):
+        return ""
+
+    source_ref = _normalize_message_ref_local(source_meta.get("source_ref"), allow_run_id=True)
+    rr = route_resolution if isinstance(route_resolution, dict) else {}
+    rr_source_ref = _normalize_message_ref_local(rr.get("source_ref"), allow_run_id=True)
+    for ref in (source_ref, rr_source_ref):
+        run_id = str(ref.get("run_id") or "").strip()
+        if not run_id:
+            continue
+        host_meta = store.load_meta(run_id) or {}
+        if not isinstance(host_meta, dict):
+            continue
+        if (
+            str(host_meta.get("sessionId") or "").strip() == target_session_id
+            and str(host_meta.get("channelName") or "").strip() == target_channel
+        ):
+            return run_id
+
+    source_run_id = str(source_meta.get("id") or "").strip()
+    source_sender_id = str(source_meta.get("sender_id") or "").strip()
+    source_sender_name = str(source_meta.get("sender_name") or "").strip()
+    source_task_path = str(source_meta.get("task_path") or "").strip()
+    source_created_ts = _parse_iso_ts(source_meta.get("createdAt")) or 0.0
+    best_run_id = ""
+    best_score = float("-inf")
+    for meta in store.list_runs(
+        project_id=project_id,
+        session_id=target_session_id,
+        limit=200,
+        include_payload=False,
+    ):
+        if not isinstance(meta, dict):
+            continue
+        if bool(meta.get("hidden")):
+            continue
+        run_id = str(meta.get("id") or "").strip()
+        if not run_id or run_id == source_run_id:
+            continue
+        if str(meta.get("channelName") or "").strip() != target_channel:
+            continue
+        sender_type = str(meta.get("sender_type") or "").strip().lower()
+        trigger_type = str(meta.get("trigger_type") or "").strip().lower()
+        if sender_type == "system" or trigger_type in {"callback_auto", "callback_auto_summary", "restart_recovery", "restart_recovery_summary"}:
+            continue
+        score = 0.0
+        candidate_sender_id = str(meta.get("sender_id") or "").strip()
+        candidate_sender_name = str(meta.get("sender_name") or "").strip()
+        candidate_task_path = str(meta.get("task_path") or "").strip()
+        if source_sender_id and candidate_sender_id == source_sender_id:
+            score += 400.0
+        if source_sender_name and candidate_sender_name == source_sender_name:
+            score += 220.0
+        if source_task_path and candidate_task_path and candidate_task_path == source_task_path:
+            score += 120.0
+        if sender_type == "agent":
+            score += 12.0
+        candidate_ts = _parse_iso_ts(meta.get("createdAt")) or _parse_iso_ts(meta.get("startedAt")) or 0.0
+        if source_created_ts > 0 and candidate_ts > 0:
+            if candidate_ts <= source_created_ts:
+                score += 40.0
+            score -= min(abs(source_created_ts - candidate_ts) / 120.0, 120.0)
+        if score > best_score:
+            best_score = score
+            best_run_id = run_id
+    return best_run_id if best_score >= 180.0 else ""
+
+
 def _normalize_receipt_items(items: Any) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for row in items if isinstance(items, list) else []:
@@ -971,10 +1075,12 @@ def _normalize_receipt_items(items: Any) -> list[dict[str, Any]]:
         for key in (
             "host_run_id",
             "host_reason",
+            "runtime_status",
             "trigger_type",
             "event_type",
             "event_reason",
             "dispatch_status",
+            "display_host_run_id",
             "source_channel",
             "source_agent_name",
             "source_project_id",
@@ -1026,12 +1132,50 @@ def _normalize_receipt_items(items: Any) -> list[dict[str, Any]]:
 
 def _receipt_item_requires_action(item: dict[str, Any]) -> bool:
     event_type = str(item.get("event_type") or "").strip().lower()
-    need_confirm = str(item.get("need_confirm") or "").strip()
+    need_confirm_kind = _classify_receipt_need_confirm(item.get("need_confirm"))
     if event_type in {"error", "interrupted"}:
         return True
-    if need_confirm and need_confirm != "无":
+    if need_confirm_kind == "action":
         return True
     return False
+
+
+_RECEIPT_NO_ACTION_NEED_CONFIRM_PHRASES = (
+    "无",
+    "无需回执",
+    "无需回复",
+    "无需处理",
+    "仅知悉",
+    "知悉即可",
+    "已知悉",
+)
+
+_RECEIPT_ACTION_NEED_CONFIRM_PHRASES = (
+    "请确认",
+    "需确认",
+    "待确认",
+    "请回复",
+    "请处理",
+    "请继续推进",
+    "请继续执行",
+    "请跟进",
+)
+
+
+def _classify_receipt_need_confirm(value: Any) -> str:
+    text = _safe_text(value, 200).strip()
+    if not text:
+        return "none"
+    normalized = "".join(ch for ch in text if not ch.isspace())
+    if not normalized:
+        return "none"
+    for phrase in _RECEIPT_NO_ACTION_NEED_CONFIRM_PHRASES:
+        if normalized == phrase or phrase in normalized:
+            return "no_action"
+    for phrase in _RECEIPT_ACTION_NEED_CONFIRM_PHRASES:
+        if normalized == phrase or phrase in normalized:
+            return "action"
+    return "action"
 
 
 def _build_receipt_pending_actions(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1041,9 +1185,10 @@ def _build_receipt_pending_actions(items: list[dict[str, Any]]) -> list[dict[str
             continue
         event_type = str(item.get("event_type") or "").strip().lower()
         need_confirm = str(item.get("need_confirm") or "").strip()
+        need_confirm_kind = _classify_receipt_need_confirm(need_confirm)
         current_conclusion = str(item.get("current_conclusion") or "").strip()
         need_peer = str(item.get("need_peer") or "").strip()
-        title = need_confirm if need_confirm and need_confirm != "无" else (current_conclusion or "待处理回执")
+        title = need_confirm if need_confirm_kind == "action" else (current_conclusion or "待处理回执")
         action_kind = "confirm"
         if event_type == "interrupted":
             action_kind = "recover"
@@ -1086,21 +1231,32 @@ def _derive_receipt_rollup(items: list[dict[str, Any]], pending_actions: list[di
     agents: list[str] = []
     latest = items[-1]
     event_types: set[str] = set()
+    active_runtime_statuses: list[str] = []
     for item in items:
         event_type = str(item.get("event_type") or "").strip().lower()
+        runtime_status = _normalize_receipt_runtime_status(item.get("runtime_status"), event_type=event_type)
+        if runtime_status in _RECEIPT_ACTIVE_RUNTIME_STATUSES:
+            active_runtime_statuses.append(runtime_status)
         if event_type in counts:
             counts[event_type] += 1
             event_types.add(event_type)
-        need_confirm = str(item.get("need_confirm") or "").strip()
-        if need_confirm and need_confirm != "无":
+        if _classify_receipt_need_confirm(item.get("need_confirm")) == "action":
             need_confirm_count += 1
         source_agent_name = str(item.get("source_agent_name") or "").strip()
         source_channel = str(item.get("source_channel") or "").strip()
         source_label = source_agent_name or source_channel
         if source_label and source_label not in agents:
             agents.append(source_label)
-    latest_status = str(latest.get("event_type") or "").strip().lower() or "unknown"
-    if len(event_types) > 1:
+    latest_status = _normalize_receipt_runtime_status(
+        latest.get("runtime_status"),
+        event_type=str(latest.get("event_type") or "").strip().lower(),
+    )
+    if not latest_status:
+        latest_status = str(latest.get("event_type") or "").strip().lower() or "unknown"
+    if active_runtime_statuses:
+        active_kinds = list(dict.fromkeys(active_runtime_statuses))
+        latest_status = active_kinds[0] if len(active_kinds) == 1 else "mixed"
+    elif len(event_types) > 1:
         latest_status = "mixed"
     rollup: dict[str, Any] = {
         "host_run_id": host_run_id,
@@ -1145,11 +1301,16 @@ def _build_receipt_projection_item(
     )
     source_run_id = str(source_meta.get("id") or "").strip()
     callback_at = str(cb_meta.get("createdAt") or cb_meta.get("startedAt") or _now_iso()).strip()
+    runtime_status = _normalize_receipt_runtime_status(
+        cb_meta.get("status") or cb_meta.get("display_state"),
+        event_type=event_type,
+    )
     out: dict[str, Any] = {
         "host_run_id": host_run_id,
         "host_reason": host_reason,
         "source_run_id": source_run_id,
         "callback_run_id": str(callback_run_id or "").strip(),
+        "runtime_status": runtime_status,
         "trigger_type": str(cb_meta.get("trigger_type") or "callback_auto").strip().lower(),
         "event_type": str(event_type or "").strip().lower(),
         "event_reason": str(event_reason or "").strip().lower(),
@@ -1206,6 +1367,9 @@ def _build_receipt_projection_item(
         "callback_at": callback_at,
         "updated_at": _now_iso(),
     }
+    display_host_run_id = str(cb_meta.get("display_host_run_id") or "").strip()
+    if display_host_run_id:
+        out["display_host_run_id"] = display_host_run_id
     if route_resolution_v1:
         out["route_resolution"] = route_resolution_v1
     late_callback = summary.get("late_callback")
@@ -1728,6 +1892,15 @@ def _flush_callback_summary_window(
     event_type = str(state.get("event_type") or "").strip().lower()
     route_resolution = state.get("route_resolution")
     receipt_summary = _build_callback_window_receipt_summary(state)
+    source_meta_for_host = {}
+    if isinstance(items[0], dict):
+        source_meta_for_host = dict(store.load_meta(str(items[0].get("source_run_id") or "").strip()) or {})
+    display_host_run_id = _resolve_display_host_run_id(
+        store,
+        source_meta=source_meta_for_host,
+        target=target,
+        route_resolution=route_resolution,
+    )
     summary_run = store.create_run(
         project_id,
         channel_name,
@@ -1750,6 +1923,7 @@ def _flush_callback_summary_window(
             "route_resolution": route_resolution if isinstance(route_resolution, dict) else {},
             "callback_summary_of": source_run_ids,
             "receipt_summary": receipt_summary,
+            "display_host_run_id": display_host_run_id,
         },
     )
     summary_run_id = str(summary_run.get("id") or "").strip()
@@ -2145,6 +2319,12 @@ def _dispatch_terminal_callback_for_run(
                 anchor_action = "degraded_new_anchor"
             elif merge_note.startswith("anchor_overflow_new_anchor"):
                 anchor_action = "overflow_new_anchor"
+            display_host_run_id = _resolve_display_host_run_id(
+                store,
+                source_meta=source_meta,
+                target=target,
+                route_resolution=route_resolution,
+            )
             callback_run = store.create_run(
                 str(source_meta.get("projectId") or "").strip(),
                 target_channel_name,
@@ -2171,6 +2351,7 @@ def _dispatch_terminal_callback_for_run(
                     callback_anchor_key=anchor_key,
                     anchor_created_at=anchor_created_at,
                     callback_anchor_action=anchor_action,
+                    display_host_run_id=display_host_run_id,
                 ),
             )
             callback_run_id = str(callback_run.get("id") or "").strip()

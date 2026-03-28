@@ -5,12 +5,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from .domain import normalize_task_status
 from .parser_md import iter_items
 from .session_store import session_binding_sort_key
 from .utils import iso_now_local
 
 
-ACTIVE_TASK_STATUSES = {"督办", "进行中", "待开始", "待处理", "待验收", "待消费", "其他"}
 TERMINAL_RUN_STATUSES = {"done", "error"}
 ACTIVE_RUN_STATUSES = {"queued", "running", "retry_waiting"}
 ASSIST_OPEN_STATUSES = {"open", "pending_reply", "acknowledged", "in_progress", "replied"}
@@ -21,6 +21,16 @@ ASSIST_RESOLVED_STATUSES = {"resolved", "closed", "canceled"}
 
 def _as_str(v: Any) -> str:
     return "" if v is None else str(v)
+
+
+def _is_blank_attr(v: Any) -> bool:
+    if v is None:
+        return True
+    if isinstance(v, str):
+        return not v.strip()
+    if isinstance(v, (list, tuple, set, dict)):
+        return not v
+    return False
 
 
 def _norm_ts(v: Any) -> float:
@@ -88,16 +98,8 @@ def _task_title_from_path(path: str) -> str:
 
 
 def _task_status_bucket(status: Any) -> str:
-    s = _as_str(status).strip()
-    if s in {"督办", "阻塞", "异常"}:
-        return "blocked"
-    if s in {"进行中"}:
-        return "in_progress"
-    if s in {"待验收"}:
-        return "pending_acceptance"
-    if s in {"完成", "已完成"}:
-        return "done"
-    return "other"
+    normalized = normalize_task_status(_as_str(status).strip())
+    return _as_str(normalized.get("status_bucket")).strip() or "other"
 
 
 def _normalize_task_path(value: Any) -> str:
@@ -516,7 +518,7 @@ def build_global_resource_graph(
         if not _as_str(cur.get("label")).strip() and _as_str(label).strip():
             cur["label"] = _as_str(label).strip()
         for k, v in attrs.items():
-            if k not in cur or cur.get(k) in {"", None}:
+            if k not in cur or _is_blank_attr(cur.get(k)):
                 cur[k] = v
 
     def add_edge(source: str, target: str, edge_type: str, **attrs: Any) -> None:
@@ -640,6 +642,7 @@ def build_global_resource_graph(
             node_type = "feedback" if _as_str(it.type).strip() == "反馈" else "task"
             node_id = f"{node_type}:{_as_str(it.path).strip()}"
             item_status = _as_str(it.status).strip()
+            normalized_status = normalize_task_status(item_status)
             add_node(
                 node_id,
                 node_type,
@@ -647,7 +650,11 @@ def build_global_resource_graph(
                 project_id=pid,
                 channel_name=cname,
                 status=item_status,
-                status_bucket=_task_status_bucket(item_status),
+                primary_status=_as_str(normalized_status.get("primary_status")).strip(),
+                lifecycle_state=_as_str(normalized_status.get("lifecycle_state")).strip(),
+                counts_as_wip=bool(normalized_status.get("counts_as_wip")),
+                status_flags=normalized_status.get("status_flags") or {},
+                status_bucket=_as_str(normalized_status.get("status_bucket")).strip() or "other",
                 item_type=_as_str(it.type).strip(),
                 code=_as_str(it.code).strip(),
                 path=_as_str(it.path).strip(),
@@ -663,13 +670,14 @@ def build_global_resource_graph(
                 _append_unique(index_channel_tasks[ch_id], node_id)
 
             st["task_total"] += 1
-            status = _as_str(it.status).strip()
-            if status in ACTIVE_TASK_STATUSES:
+            if bool(normalized_status.get("is_active")):
                 st["task_active"] += 1
-            if status == "督办":
+            status_flags = normalized_status.get("status_flags") if isinstance(normalized_status.get("status_flags"), dict) else {}
+            if bool(status_flags.get("supervised")):
                 st["task_supervised"] += 1
-            if status == "进行中":
+            if bool(normalized_status.get("counts_as_wip")):
                 st["task_in_progress"] += 1
+            status = _as_str(it.status).strip()
             if node_type == "feedback" and status == "待验收":
                 feedback_pending_acceptance += 1
 
@@ -827,6 +835,10 @@ def build_global_resource_graph(
                     channel_name=cname,
                     path=task_path,
                     status="",
+                    primary_status="",
+                    lifecycle_state="unknown",
+                    counts_as_wip=False,
+                    status_flags={},
                     status_bucket="other",
                     item_type="任务",
                     source="run_meta",
@@ -1039,8 +1051,19 @@ def build_global_resource_graph(
             status = _status_from_title_or_path(row.get("label")) or _status_from_title_or_path(row.get("path"))
             if status:
                 row["status"] = status
-        if not _as_str(row.get("status_bucket")).strip() or _as_str(row.get("status_bucket")).strip() == "other":
-            row["status_bucket"] = _task_status_bucket(status)
+        normalized_status = normalize_task_status(status)
+        should_refresh_normalized = (
+            not _as_str(row.get("primary_status")).strip()
+            or not isinstance(row.get("status_flags"), dict)
+            or not _as_str(row.get("status_bucket")).strip()
+            or _as_str(row.get("status_bucket")).strip() == "other"
+        )
+        if should_refresh_normalized:
+            row["primary_status"] = _as_str(normalized_status.get("primary_status")).strip()
+            row["lifecycle_state"] = _as_str(normalized_status.get("lifecycle_state")).strip()
+            row["counts_as_wip"] = bool(normalized_status.get("counts_as_wip"))
+            row["status_flags"] = normalized_status.get("status_flags") or {}
+            row["status_bucket"] = _as_str(normalized_status.get("status_bucket")).strip() or "other"
 
     queues["high_risk"] = sorted(queues["high_risk"], key=lambda x: int(x.get("risk_score") or 0), reverse=True)[:200]
 

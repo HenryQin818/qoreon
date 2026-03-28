@@ -1,28 +1,40 @@
-    function getBinding(projectId, channelName) {
+    function getBinding(projectId, channelName, options = {}) {
       const pid = String(projectId || "");
       const ch = String(channelName || "");
       if (!pid || !ch) return null;
+      const allowLegacyFallback = !!(options && options.allowLegacyFallback);
 
-      // Check server bindings first
+      // `/api/sessions/bindings` 现在只保留为兼容接口；主链优先使用已加载的服务端绑定缓存。
       if (PERSISTENT_BINDINGS[pid] && PERSISTENT_BINDINGS[pid][ch]) {
         const b = PERSISTENT_BINDINGS[pid][ch];
         const sid = String(b.sessionId || "").trim();
         if (looksLikeSessionId(sid)) {
-          return { session_id: sid, cli_type: b.cliType || "codex", updated_at: b.boundAt || "" };
+          return {
+            session_id: sid,
+            cli_type: b.cliType || "codex",
+            updated_at: b.boundAt || "",
+            source: "bindings_server",
+          };
         }
       }
 
-      // 仅当当前项目已成功加载服务端 bindings 时，才禁用 localStorage 回退。
+      // 当前项目已成功加载服务端 bindings 后，兼容 localStorage 不再参与主链兜底。
       if (PERSISTENT_BINDINGS_SERVER_OK && hasPersistentBindingsForProject(pid)) return null;
 
-      // Fallback to localStorage
+      // localStorage 只保留给旧入口显式兼容，不再作为默认绑定真源。
+      if (!allowLegacyFallback) return null;
       const all = loadBindings();
       const hit = all && all[pid] ? all[pid][ch] : null;
       if (!hit) return null;
       const sid = String(hit.session_id || hit.sessionId || "").trim();
       if (!looksLikeSessionId(sid)) return null;
       const cliType = String(hit.cli_type || hit.cliType || "codex").trim() || "codex";
-      return { session_id: sid, cli_type: cliType, updated_at: String(hit.updated_at || "") };
+      return {
+        session_id: sid,
+        cli_type: cliType,
+        updated_at: String(hit.updated_at || ""),
+        source: "bindings_local_legacy",
+      };
     }
 
     // Set binding - save to server and localStorage
@@ -100,7 +112,7 @@
 
     // 兼容旧入口：绑定对话统一走“接入通道对话”弹窗的“添加已有对话”模式
     function openBindModal(projectId, channelName) {
-      openNewConvModal(projectId, channelName, "attach");
+      openNewConvModal(projectId, channelName, "attach", { legacyBindingEntry: true });
     }
     function closeBindModal() {
       closeNewConvModal();
@@ -112,6 +124,7 @@
       projectId: "",
       channelName: "",
       mode: "create",
+      legacyBindingEntry: false,
       initMessageDirty: false,
       contextPrefill: null,
     };
@@ -167,8 +180,10 @@
         "2) Agent = 身份，session = 继承结果；不要把会话临时状态当成项目真源。",
         "3) 先阅读 README、活动任务、活动反馈、产出物中的材料 / 沉淀，再开始执行。",
         "4) 后续推进默认按 任务 / 反馈 / 产出物 驱动，一般情况下要回执给原发送 Agent。",
-        "5) 正式协作消息必须带：当前发信Agent、session_id、source_ref、callback_to。",
-        "6) 最小回执结构：当前结论 / 是否通过或放行 / 唯一阻塞 / 关键路径或 run_id / 下一步动作。",
+        "5) 跨通道正式消息只能走 http://127.0.0.1:18765/api/codex/announce（announce_to_channel），不能把临时 taskboard、内部 spawn 或非正式 resume 当成已通知通道。",
+        "6) 正式协作消息最小字段：当前发信Agent、session_id、source_ref、callback_to、interaction_mode。",
+        "7) 正式发送成功证据至少核对：announce_run_id、target_session_id、目标通道聊天区可见；缺一项都只能写待验证。",
+        "8) 最小回执结构：当前结论 / 是否通过或放行 / 唯一阻塞 / 关键路径或 run_id / 下一步动作。",
         "完成后请先回复：已完成继承与初始化 + 当前职责边界 + 下一步动作。",
         "",
         "如需发送标准首发可见消息，请将本框内容改为：--bootstrap-message",
@@ -186,6 +201,7 @@
     function setNewConvMode(mode) {
       const next = normalizeNewConvMode(mode);
       NEW_CONV_UI.mode = next;
+      const legacyBindingEntry = !!NEW_CONV_UI.legacyBindingEntry;
 
       const createBtn = document.getElementById("newConvCreateBtn");
       const subEl = document.getElementById("newConvSub");
@@ -201,11 +217,19 @@
       if (sessionRow) sessionRow.style.display = next === "attach" ? "" : "none";
       if (initRow) initRow.style.display = next === "create" ? "grid" : "none";
 
-      if (createBtn) createBtn.textContent = next === "attach" ? "绑定已有对话" : "创建并绑定";
-      if (subEl) subEl.textContent = next === "attach" ? "输入已有会话 ID 并绑定到当前通道" : "创建新会话并绑定到当前通道";
+      if (createBtn) createBtn.textContent = next === "attach"
+        ? (legacyBindingEntry ? "兼容绑定已有对话" : "绑定已有对话")
+        : "创建并绑定";
+      if (subEl) subEl.textContent = next === "attach"
+        ? (legacyBindingEntry
+          ? "输入已有会话 ID 并绑定到当前通道（兼容管理入口，非主链真源）"
+          : "输入已有会话 ID 并绑定到当前通道（兼容管理入口）")
+        : "创建新会话并绑定到当前通道";
       if (hintEl) {
         hintEl.textContent = next === "attach"
-          ? "建议先确认 Session ID 与 CLI 类型一致；绑定后可直接发送消息。"
+          ? (legacyBindingEntry
+            ? "这是旧入口兼容管理模式：建议先确认 Session ID 与 CLI 类型一致；该绑定接口只保留给兼容维护与历史排查，新链路仍以会话列表与候选接口为准。"
+            : "建议先确认 Session ID 与 CLI 类型一致；该绑定接口仅保留为兼容管理入口，新链路仍以会话列表与候选接口为准。")
           : "将创建新的 CLI 会话并自动绑定到通道，并自动发送你设置的首条消息。";
       }
       if (next === "attach" && sidInput) sidInput.value = "";
@@ -307,13 +331,14 @@
       modelInput.placeholder = modelInputPlaceholderByCli(cli);
     }
 
-    function openNewConvModal(preProjectId, preChannelName, preferredMode = "create") {
+    function openNewConvModal(preProjectId, preChannelName, preferredMode = "create", options = {}) {
       const pid = String(preProjectId || STATE.project || "");
       const ch = String(preChannelName || STATE.channel || "");
       NEW_CONV_UI.open = true;
       NEW_CONV_UI.projectId = pid;
       NEW_CONV_UI.channelName = ch;
       NEW_CONV_UI.mode = normalizeNewConvMode(preferredMode);
+      NEW_CONV_UI.legacyBindingEntry = !!(options && options.legacyBindingEntry);
 
       newConvModalError("");
 
@@ -380,6 +405,7 @@
 
     function closeNewConvModal() {
       NEW_CONV_UI.open = false;
+      NEW_CONV_UI.legacyBindingEntry = false;
       const mask = document.getElementById("newConvMask");
       if (mask) mask.classList.remove("show");
       const errEl = document.getElementById("newConvErr");
@@ -414,8 +440,21 @@
         model: normalizeSessionModel(firstNonEmptyText([src.model, fb.model])),
         reasoning_effort: normalizeReasoningEffort(firstNonEmptyText([src.reasoning_effort, src.reasoningEffort, fb.reasoning_effort])),
         status: firstNonEmptyText([src.status, fb.status], "active"),
-        display_name: firstNonEmptyText([src.display_name, src.displayName, fb.displayName, fb.displayChannel]),
-        display_name_source: firstNonEmptyText([src.display_name_source, src.displayNameSource, fb.displayNameSource]),
+        display_name: firstNonEmptyText([
+          src.alias,
+          fb.alias,
+          src.display_name,
+          src.displayName,
+          fb.displayName,
+          fb.displayChannel,
+        ]),
+        display_name_source: firstNonEmptyText([
+          src.alias ? "alias" : "",
+          fb.alias ? "alias" : "",
+          src.display_name_source,
+          src.displayNameSource,
+          fb.displayNameSource,
+        ]),
         codex_title: firstNonEmptyText([src.codex_title, src.codexTitle, fb.codexTitle]),
         is_primary: boolLike(firstNonEmptyText([src.is_primary, src.isPrimary, fb.is_primary])),
         source: firstNonEmptyText([src.source, fb.source]),
@@ -599,7 +638,8 @@
 
     function buildSessionHeartbeatPayloadFromDrafts() {
       const meta = SESSION_INFO_UI.heartbeatMeta || normalizeSessionHeartbeatMeta({}, []);
-      const tasks = Array.isArray(SESSION_INFO_UI.heartbeatTasks) ? SESSION_INFO_UI.heartbeatTasks : [];
+      const tasks = (Array.isArray(SESSION_INFO_UI.heartbeatTasks) ? SESSION_INFO_UI.heartbeatTasks : [])
+        .filter((task) => String(task && task.source_scope || "session").trim() !== "project");
       const enabledCount = tasks.filter((row) => _coerceBoolClient(row && row.enabled, false)).length;
       return {
         heartbeat: {
@@ -635,7 +675,8 @@
       const baseProjectId = String(SESSION_INFO_UI.projectId || STATE.project || "").trim();
       const sid = String(SESSION_INFO_UI.sessionId || "").trim();
       const draft = SESSION_INFO_UI.heartbeatDraft || null;
-      let tasks = Array.isArray(SESSION_INFO_UI.heartbeatTasks) ? SESSION_INFO_UI.heartbeatTasks.slice() : [];
+      let tasks = (Array.isArray(SESSION_INFO_UI.heartbeatTasks) ? SESSION_INFO_UI.heartbeatTasks.slice() : [])
+        .filter((task) => String(task && task.source_scope || "session").trim() !== "project");
       if (draft) {
         const heartbeatTaskId = String(draft.heartbeatTaskId || "").trim().replace(/[^a-zA-Z0-9._-]+/g, "-");
         if (heartbeatTaskId) {
@@ -858,7 +899,7 @@
       heartbeat.appendChild(el("div", { class: "conv-session-info-title", text: "Agent 心跳任务（主入口）" }));
       heartbeat.appendChild(el("div", {
         class: "project-auto-card-desc",
-        text: "一级弹框只展示摘要与任务列表；新增、编辑、记录查看都迁到二级弹框。会话级为正式真源。",
+        text: "这里汇总会话级任务和已分配给本 Agent 的项目级任务；项目级任务可在此查看与执行，但需回到项目入口修改定义。",
       }));
 
       const topBar = el("div", { class: "conv-heartbeat-summary-top" });
@@ -896,6 +937,8 @@
       const listWrap = el("div", { class: "project-auto-target-list heartbeat-task-list conv-heartbeat-task-list" });
       heartbeatTasks.forEach((task) => {
         const taskId = String(task.heartbeat_task_id || "").trim();
+        const sourceScope = String(task.source_scope || "").trim();
+        const isProjectAssigned = sourceScope === "project";
         const row = el("div", {
           class: "project-auto-target-row heartbeat-task-row" + (_coerceBoolClient(task.enabled, false) ? "" : " is-disabled"),
         });
@@ -906,6 +949,7 @@
         }));
         const descParts = [
           "ID: " + (taskId || "-"),
+          isProjectAssigned ? "来源: 项目分配" : "来源: 会话配置",
           heartbeatScheduleSummary(task),
           heartbeatBusyPolicyLabel(task.busy_policy),
           task.next_due_at ? ("下次: " + compactDateTime(task.next_due_at)) : "下次: -",
@@ -918,6 +962,9 @@
 
         const actions = el("div", { class: "project-auto-target-actions-inline conv-heartbeat-row-actions" });
         actions.appendChild(chip(heartbeatTaskStateLabel(task), heartbeatTaskStateTone(task)));
+        if (isProjectAssigned) {
+          actions.appendChild(chip("项目分配", "muted"));
+        }
 
         const toggleBtn = el("button", {
           type: "button",
@@ -927,7 +974,7 @@
           "aria-label": String(task.title || taskId || "心跳任务") + "启停",
           title: _coerceBoolClient(task.enabled, false) ? "已开启" : "已关闭",
         });
-        toggleBtn.disabled = loading || heartbeatSaving;
+        toggleBtn.disabled = loading || heartbeatSaving || isProjectAssigned;
         toggleBtn.appendChild(el("span", { class: "project-auto-slider-knob", "aria-hidden": "true" }));
         toggleBtn.addEventListener("click", async (e) => {
           e.preventDefault();
@@ -948,7 +995,7 @@
         });
         actions.appendChild(toggleBtn);
 
-        const editBtn = el("button", { class: "btn", type: "button", text: "编辑" });
+        const editBtn = el("button", { class: "btn", type: "button", text: isProjectAssigned ? "查看" : "编辑" });
         editBtn.disabled = loading || heartbeatSaving;
         editBtn.addEventListener("click", () => openConversationHeartbeatTaskEditor(task));
         actions.appendChild(editBtn);
@@ -1011,6 +1058,7 @@
       const currentTask = heartbeatTasks.find((task) => String(task && task.heartbeat_task_id || "").trim() === selectedHeartbeatTaskId)
         || heartbeatTasks.find((task) => String(task && task.heartbeat_task_id || "").trim() === draftTaskId)
         || null;
+      const currentTaskIsProjectAssigned = !!(currentTask && String(currentTask.source_scope || "").trim() === "project");
 
       const backdrop = el("div", { class: "conv-heartbeat-editor-backdrop" });
       backdrop.addEventListener("click", (e) => {
@@ -1062,6 +1110,7 @@
           class: "project-auto-card-desc",
           text: [
             "ID: " + String(currentTask.heartbeat_task_id || "-"),
+            currentTaskIsProjectAssigned ? "来源: 项目分配" : "来源: 会话配置",
             heartbeatScheduleSummary(currentTask),
             heartbeatBusyPolicyLabel(currentTask.busy_policy),
             currentTask.next_due_at ? ("下次: " + compactDateTime(currentTask.next_due_at)) : "下次: -",
@@ -1072,7 +1121,7 @@
       if (editorMode !== "history") {
         const switchWrap = buildProjectAutoSliderToggle({
           checked: !!(heartbeatDraft && heartbeatDraft.enabled),
-          disabled: loading || heartbeatSaving,
+          disabled: loading || heartbeatSaving || currentTaskIsProjectAssigned,
           ariaLabel: "单任务启停开关",
           titleOn: "当前任务已启用",
           titleOff: "当前任务已关闭",
@@ -1086,6 +1135,12 @@
           },
         });
         body.appendChild(switchWrap);
+        if (currentTaskIsProjectAssigned) {
+          body.appendChild(el("div", {
+            class: "project-auto-tip",
+            text: "该任务来自项目级分配，当前弹框只提供查看、立即执行和记录回看；如需修改定义，请到项目心跳任务入口调整。",
+          }));
+        }
       }
       if (editorMode === "history" && !selectedHeartbeatTaskId) {
         body.appendChild(el("div", { class: "project-auto-record-empty", text: "当前还没有可查看的执行记录。" }));
@@ -1276,7 +1331,7 @@
 
       const actionRow = el("div", { class: "project-auto-target-actions-inline conv-heartbeat-editor-actions" });
       const saveBtn = el("button", { class: "btn primary", type: "button", text: heartbeatSaving ? "保存中..." : "保存任务" });
-      saveBtn.disabled = loading || heartbeatSaving;
+      saveBtn.disabled = loading || heartbeatSaving || currentTaskIsProjectAssigned;
       saveBtn.addEventListener("click", async () => {
         try {
           SESSION_INFO_UI.heartbeatSaving = true;
@@ -1296,7 +1351,7 @@
       actionRow.appendChild(saveBtn);
 
       const resetBtn = el("button", { class: "btn", type: "button", text: "重置" });
-      resetBtn.disabled = loading || heartbeatSaving;
+      resetBtn.disabled = loading || heartbeatSaving || currentTaskIsProjectAssigned;
       resetBtn.addEventListener("click", () => {
         SESSION_INFO_UI.heartbeatDraft = defaultSessionHeartbeatTaskDraft(base);
         SESSION_INFO_UI.heartbeatDraft.heartbeatEnabled = !!(heartbeatSummary.enabled_count > 0 || heartbeatMeta.enabled);
@@ -1325,7 +1380,7 @@
       actionRow.appendChild(runBtn);
 
       const deleteBtn = el("button", { class: "btn", type: "button", text: "删除任务" });
-      deleteBtn.disabled = loading || heartbeatSaving || !draftTaskId;
+      deleteBtn.disabled = loading || heartbeatSaving || !draftTaskId || currentTaskIsProjectAssigned;
       deleteBtn.addEventListener("click", async () => {
         try {
           SESSION_INFO_UI.heartbeatSaving = true;
@@ -1398,6 +1453,11 @@
           historyWrap.appendChild(list);
         }
         body.appendChild(historyWrap);
+      }
+      if (editorMode !== "history" && currentTaskIsProjectAssigned) {
+        Array.from(body.querySelectorAll("input, textarea, select")).forEach((node) => {
+          node.disabled = true;
+        });
       }
       card.appendChild(body);
       return backdrop;
@@ -1621,6 +1681,13 @@
         for (let i = 0; i < PCONV.sessions.length; i++) {
           const row = PCONV.sessions[i];
           if (String(getSessionId(row) || "").trim() !== sid) continue;
+          const nextDisplayName = firstNonEmptyText([
+            updated.alias,
+            updated.display_name,
+            updated.channel_name,
+            row.displayName,
+            row.displayChannel,
+          ]);
           PCONV.sessions[i] = normalizeConversationSession({
             ...(row || {}),
             id: sid,
@@ -1632,7 +1699,7 @@
             workdir: updated.workdir,
             branch: updated.branch,
             primaryChannel: updated.channel_name,
-            display_name: updated.display_name || row.displayName || row.displayChannel,
+            display_name: nextDisplayName,
             displayNameSource: updated.display_name_source,
             codexTitle: updated.codex_title,
             cli_type: updated.cli_type,
@@ -1766,7 +1833,7 @@
       compatibility.appendChild(el("div", { class: "conv-session-info-title", text: "兼容 / 历史字段（只读）" }));
       compatibility.appendChild(el("div", {
         class: "conv-session-exec-empty",
-        text: "以下字段仅用于兼容旧链路或排查历史漂移，不再作为当前主展示真源。",
+        text: "以下字段仅用于兼容旧链路或排查历史漂移，不再作为当前主展示真源；/api/sessions/bindings 与绑定写入入口当前统一降级为兼容管理入口，只服务兼容维护与历史排查。",
       }));
       const compatibilityKv = el("div", { class: "conv-session-kv" });
       addKv(compatibilityKv, "环境", legacyContext.environment);

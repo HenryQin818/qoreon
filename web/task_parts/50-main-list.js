@@ -22,7 +22,7 @@
     }
 
     function statusOptions() {
-      return ["待办", "进行中", "已完成", "全部"];
+      return ["待办", "进行中", "待验收", "已完成", "暂缓", "全部"];
     }
 
     function scopeItems() {
@@ -190,8 +190,13 @@
         row.appendChild(titleRow);
 
         const meta = el("div", { class: "m" });
-        const bucket = bucketKeyForStatus(it.status);
-        if (STATE.view === "work") meta.appendChild(chip(bucket, toneForBucket(bucket)));
+        const primaryStatus = taskPrimaryStatus(it);
+        const flags = taskStatusFlags(it);
+        if (STATE.view === "work") {
+          meta.appendChild(chip(primaryStatus || "未标记", taskPrimaryTone(primaryStatus)));
+          if (flags.supervised) meta.appendChild(chip("关注", "bad"));
+          if (flags.blocked) meta.appendChild(chip("阻塞", "bad"));
+        }
         if (STATE.project === "overview") meta.appendChild(chip(it.project_name || it.project_id, "muted"));
         if (it.channel) meta.appendChild(chip(it.channel, "muted"));
         if (it.code) meta.appendChild(chip(it.code, "muted"));

@@ -146,8 +146,12 @@
 
       if (STATE.project === "overview") metaEl.appendChild(chip(it.project_name || it.project_id, "muted"));
       metaEl.appendChild(chip(it.channel || "未归类", "muted"));
-      metaEl.appendChild(chip(bucket, toneForBucket(bucket)));
-      if (isTaskItem(it) && (bucket === "进行中" || bucket === "督办")) {
+      const primaryStatus = taskPrimaryStatus(it);
+      const flags = taskStatusFlags(it);
+      metaEl.appendChild(chip(primaryStatus || bucket, taskPrimaryTone(primaryStatus || bucket)));
+      if (flags.supervised) metaEl.appendChild(chip("关注", "bad"));
+      if (flags.blocked) metaEl.appendChild(chip("阻塞", "bad"));
+      if (isTaskItem(it) && primaryStatus === "进行中") {
         const autoState = taskAutoKickoffStateForTask(it);
         metaEl.appendChild(chip("首发:" + autoState.label, autoState.tone));
       }

@@ -148,6 +148,8 @@
       pollTimer: 0,
       sessions: [],
       sessionDirectoryByProject: Object.create(null), // projectId -> all sessions (unfiltered)
+      sessionDirectoryMetaByProject: Object.create(null), // projectId -> { liveLoaded, loadedAt, source, error }
+      sessionDirectoryPromiseByProject: Object.create(null), // projectId -> Promise
       runsBySession: Object.create(null),
       sessionTimelineMap: Object.create(null),
       projectRuns: [],
@@ -413,6 +415,7 @@
         session_id: sessionId,
         cli_type: String(firstNonEmptyText([raw.cli_type, raw.cliType, "codex"]) || "codex").trim() || "codex",
         display_name: String(firstNonEmptyText([
+          raw.alias,
           raw.display_name,
           raw.displayName,
           raw.sender_name,
@@ -420,7 +423,6 @@
           raw.agent_name,
           raw.agentName,
           raw.label,
-          raw.alias,
           channelName,
         ]) || channelName).trim() || channelName,
         project_id: String(firstNonEmptyText([

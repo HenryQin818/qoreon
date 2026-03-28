@@ -18,6 +18,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from task_dashboard.domain import normalize_task_status
 from task_dashboard.helpers import (
     safe_text as _safe_text,
     now_iso as _now_iso,
@@ -35,11 +36,13 @@ from task_dashboard.helpers import (
     coerce_bool as _coerce_bool,
     coerce_int as _coerce_int,
 )
+from task_dashboard.parser_md import extract_field, parse_leading_tags
 from task_dashboard.runtime.channel_admin import resolve_task_root_path as runtime_resolve_task_root_path
 from task_dashboard.runtime.session_display_state import (
     build_latest_run_summary as _session_display_build_latest_run_summary,
     build_session_display_fields as _session_display_build_fields,
 )
+from task_dashboard.utils import safe_read_text
 
 
 __all__ = [
@@ -59,6 +62,7 @@ __all__ = [
     "_decorate_session_display_fields",
     "_decorate_sessions_display_fields",
     "_dispatch_task_status_auto_start",
+    "_evaluate_task_status_gate",
     "_extract_bootstrap_result_path_from_stdout",
     "_extract_task_title",
     "_infer_blocked_by_run_id",
@@ -239,6 +243,43 @@ class HeartbeatTaskRuntimeRegistry:
                 out.append(item)
         return out
 
+    def _iter_project_tasks(self, project_id: str) -> list[dict[str, Any]]:
+        pid = str(project_id or "").strip()
+        out: list[dict[str, Any]] = []
+        cfg = _load_project_heartbeat_config(pid)
+        for row in _normalize_heartbeat_tasks(cfg.get("tasks")):
+            if not isinstance(row, dict):
+                continue
+            item = dict(row)
+            item["source_scope"] = "project"
+            out.append(item)
+        return out
+
+    def _iter_session_assigned_tasks(self, project_id: str, session_id: str) -> list[dict[str, Any]]:
+        pid = str(project_id or "").strip()
+        sid = str(session_id or "").strip()
+        ordered_ids: list[str] = []
+        merged: dict[str, dict[str, Any]] = {}
+        for row in self._iter_project_tasks(pid):
+            if str(row.get("session_id") or "").strip() != sid:
+                continue
+            tid = str(row.get("heartbeat_task_id") or "").strip()
+            if not tid:
+                continue
+            if tid not in merged:
+                ordered_ids.append(tid)
+            merged[tid] = dict(row)
+        for row in self._iter_session_tasks(pid):
+            if str(row.get("session_id") or "").strip() != sid:
+                continue
+            tid = str(row.get("heartbeat_task_id") or "").strip()
+            if not tid:
+                continue
+            if tid not in merged:
+                ordered_ids.append(tid)
+            merged[tid] = dict(row)
+        return [merged[tid] for tid in ordered_ids if tid in merged]
+
     def start(self) -> None:
         with self._lock:
             if isinstance(self._thread, threading.Thread) and self._thread.is_alive():
@@ -407,7 +448,8 @@ class HeartbeatTaskRuntimeRegistry:
 
     def _merge_task(self, project_id: str, task: dict[str, Any]) -> dict[str, Any]:
         tid = str(task.get("heartbeat_task_id") or "").strip()
-        sid = str(task.get("session_id") or "").strip() if str(task.get("source_scope") or "") == "session" else ""
+        source_scope = str(task.get("source_scope") or "project").strip().lower()
+        sid = str(task.get("session_id") or "").strip() if source_scope == "session" else ""
         runtime = self._task_runtime_locked(project_id, tid, sid) if tid else {}
         out = dict(task)
         if tid:
@@ -441,8 +483,7 @@ class HeartbeatTaskRuntimeRegistry:
                 "updated_at": str(runtime.get("updated_at") or ""),
             }
         )
-        if sid:
-            out["source_scope"] = "session"
+        out["source_scope"] = "session" if source_scope == "session" and sid else "project"
         return out
 
     def list_tasks(self, project_id: str) -> dict[str, Any]:
@@ -464,23 +505,32 @@ class HeartbeatTaskRuntimeRegistry:
     def list_session_tasks(self, project_id: str, session_id: str) -> dict[str, Any]:
         pid = str(project_id or "").strip()
         sid = str(session_id or "").strip()
-        items = []
-        for row in self._iter_session_tasks(pid):
-            if str(row.get("session_id") or "").strip() != sid:
-                continue
-            items.append(self._merge_task(pid, row))
+        items = [self._merge_task(pid, row) for row in self._iter_session_assigned_tasks(pid, sid)]
         session = self.session_store.get_session(sid) or {}
         cfg = _load_session_heartbeat_config(session if isinstance(session, dict) else {})
+        enabled_count = sum(1 for row in items if bool(row.get("enabled")))
+        ready_count = sum(1 for row in items if bool(row.get("enabled")) and bool(row.get("ready")))
+        session_count = sum(1 for row in items if str(row.get("source_scope") or "") == "session")
+        project_assigned_count = sum(1 for row in items if str(row.get("source_scope") or "") == "project")
         return {
             "project_id": pid,
             "session_id": sid,
-            "enabled": bool(cfg.get("enabled")),
+            "enabled": enabled_count > 0,
             "items": items,
             "count": len(items),
-            "enabled_count": int(cfg.get("enabled_count") or 0),
-            "summary": _heartbeat_summary_payload(cfg),
+            "enabled_count": enabled_count,
+            "summary": {
+                "total_count": len(items),
+                "enabled_count": enabled_count,
+                "ready_count": ready_count,
+                "has_enabled_tasks": enabled_count > 0,
+                "session_count": session_count,
+                "project_assigned_count": project_assigned_count,
+            },
             "errors": list(cfg.get("errors") or []),
-            "ready": bool(cfg.get("ready")),
+            "ready": ready_count > 0 if items else bool(cfg.get("ready")),
+            "session_count": session_count,
+            "project_assigned_count": project_assigned_count,
         }
 
     def get_task(self, project_id: str, heartbeat_task_id: str) -> Optional[dict[str, Any]]:
@@ -500,7 +550,9 @@ class HeartbeatTaskRuntimeRegistry:
         return items[: max(1, min(int(limit or 20), _HEARTBEAT_TASK_HISTORY_LIMIT))]
 
     def list_session_history(self, project_id: str, session_id: str, heartbeat_task_id: str, limit: int = 20) -> list[dict[str, Any]]:
-        runtime = self._task_runtime_locked(project_id, heartbeat_task_id, session_id)
+        task = self.get_session_task(project_id, session_id, heartbeat_task_id) or {}
+        runtime_session_id = session_id if str(task.get("source_scope") or "") == "session" else ""
+        runtime = self._task_runtime_locked(project_id, heartbeat_task_id, runtime_session_id)
         rows = runtime.get("history")
         items = [dict(x) for x in rows if isinstance(x, dict)] if isinstance(rows, list) else []
         return items[: max(1, min(int(limit or 20), _HEARTBEAT_TASK_HISTORY_LIMIT))]
@@ -511,12 +563,9 @@ class HeartbeatTaskRuntimeRegistry:
         tid = _normalize_heartbeat_task_id(heartbeat_task_id)
         if not (pid and sid and tid):
             return None
-        for row in self._iter_session_tasks(pid):
-            if str(row.get("session_id") or "").strip() != sid:
-                continue
-            if str(row.get("heartbeat_task_id") or "").strip() != tid:
-                continue
-            return self._merge_task(pid, row)
+        for row in self._iter_session_assigned_tasks(pid, sid):
+            if str(row.get("heartbeat_task_id") or "").strip() == tid:
+                return self._merge_task(pid, row)
         return None
 
     def sync_project(self, project_id: str) -> dict[str, Any]:
@@ -1689,7 +1738,7 @@ def _run_codex_channel_bootstrap_v1(
     py = str(sys.executable or "python3").strip() or "python3"
     p = int(port or 0)
     if p <= 0:
-        p = 18770
+        p = 18765
     cmd = [
         py,
         str(script_path),
@@ -1899,6 +1948,7 @@ desc = "{channel_desc or channel_name}"'''
 STATUS_DIR_MAP = {
     "待开始": "任务",
     "待处理": "任务",
+    "待验收": "任务",
     "进行中": "任务",
     "已完成": "已完成",
     "已验收通过": "已完成",
@@ -1906,6 +1956,181 @@ STATUS_DIR_MAP = {
     "答复": "答复",
     "反馈": "反馈",
 }
+_TASK_STATUS_GATE_TASK_SUBDIRS = {"任务", "已完成", "暂缓"}
+_TASK_STATUS_GATE_CHANNEL_SUBDIRS = _TASK_STATUS_GATE_TASK_SUBDIRS | {"答复", "反馈", "讨论空间", "问题", "产出物"}
+
+
+def _task_status_gate_wip_limit() -> int:
+    raw = str(os.environ.get("TASK_DASHBOARD_TASK_WIP_LIMIT", "3") or "").strip()
+    try:
+        value = int(raw or "3")
+    except Exception:
+        value = 3
+    return max(0, min(value, 32))
+
+
+def _task_status_gate_require_owner() -> bool:
+    raw = os.environ.get("TASK_DASHBOARD_TASK_GATE_REQUIRE_OWNER")
+    return bool(_coerce_bool(raw, True))
+
+
+def _task_channel_root_for_file(file_path: Path) -> Path:
+    current_dir = file_path.parent
+    if current_dir.name in _TASK_STATUS_GATE_CHANNEL_SUBDIRS:
+        return current_dir.parent
+    return current_dir
+
+
+def _scan_channel_wip_snapshot(channel_root: Path, *, repo_root: Path, exclude_path: Path | None = None) -> dict[str, Any]:
+    count = 0
+    sample_paths: list[str] = []
+    excluded = ""
+    try:
+        excluded = str(exclude_path.resolve()) if isinstance(exclude_path, Path) else ""
+    except Exception:
+        excluded = str(exclude_path or "")
+
+    for path in sorted(channel_root.rglob("*.md")):
+        try:
+            if not path.is_file():
+                continue
+        except Exception:
+            continue
+        if path.name.startswith("README") or path.name == "沟通-收件箱.md":
+            continue
+        rel = ""
+        top_dir = ""
+        try:
+            rel_obj = path.relative_to(channel_root)
+            rel = str(rel_obj)
+            top_dir = rel_obj.parts[0] if len(rel_obj.parts) >= 2 else ""
+        except Exception:
+            rel = path.name
+            top_dir = ""
+        if top_dir and top_dir not in _TASK_STATUS_GATE_TASK_SUBDIRS:
+            continue
+
+        tags, _ = parse_leading_tags(path.stem)
+        if len(tags) >= 2 and str(tags[1] or "").strip() not in {"", "任务"}:
+            continue
+        if not top_dir and (len(tags) < 2 or str(tags[1] or "").strip() != "任务"):
+            continue
+
+        try:
+            current_resolved = str(path.resolve())
+        except Exception:
+            current_resolved = str(path)
+        if excluded and current_resolved == excluded:
+            continue
+
+        status = str(tags[0] or "").strip() if tags else ""
+        normalized = normalize_task_status(status)
+        if not bool(normalized.get("counts_as_wip")):
+            continue
+        count += 1
+        if len(sample_paths) < 3:
+            sample_paths.append(rel if rel else str(path.relative_to(repo_root)))
+
+    return {
+        "count": count,
+        "sample_paths": sample_paths,
+    }
+
+
+def _evaluate_task_status_gate(task_path: str, new_status: str, *, project_id_hint: str = "") -> dict[str, Any]:
+    repo_root = _repo_root()
+    rel_task_path = str(task_path or "").strip()
+    target_status = str(new_status or "").strip()
+    file_path = repo_root / rel_task_path
+    if not file_path.exists():
+        raise ValueError(f"Task file not found: {task_path}")
+
+    tags, _ = parse_leading_tags(file_path.stem)
+    current_status = str(tags[0] or "").strip() if tags else ""
+    current_norm = normalize_task_status(current_status)
+    target_norm = normalize_task_status(target_status)
+    pid, channel_name, bucket = _resolve_task_project_channel(rel_task_path, project_hint=project_id_hint)
+
+    gate: dict[str, Any] = {
+        "checked": True,
+        "applies": False,
+        "passed": True,
+        "forced": False,
+        "bypassed": False,
+        "force_allowed": True,
+        "reason": "status_not_entering_in_progress",
+        "summary": "",
+        "current_status": current_status,
+        "target_status": target_status,
+        "scope": {
+            "project_id": pid,
+            "channel_name": channel_name,
+            "bucket": bucket,
+            "task_path": rel_task_path,
+        },
+        "config": {
+            "require_owner": _task_status_gate_require_owner(),
+            "channel_wip_limit": _task_status_gate_wip_limit(),
+        },
+        "rules": [],
+    }
+
+    if str(target_norm.get("primary_status") or "").strip() != "进行中":
+        return gate
+    if str(current_norm.get("primary_status") or "").strip() == "进行中":
+        gate["reason"] = "already_in_progress"
+        return gate
+    if bucket != "任务":
+        gate["reason"] = "invalid_task_scope"
+        return gate
+
+    gate["applies"] = True
+    gate["reason"] = "entering_in_progress"
+    md = safe_read_text(file_path)
+
+    if bool(gate["config"]["require_owner"]):
+        owner = extract_field(md, "负责人")
+        owner_passed = bool(str(owner or "").strip())
+        gate["rules"].append(
+            {
+                "key": "owner_required",
+                "label": "负责人必填",
+                "passed": owner_passed,
+                "detail": "已填写负责人" if owner_passed else "缺少 `## 负责人` 或 `负责人:` 字段",
+                "value": str(owner or "").strip(),
+            }
+        )
+
+    wip_limit = int(gate["config"]["channel_wip_limit"] or 0)
+    if wip_limit > 0:
+        channel_root = _task_channel_root_for_file(file_path)
+        snapshot = _scan_channel_wip_snapshot(channel_root, repo_root=repo_root, exclude_path=file_path)
+        current_wip = int(snapshot.get("count") or 0)
+        wip_passed = current_wip < wip_limit
+        gate["rules"].append(
+            {
+                "key": "channel_wip_limit",
+                "label": "通道进行中上限",
+                "passed": wip_passed,
+                "detail": (
+                    f"当前进行中 {current_wip} / 上限 {wip_limit}"
+                    if wip_passed
+                    else f"当前进行中 {current_wip}，达到上限 {wip_limit}"
+                ),
+                "current": current_wip,
+                "limit": wip_limit,
+                "next": current_wip + 1,
+                "sample_paths": snapshot.get("sample_paths") or [],
+            }
+        )
+
+    failed_rules = [rule for rule in gate["rules"] if isinstance(rule, dict) and not bool(rule.get("passed"))]
+    gate["passed"] = not failed_rules
+    if failed_rules:
+        gate["summary"] = "软门禁未通过：" + "；".join(str(rule.get("detail") or rule.get("label") or "").strip() for rule in failed_rules)
+    else:
+        gate["summary"] = "软门禁通过"
+    return gate
 
 
 def _change_task_status(task_path: str, new_status: str) -> dict[str, Any]:

@@ -1268,9 +1268,10 @@
       }
     }
 
-    const DONE_STATUSES = new Set(["已完成", "已验收通过", "已消费", "已解决", "已关闭", "已停止"]);
+    const DONE_STATUSES = new Set(["已完成", "已验收通过", "已消费", "已解决", "已关闭", "已停止", "已合并", "完成", "已归档"]);
     const PAUSE_STATUSES = new Set(["已暂停", "暂缓"]);
     const STATUS_ORDER = ["督办", "进行中", "待开始", "待处理", "待验收", "待消费", "其他", "已暂停", "已完成"];
+    const PRIMARY_TASK_STATUSES = ["待办", "进行中", "待验收", "已完成", "暂缓"];
     function loadSessionScopedMap(storageKey) {
       try {
         const raw = localStorage.getItem(String(storageKey || ""));
@@ -1957,7 +1958,7 @@
 
     function notifyNewChannelAgentAssistSuccess(form, payload, agent) {
       const createdChannelName = String((payload && payload.channelName) || buildNewChannelName(form) || "").trim();
-      const agentName = String((agent && (agent.displayName || agent.alias || agent.channelName || agent.sessionId)) || "目标 Agent").trim();
+      const agentName = String((agent && (agent.alias || agent.displayName || agent.channelName || agent.sessionId)) || "目标 Agent").trim();
       const dispatch = (payload && payload.dispatch) || {};
       const runId = String(dispatch.runId || "").trim();
       let message = "已创建通道";
@@ -2061,26 +2062,20 @@
       }
 
       if (card) card.classList.toggle("active", !!selected);
-      if (nameEl) nameEl.textContent = selected ? String(selected.displayName || selected.alias || selected.channelName || selected.sessionId || "-") : "-";
+      if (nameEl) nameEl.textContent = selected ? agentDisplayTitle(selected, "-") : "-";
       if (tagEl) tagEl.textContent = selected && selected.isPrimary ? "主会话" : "子会话";
       if (metaEl) {
         if (NEW_CHANNEL_UI.agentLoading) metaEl.textContent = "正在加载可选 Agent…";
         else if (NEW_CHANNEL_UI.agentError) metaEl.textContent = NEW_CHANNEL_UI.agentError;
-        else if (selected) {
-          const bits = [];
-          if (selected.channelName) bits.push(selected.channelName);
-          if (selected.sessionId) bits.push(selected.sessionId);
-          metaEl.textContent = bits.join(" · ");
-        } else {
-          metaEl.textContent = "当前项目暂无可选主会话";
-        }
+        else if (selected) metaEl.textContent = agentDisplaySubtitle(selected, { includeSessionIdFallback: true });
+        else metaEl.textContent = "当前项目暂无可选 Agent";
       }
       if (menu) {
         menu.innerHTML = "";
         if (NEW_CHANNEL_UI.agentLoading) {
           menu.appendChild(el("div", { class: "agent-option", text: "正在加载可选 Agent…" }));
         } else if (!candidates.length) {
-          menu.appendChild(el("div", { class: "agent-option", text: "当前项目暂无可选主会话" }));
+          menu.appendChild(el("div", { class: "agent-option", text: "当前项目暂无可选 Agent" }));
         } else {
           for (const item of candidates) {
             const option = el("button", {
@@ -2092,13 +2087,13 @@
             option.appendChild(el("div", {
               class: "agent-card-head",
               children: [
-                el("span", { class: "agent-name", text: String(item.displayName || item.alias || item.channelName || item.sessionId || "-") }),
+                el("span", { class: "agent-name", text: agentDisplayTitle(item, "-") }),
                 el("span", { class: "agent-tag", text: item.isPrimary ? "主会话" : "子会话" }),
               ],
             }));
             option.appendChild(el("div", {
               class: "agent-meta",
-              text: [item.channelName, item.sessionId, item.runtimeState && item.runtimeState.display_state ? item.runtimeState.display_state : ""].filter(Boolean).join(" · "),
+              text: agentDisplaySubtitle(item, { includeSessionIdFallback: true }),
             }));
             option.addEventListener("click", (e) => {
               e.preventDefault();
@@ -2159,7 +2154,7 @@
       if (!sessionId) return null;
       return {
         sessionId,
-        alias: String(normalized.alias || normalized.display_name || normalized.displayName || "").trim(),
+        alias: String(normalized.alias || "").trim(),
         displayName: String((typeof conversationDisplayName === "function" ? conversationDisplayName(normalized) : (normalized.display_name || normalized.displayName || "")) || "").trim(),
         channelName: String(normalized.channel_name || normalized.primaryChannel || "").trim(),
         cliType: String(normalized.cli_type || normalized.cliType || "codex").trim() || "codex",
@@ -2210,7 +2205,7 @@
         const sa = scoreNewChannelAgentCandidate(a);
         const sb = scoreNewChannelAgentCandidate(b);
         if (sa !== sb) return sb - sa;
-        return String(a.displayName || a.alias || a.channelName || a.sessionId || "").localeCompare(String(b.displayName || b.alias || b.channelName || b.sessionId || ""), "zh-Hans-CN");
+        return String(a.alias || a.displayName || a.channelName || a.sessionId || "").localeCompare(String(b.alias || b.displayName || b.channelName || b.sessionId || ""), "zh-Hans-CN");
       });
 
       NEW_CHANNEL_UI.agentCandidatesProjectId = projectId;
@@ -2279,7 +2274,7 @@
     function buildNewChannelAgentPrompt(form, agent) {
       const source = getNewChannelSourceSession();
       const agentSessionId = String((agent && agent.sessionId) || "").trim();
-      const agentDisplayName = String((agent && (agent.displayName || agent.alias || agent.channelName)) || "").trim();
+      const agentDisplayName = String((agent && (agent.alias || agent.displayName || agent.channelName)) || "").trim();
       const agentChannelName = String((agent && agent.channelName) || agentDisplayName || "").trim();
       const requirement = String(form.requirement || "").trim();
       const callbackSessionId = String(source.sessionId || "").trim();
@@ -2526,7 +2521,7 @@
           renderNewChannelResult(mode, j || {}, {
             error: msg,
             detail: info && Object.prototype.hasOwnProperty.call(info, "detail") ? info.detail : (j || {}),
-            agentDisplayName: agent ? String(agent.displayName || agent.alias || agent.channelName || agent.sessionId || "-") : "",
+            agentDisplayName: agent ? String(agent.alias || agent.displayName || agent.channelName || agent.sessionId || "-") : "",
             agentSessionId: agent ? String(agent.sessionId || "") : "",
           });
           NEW_CHANNEL_UI.phase = "error";
@@ -2566,12 +2561,91 @@
       return "其他";
     }
 
+    function taskStatusFlags(it) {
+      const row = (it && typeof it === "object") ? it : {};
+      const flags = (row && typeof row.status_flags === "object") ? row.status_flags : {};
+      const raw = String((row && row.status) || it || "").trim();
+      return {
+        supervised: !!(flags.supervised || raw.includes("督办")),
+        blocked: !!(flags.blocked || raw.includes("阻塞") || raw.includes("异常")),
+      };
+    }
+
+    function taskPrimaryStatus(it) {
+      const row = (it && typeof it === "object") ? it : null;
+      const direct = String((row && row.primary_status) || "").trim();
+      if (direct) return direct;
+      const raw = String((row && row.status) || it || "").trim();
+      if (!raw) return "";
+      if (DONE_STATUSES.has(raw)) return "已完成";
+      if (PAUSE_STATUSES.has(raw)) return "暂缓";
+      if (raw.includes("待验收")) return "待验收";
+      if (raw.includes("进行中") || raw.includes("阻塞") || raw.includes("异常")) return "进行中";
+      return "待办";
+    }
+
+    function taskPrimaryTone(status) {
+      const st = String(status || "").trim();
+      if (st === "进行中") return "warn";
+      if (st === "待验收") return "warn";
+      if (st === "已完成") return "good";
+      return "muted";
+    }
+
+    function emptyPrimaryTaskCounts() {
+      return {
+        todo: 0,
+        in_progress: 0,
+        pending_acceptance: 0,
+        done: 0,
+        paused: 0,
+      };
+    }
+
+    function primaryTaskCountsFromItems(items) {
+      const counts = emptyPrimaryTaskCounts();
+      for (const it of (Array.isArray(items) ? items : [])) {
+        const primary = taskPrimaryStatus(it);
+        if (primary === "待办") counts.todo += 1;
+        else if (primary === "进行中") counts.in_progress += 1;
+        else if (primary === "待验收") counts.pending_acceptance += 1;
+        else if (primary === "已完成") counts.done += 1;
+        else if (primary === "暂缓") counts.paused += 1;
+      }
+      return counts;
+    }
+
+    function primaryTaskCountsFromTotals(totals) {
+      const row = (totals && typeof totals === "object") ? totals : {};
+      const payload = (row.primary_status_counts && typeof row.primary_status_counts === "object")
+        ? row.primary_status_counts
+        : null;
+      if (payload) {
+        return {
+          todo: toNonNegativeInt(payload.todo, 0),
+          in_progress: toNonNegativeInt(payload.in_progress, 0),
+          pending_acceptance: toNonNegativeInt(payload.pending_acceptance, 0),
+          done: toNonNegativeInt(payload.done, 0),
+          paused: toNonNegativeInt(payload.paused, 0),
+        };
+      }
+      return {
+        todo: toNonNegativeInt(row.todo, 0),
+        in_progress: toNonNegativeInt(row.in_progress, 0),
+        pending_acceptance: toNonNegativeInt(row.pending_acceptance, 0),
+        done: toNonNegativeInt(row.done, 0),
+        paused: toNonNegativeInt(row.paused, 0),
+      };
+    }
+
     function toneForBucket(bucket) {
       if (bucket === "督办") return "bad";
       if (bucket === "进行中") return "warn";
       if (bucket === "待处理") return "warn";
       if (bucket === "待验收") return "warn";
       if (bucket === "待消费") return "warn";
+      if (bucket === "待办") return "muted";
+      if (bucket === "暂缓") return "muted";
       if (bucket === "已完成") return "good";
       return "muted";
     }
@@ -2802,6 +2876,54 @@
       return isPrimarySession(session) ? "主会话" : "子会话";
     }
 
+    function hasSessionRoleSignal(session) {
+      const s = (session && typeof session === "object") ? session : {};
+      if (typeof s.is_primary === "boolean" || typeof s.isPrimary === "boolean" || typeof s.isPrimarySession === "boolean") return true;
+      const role = String(s.session_role || s.sessionRole || "").trim();
+      return !!role;
+    }
+
+    function sessionRoleDisplayLabel(session) {
+      return hasSessionRoleSignal(session) ? sessionRoleLabel(session) : "";
+    }
+
+    function agentDisplayTitle(session, fallback = "-") {
+      const s = (session && typeof session === "object") ? session : {};
+      return String(
+        s.alias
+        || s.displayName
+        || s.display_name
+        || getSessionChannelName(s)
+        || s.channelName
+        || s.channel_name
+        || getSessionId(s)
+        || s.sessionId
+        || s.session_id
+        || fallback
+      ).trim() || String(fallback || "-");
+    }
+
+    function agentDisplaySubtitle(session, opts = {}) {
+      const s = (session && typeof session === "object") ? session : {};
+      const parts = [];
+      const channelLabel = String(
+        getSessionChannelName(s)
+        || s.channelName
+        || s.channel_name
+        || s.primaryChannel
+        || ""
+      ).trim();
+      if (channelLabel) parts.push(channelLabel);
+      const roleLabel = String(sessionRoleDisplayLabel(s) || "").trim();
+      if (roleLabel) {
+        parts.push(roleLabel);
+      } else if (opts.includeSessionIdFallback !== false) {
+        const sid = String(getSessionId(s) || s.sessionId || s.session_id || s.id || "").trim();
+        if (sid) parts.push(sid);
+      }
+      return parts.filter(Boolean).join(" · ");
+    }
+
     function sessionRoleTone(session) {
       return isPrimarySession(session) ? "good" : "muted";
     }
@@ -2956,10 +3078,10 @@
         ? window.location.origin
         : ((window.location.protocol && window.location.host)
           ? `${window.location.protocol}//${window.location.host}`
-          : "http://127.0.0.1");
+          : "http://127.0.0.1:18765");
       return {
         primary: new URL("/share/avatar-library.html", origin).toString(),
-        fallback: new URL("avatar-library.html", origin).toString(),
+        fallback: new URL("/dist/avatar-library.html", origin).toString(),
       };
     }
 
@@ -3134,9 +3256,13 @@
     function conversationSecondaryMeta(session) {
       const s = (session && typeof session === "object") ? session : {};
       const parts = [];
-      const displayName = String(conversationAgentName(s) || "").trim();
       const channelLabel = String(getSessionChannelName(s) || "").trim();
-      if (channelLabel && channelLabel !== displayName) parts.push({ text: channelLabel, kind: "channel" });
+      if (channelLabel) {
+        parts.push({ text: channelLabel, kind: "channel" });
+      } else {
+        const sid = String(getSessionId(s) || s.sessionId || s.id || "").trim();
+        if (sid) parts.push({ text: sid, kind: "session" });
+      }
       return parts.filter(Boolean).slice(0, 1);
     }
 
@@ -3429,8 +3555,6 @@
         getSessionChannelName(session),
         session && session.channelName,
         session && session.primaryChannel,
-        session && session.displayChannel,
-        session && session.alias,
       ]);
       if (!sid || !channelName) return null;
       const pid = String(projectId || STATE.project || "").trim();
@@ -3992,7 +4116,7 @@
     }
 
     // 任务状态选择器
-    const TASK_STATUSES = ["待处理", "待开始", "进行中", "已完成", "已验收通过", "暂缓"];
+    const TASK_STATUSES = ["待处理", "待开始", "进行中", "待验收", "已完成", "已验收通过", "暂缓"];
     let STATUS_SELECTOR_OUTSIDE_BOUND = false;
 
     function ensureStatusSelectorOutsideClose() {
@@ -4111,14 +4235,33 @@
       }).catch(() => {});
     }
 
-    async function changeTaskStatus(taskPath, newStatus) {
+    function summarizeTaskStatusGateFailure(gate) {
+      const src = (gate && typeof gate === "object") ? gate : {};
+      const rules = Array.isArray(src.rules) ? src.rules : [];
+      const failed = rules
+        .filter((rule) => rule && rule.passed === false)
+        .map((rule) => String(rule.detail || rule.label || "").trim())
+        .filter(Boolean);
+      return String(src.summary || failed.join("；") || "任务状态软门禁未通过");
+    }
+
+    async function changeTaskStatus(taskPath, newStatus, opts = {}) {
+      const force = !!(opts && opts.force);
       const r = await fetch("/api/tasks/status", {
         method: "POST",
         headers: authHeaders({ "Content-Type": "application/json" }),
-        body: JSON.stringify({ path: taskPath, status: newStatus })
+        body: JSON.stringify({ path: taskPath, status: newStatus, force })
       });
       if (!r.ok) {
-        const detail = await parseResponseDetail(r);
+        let payload = null;
+        try { payload = await r.json(); } catch (_) {}
+        const gate = payload && payload.gate && typeof payload.gate === "object" ? payload.gate : null;
+        if (r.status === 409 && gate && gate.force_allowed && !force) {
+          const message = summarizeTaskStatusGateFailure(gate);
+          const confirmed = window.confirm(message + "\n\n是否强制继续推进到“" + newStatus + "”？");
+          if (confirmed) return await changeTaskStatus(taskPath, newStatus, { force: true });
+        }
+        const detail = String((payload && (payload.error || payload.message)) || r.statusText || "").trim();
         throw new Error(detail || "Request failed");
       }
       return await r.json();
@@ -4319,13 +4462,7 @@
     function matchesStatus(it, statusFilter) {
       const f = String(statusFilter || "待办");
       if (f === "全部") return true;
-      const b = bucketKeyForStatus(it.status);
-      // 图二语义：进行中通常包含“督办”这类更高优先级子集
-      if (f === "进行中") return (b === "进行中" || b === "督办");
-      if (f === "已完成") return b === "已完成";
-      // 待办：所有未完成（含进行中/督办），但排除暂停
-      if (f === "待办") return !(b === "已完成" || b === "已暂停");
-      return true;
+      return taskPrimaryStatus(it) === f;
     }
 
     function isKnowledgeItem(it) {
@@ -4419,6 +4556,7 @@
     function sessionForChannel(projectId, channelName) {
       const proj = projectById(projectId);
       if (!proj) return null;
+      // bindings 只保留兼容补洞，不再反向覆盖 runtime/store/config 的主链会话信息。
       const local = getBinding(projectId, channelName);
       const list = Array.isArray(proj.channel_sessions) ? proj.channel_sessions : [];
       const runtimeList = Array.isArray(PCONV.sessions) ? PCONV.sessions : [];
@@ -4429,7 +4567,10 @@
       });
       const hit = list.find(x => String(x.name || "") === String(channelName));
       if (hit) {
-        if (local && local.session_id) return { ...hit, session_id: local.session_id, cli_type: local.cli_type, source: "local" };
+        const existingSessionId = String(hit.session_id || hit.sessionId || "").trim();
+        if (!existingSessionId && local && local.session_id) {
+          return { ...hit, session_id: local.session_id, cli_type: local.cli_type, source: "bindings_compat" };
+        }
         return { ...hit, cli_type: hit.cli_type || hit.cliType || "codex", model: normalizeSessionModel(hit.model) };
       }
       if (runtimeHit) {
@@ -4437,18 +4578,19 @@
         const cli = String(runtimeHit.cli_type || "codex").trim() || "codex";
         const model = normalizeSessionModel(runtimeHit.model);
         const base = { name: channelName, alias: "", session_id: sid, desc: "", cli_type: cli, model, source: "runtime" };
-        if (local && local.session_id) return { ...base, session_id: local.session_id, cli_type: local.cli_type, source: "local" };
         return base;
       }
       const cfg = Array.isArray(proj.channels) ? proj.channels : [];
       const hit2 = cfg.find(x => String(x.name || "") === String(channelName));
       if (hit2) {
         const base = { name: hit2.name, alias: hit2.alias || "", session_id: hit2.session_id || "", desc: hit2.desc || "", cli_type: hit2.cli_type || hit2.cliType || "codex", model: normalizeSessionModel(hit2.model), source: "config" };
-        if (local && local.session_id) return { ...base, session_id: local.session_id, cli_type: local.cli_type, source: "local" };
+        if (!String(base.session_id || "").trim() && local && local.session_id) {
+          return { ...base, session_id: local.session_id, cli_type: local.cli_type, source: "bindings_compat" };
+        }
         return base;
       }
       const base = { name: channelName, alias: "", session_id: "", desc: "", cli_type: "codex", model: "", source: "" };
-      if (local && local.session_id) return { ...base, session_id: local.session_id, cli_type: local.cli_type, source: "local" };
+      if (local && local.session_id) return { ...base, session_id: local.session_id, cli_type: local.cli_type, source: "bindings_compat" };
       return base;
     }
 
@@ -4477,13 +4619,17 @@
     function fallbackTaskTotals(items) {
       const src = Array.isArray(items) ? items : [];
       const tasks = src.filter(isTaskItem);
-      const taskBuckets = countByBucket(tasks);
+      const primaryCounts = primaryTaskCountsFromItems(tasks);
       return {
         total: tasks.length,
-        active: tasks.filter((x) => !DONE_STATUSES.has(x.status) && !PAUSE_STATUSES.has(x.status)).length,
-        done: tasks.filter((x) => DONE_STATUSES.has(x.status)).length,
-        supervised: toNonNegativeInt(taskBuckets.get("督办") || 0, 0),
-        in_progress: toNonNegativeInt(taskBuckets.get("进行中") || 0, 0),
+        active: primaryCounts.todo + primaryCounts.in_progress + primaryCounts.pending_acceptance,
+        done: primaryCounts.done,
+        supervised: tasks.reduce((sum, it) => sum + (taskStatusFlags(it).supervised ? 1 : 0), 0),
+        in_progress: primaryCounts.in_progress,
+        todo: primaryCounts.todo,
+        pending_acceptance: primaryCounts.pending_acceptance,
+        paused: primaryCounts.paused,
+        primary_status_counts: primaryCounts,
         requirements_total: src.filter(isRequirementItem).length,
         requirements_active: src.filter((x) => isRequirementItem(x) && !DONE_STATUSES.has(x.status) && !PAUSE_STATUSES.has(x.status)).length,
       };
@@ -4493,12 +4639,17 @@
       const card = overviewProjectCard(projectId);
       const totals = (card && typeof card.totals === "object") ? card.totals : null;
       if (totals) {
+        const primaryCounts = primaryTaskCountsFromTotals(totals);
         return {
           total: toNonNegativeInt(totals.total, 0),
           active: toNonNegativeInt(totals.active, 0),
           done: toNonNegativeInt(totals.done, 0),
           supervised: toNonNegativeInt(totals.supervised, 0),
           in_progress: toNonNegativeInt(totals.in_progress, 0),
+          todo: primaryCounts.todo,
+          pending_acceptance: primaryCounts.pending_acceptance,
+          paused: primaryCounts.paused,
+          primary_status_counts: primaryCounts,
           requirements_total: toNonNegativeInt(totals.requirements_total, 0),
           requirements_active: toNonNegativeInt(totals.requirements_active, 0),
         };
@@ -4510,12 +4661,17 @@
       const card = overviewChannelCard(projectId, channelName);
       const totals = (card && typeof card.totals === "object") ? card.totals : null;
       if (totals) {
+        const primaryCounts = primaryTaskCountsFromTotals(totals);
         return {
           total: toNonNegativeInt(totals.total, 0),
           active: toNonNegativeInt(totals.active, 0),
           done: toNonNegativeInt(totals.done, 0),
           supervised: toNonNegativeInt(totals.supervised, 0),
           in_progress: toNonNegativeInt(totals.in_progress, 0),
+          todo: primaryCounts.todo,
+          pending_acceptance: primaryCounts.pending_acceptance,
+          paused: primaryCounts.paused,
+          primary_status_counts: primaryCounts,
           requirements_total: toNonNegativeInt(totals.requirements_total, 0),
           requirements_active: toNonNegativeInt(totals.requirements_active, 0),
         };
@@ -4592,13 +4748,15 @@
       function score(list) {
         let s = 0;
         for (const it of list) {
-          const b = bucketKeyForStatus(it.status);
-          if (b === "督办") s += 1000;
-          else if (b === "进行中") s += 300;
-          else if (b === "待验收" || b === "待消费" || b === "待处理" || b === "待开始") s += 120;
-          else if (b === "其他") s += 20;
-          else if (b === "已暂停") s += 5;
-          else if (b === "已完成") s += 1;
+          const flags = taskStatusFlags(it);
+          const primary = taskPrimaryStatus(it);
+          if (flags.supervised) s += 1000;
+          else if (flags.blocked) s += 360;
+          else if (primary === "进行中") s += 300;
+          else if (primary === "待验收") s += 180;
+          else if (primary === "待办") s += 120;
+          else if (primary === "暂缓") s += 5;
+          else if (primary === "已完成") s += 1;
         }
         return s;
       }
@@ -4636,12 +4794,17 @@
       const pid = String(projectId || STATE.project || "").trim();
       if (!pid || pid === "overview") return [];
       const normalizeList = (list) => (Array.isArray(list) ? list.filter((s) => !isDeletedSession(s)) : []);
+      const liveMeta = PCONV.sessionDirectoryMetaByProject && PCONV.sessionDirectoryMetaByProject[pid];
+      const localDirectory = PCONV.sessionDirectoryByProject && PCONV.sessionDirectoryByProject[pid];
       if (
         pid === String(PCONV.lastProjectId || "")
         && Array.isArray(PCONV.sessions)
         && PCONV.sessions.length
       ) {
         return normalizeList(PCONV.sessions.slice());
+      }
+      if (Array.isArray(localDirectory) && (localDirectory.length || (liveMeta && liveMeta.liveLoaded))) {
+        return normalizeList(localDirectory.slice());
       }
       return normalizeList(configuredProjectConversations(pid));
     }
@@ -4834,6 +4997,7 @@
           : (moduleMode === "org" ? "组织2D画板" : "全项目任务");
         const names = unionChannelNames(STATE.project);
         const activeTotal = toNonNegativeInt(projectTotals.active, 0);
+        const projectPrimaryCounts = primaryTaskCountsFromTotals(projectTotals);
         const taskTotal = toNonNegativeInt(projectTotals.total, 0);
         const requirementsTotal = toNonNegativeInt(projectTotals.requirements_total, 0);
         const scheduleTotal = projectScheduleItems(STATE.project).length;
@@ -4844,6 +5008,9 @@
             : "按主任务批次查看。切换到“通道”后可查看通道目录路径并快速打开文件夹。");
         statsEl.appendChild(chip("通道:" + names.length, names.length ? "muted" : "warn"));
         statsEl.appendChild(chip("任务:" + taskTotal, taskTotal ? "good" : "muted"));
+        statsEl.appendChild(chip("待办:" + projectPrimaryCounts.todo, projectPrimaryCounts.todo ? "muted" : "muted"));
+        statsEl.appendChild(chip("进行中:" + projectPrimaryCounts.in_progress, projectPrimaryCounts.in_progress ? "warn" : "muted"));
+        if (projectPrimaryCounts.pending_acceptance) statsEl.appendChild(chip("待验收:" + projectPrimaryCounts.pending_acceptance, "warn"));
         statsEl.appendChild(chip("需求:" + requirementsTotal, requirementsTotal ? "good" : "muted"));
         statsEl.appendChild(chip("排期:" + scheduleTotal, scheduleTotal ? "good" : "muted"));
         statsEl.appendChild(chip("组织节点:" + orgNodeCount, orgNodeCount ? "good" : "muted"));
@@ -4863,10 +5030,12 @@
       const sid = String((sess && sess.session_id) || "").trim();
       const desc = getChannelDesc(project, channelName, sess);
       const channelTotals = channelTaskRequirementTotals(STATE.project, channelName);
+      const channelPrimaryCounts = primaryTaskCountsFromTotals(channelTotals);
       const reqCapability = channelRequirementCapability(STATE.project, channelName);
       const taskCount = toNonNegativeInt(channelTotals.total, 0);
       const requirementsCount = toNonNegativeInt(channelTotals.requirements_total, 0);
-      const runningCount = toNonNegativeInt(channelTotals.supervised, 0) + toNonNegativeInt(channelTotals.in_progress, 0);
+      const runningCount = channelPrimaryCounts.in_progress;
+      const supervisedCount = toNonNegativeInt(channelTotals.supervised, 0);
       const channelRootPath = resolveChannelRootPath(project, channelName, channelItems);
 
       infoLabel.textContent = "";
@@ -4882,6 +5051,9 @@
       copyBtn.style.display = "none";
 
       statsEl.appendChild(chip("进行中:" + runningCount, runningCount ? "warn" : "muted"));
+      statsEl.appendChild(chip("待办:" + channelPrimaryCounts.todo, channelPrimaryCounts.todo ? "muted" : "muted"));
+      if (channelPrimaryCounts.pending_acceptance) statsEl.appendChild(chip("待验收:" + channelPrimaryCounts.pending_acceptance, "warn"));
+      if (supervisedCount) statsEl.appendChild(chip("关注:" + supervisedCount, "bad"));
       statsEl.appendChild(chip("任务:" + taskCount, taskCount ? "good" : "muted"));
       statsEl.appendChild(chip("需求:" + requirementsCount, requirementsCount ? "good" : "muted"));
       statsEl.appendChild(chip(requirementCapabilityText(reqCapability), requirementCapabilityTone(reqCapability)));
@@ -4936,7 +5108,7 @@
       if (STATE.panelMode === "task") {
         asideTitle.textContent = "任务模块";
         const groups = buildTaskGroups(STATE.project);
-        const byLane = { "进行中": 0, "待处理": 0, "待开始": 0, "已完成": 0, "已归档": 0 };
+        const byLane = { "进行中": 0, "待办": 0, "待验收": 0, "已完成": 0, "暂缓": 0, "已归档": 0 };
         groups.forEach((g) => {
           const lane = String((g && g.lane) || "已归档");
           if (!Object.prototype.hasOwnProperty.call(byLane, lane)) return;
@@ -4960,9 +5132,10 @@
         const taskChips = el("div", { class: "chips" });
         taskChips.appendChild(chip("总任务:" + groups.length, "muted"));
         taskChips.appendChild(chip("进行中:" + byLane["进行中"], byLane["进行中"] ? "warn" : "muted"));
-        taskChips.appendChild(chip("待处理:" + byLane["待处理"], byLane["待处理"] ? "warn" : "muted"));
-        taskChips.appendChild(chip("待开始:" + byLane["待开始"], byLane["待开始"] ? "muted" : "muted"));
+        taskChips.appendChild(chip("待办:" + byLane["待办"], byLane["待办"] ? "muted" : "muted"));
+        taskChips.appendChild(chip("待验收:" + byLane["待验收"], byLane["待验收"] ? "warn" : "muted"));
         taskChips.appendChild(chip("已完成:" + byLane["已完成"], byLane["已完成"] ? "good" : "muted"));
+        if (byLane["暂缓"]) taskChips.appendChild(chip("暂缓:" + byLane["暂缓"], "muted"));
         taskBtn.appendChild(taskChips);
         taskBtn.addEventListener("click", () => {
           STATE.taskModule = "tasks";
@@ -5285,10 +5458,11 @@
 
     function taskLaneFromMasterBucket(bucket) {
       const b = String(bucket || "");
-      if (b === "督办" || b === "进行中") return "进行中";
-      if (b === "待处理" || b === "待验收" || b === "待消费") return "待处理";
-      if (b === "待开始") return "待开始";
+      if (b === "进行中") return "进行中";
+      if (b === "待办") return "待办";
+      if (b === "待验收") return "待验收";
       if (b === "已完成") return "已完成";
+      if (b === "暂缓") return "暂缓";
       return "已归档";
     }
 
@@ -5330,10 +5504,10 @@
 
         const childCounts = Object.create(null);
         for (const child of children) {
-          const b = bucketKeyForStatus(child && child.status);
+          const b = taskPrimaryStatus(child);
           childCounts[b] = Number(childCounts[b] || 0) + 1;
         }
-        const masterBucket = bucketKeyForStatus(master && master.status);
+        const masterBucket = taskPrimaryStatus(master);
         const lane = taskLaneFromMasterBucket(masterBucket);
         const masterTs = toTimeNum(master && master.updated_at);
         groups.push({
@@ -5350,7 +5524,7 @@
         });
       }
 
-      const laneOrder = { "进行中": 0, "待处理": 1, "待开始": 2, "已完成": 3, "已归档": 4 };
+      const laneOrder = { "进行中": 0, "待办": 1, "待验收": 2, "已完成": 3, "暂缓": 4, "已归档": 5 };
       groups.sort((a, b) => {
         const ao = Object.prototype.hasOwnProperty.call(laneOrder, a.lane) ? laneOrder[a.lane] : 99;
         const bo = Object.prototype.hasOwnProperty.call(laneOrder, b.lane) ? laneOrder[b.lane] : 99;
@@ -5361,13 +5535,13 @@
     }
 
     function taskLaneOrderList() {
-      return ["进行中", "待处理", "待开始", "已完成", "已归档"];
+      return ["进行中", "待办", "待验收", "已完成", "暂缓", "已归档"];
     }
 
     function taskLaneTone(lane) {
       if (lane === "进行中") return "warn";
-      if (lane === "待处理") return "warn";
-      if (lane === "待开始") return "muted";
+      if (lane === "待验收") return "warn";
+      if (lane === "待办") return "muted";
       if (lane === "已完成") return "good";
       return "muted";
     }

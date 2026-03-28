@@ -254,6 +254,26 @@
       return out;
     }
 
+    function hydrateConversationGlobalMentionDirectory(projectId) {
+      const currentPid = String(projectId || STATE.project || "").trim();
+      const projects = Array.isArray(DATA.projects) ? DATA.projects : [];
+      projects.forEach((project) => {
+        const pid = String((project && project.id) || "").trim();
+        if (!pid || pid === "overview") return;
+        ensureConversationSessionDirectoryStateMaps();
+        const meta = PCONV.sessionDirectoryMetaByProject[pid] || null;
+        if (meta && meta.liveLoaded) return;
+        if (PCONV.sessionDirectoryPromiseByProject[pid]) return;
+        ensureConversationProjectSessionDirectory(pid).then(() => {
+          const st = PCONV.mentionSuggest || {};
+          if (!st.open) return;
+          if (String(st.mode || "") !== globalProjectMentionSuggestMode()) return;
+          if (String(STATE.project || "") !== currentPid) return;
+          updateConvMentionSuggestByInput();
+        }).catch(() => {});
+      });
+    }
+
     function mentionInsertLabel(raw) {
       const m = normalizeMentionTargetItem(raw);
       if (!m) return "";
@@ -544,12 +564,13 @@
           }, seenInRun);
         });
         if (String(spec.senderType || "").trim().toLowerCase() === "agent") {
+          const senderSessionId = String(spec.senderId || "").trim();
           push({
-            session_id: String(spec.senderId || "").trim(),
-            sender_id: String(spec.senderId || "").trim(),
+            session_id: senderSessionId,
+            sender_id: senderSessionId,
             display_name: String(spec.senderName || "").trim(),
             sender_name: String(spec.senderName || "").trim(),
-            channel_name: String(spec.senderName || "").trim(),
+            channel_name: String(senderSessionId ? findSessionChannelById(senderSessionId) : "").trim(),
             project_id: currentProjectId,
           }, {
             createdAt,
@@ -575,27 +596,18 @@
       const target = item && item.target;
       const session = item && item.session;
       if (!target) return "";
-      const displayName = String(
-        conversationAgentName(session)
-        || item.displayName
-        || mentionInsertLabel(target)
-        || target.display_name
-        || target.channel_name
-        || "协同对象"
-      ).trim();
+      const displayName = agentDisplayTitle(session || target, "协同对象");
+      const displaySubmeta = agentDisplaySubtitle(session || target, { includeSessionIdFallback: true });
       const info = [];
       const when = compactDateTime(item.lastSeenAt || item.firstSeenAt || "");
       if (when) info.push("最近 " + when);
       const sourceText = conversationRecentAgentSourceLabel(item.lastSourceKind);
       if (sourceText) info.push(sourceText);
       if (Number(item.mentionCount || 0) > 1) info.push("出现 " + Number(item.mentionCount || 0) + " 次");
-      const channelName = String(getSessionChannelName(session) || target.channel_name || "").trim();
-      const sessionId = String(getSessionId(session) || target.session_id || "").trim();
       return [
         displayName,
-        channelName && channelName !== displayName ? ("通道: " + channelName) : "",
+        displaySubmeta,
         info.join(" · "),
-        sessionId ? ("session_id: " + sessionId) : "",
       ].filter(Boolean).join("\n");
     }
 
@@ -626,6 +638,8 @@
       if (!target) return null;
       const currentMentions = getConvComposerMentionsForCurrentSession();
       const active = currentMentions.some((it) => mentionTargetKey(it) === mentionTargetKey(target));
+      const displayTitle = agentDisplayTitle(session || target, "协同对象");
+      const displaySubmeta = agentDisplaySubtitle(session || target, { includeSessionIdFallback: true });
       const chipBtn = el("button", {
         class: "convrecentagent-chip" + (active ? " active" : ""),
         type: "button",
@@ -639,17 +653,18 @@
           text: conversationRecentAgentInitial(target),
         }));
       }
-      chipBtn.appendChild(el("span", {
+      const textWrap = el("span", { class: "convrecentagent-text" });
+      textWrap.appendChild(el("span", {
         class: "convrecentagent-label",
-        text: String(
-          conversationAgentName(session)
-          || item.displayName
-          || mentionInsertLabel(target)
-          || target.display_name
-          || target.channel_name
-          || "协同对象"
-        ).trim(),
+        text: displayTitle,
       }));
+      if (displaySubmeta) {
+        textWrap.appendChild(el("span", {
+          class: "convrecentagent-submeta",
+          text: displaySubmeta,
+        }));
+      }
+      chipBtn.appendChild(textWrap);
       chipBtn.addEventListener("click", (e) => {
         e.preventDefault();
         e.stopPropagation();
@@ -832,30 +847,32 @@
         "- Agent = 身份，session = 当前承载结果",
         "- 不清楚工作区、分支、真源时，先查项目内真源，不要自行猜测。",
         "",
-        "3. 阅读所在通道资料并学习公共技能",
+        "3. 阅读必读入口并学习项目技能",
         "- README.md",
-        "- 当前负责通道下的 任务/",
-        "- 当前负责通道下的 反馈/",
-        "- 当前负责通道下的 产出物/材料/",
-        "- 当前负责通道下的 产出物/沉淀/",
+        "- 活动 任务/",
+        "- 活动 反馈/",
+        "- 产出物/材料/",
+        "- 产出物/沉淀/",
         "- skills/INDEX.md",
-        "- 当前项目公共 skills 清单/索引文件",
+        "- 当前项目 skills 真源/索引文件",
         "- 至少重点学习：",
         "  - agent-init-training-playbook",
         "  - collab-message-send（或当前项目等效的正式消息技能）",
         "  - project-startup-collab-suite",
-        "  - 当前项目的公共技能与消息沟通技能",
+        "  - 当前通道自己的专项 skill",
         "",
         "4. 学会怎么发正式消息",
-        "- 跨 Agent / 跨通道协作必须走正式系统发送，不把内部草稿或内部 spawn 当成“已通知”",
+        "- 跨 Agent / 跨通道协作只能走 http://127.0.0.1:18765/api/codex/announce（announce_to_channel），不能把临时 taskboard、内部草稿、内部思考、内部 spawn 或非正式 resume 当成“已通知通道”",
         "- 正式消息默认用你当前执行 Agent 自己的身份发送，不借用项目主会话、总控或其他通道 Agent 身份",
-        "- 正式消息最小字段：当前发信Agent / session_id / source_ref / callback_to",
+        "- 正式消息最小字段：当前发信Agent / session_id / source_ref / callback_to / interaction_mode",
         "- 消息正文优先显式写：当前发信Agent / 当前会话 / source_ref / callback_to",
         "- 若保留 [发送主体]，它只能和当前发信Agent同名同身份；不一致视为不合规",
         "- 只有用户明确要求代发，且正文写出代发原因，才允许身份与执行会话不一致",
         "- 不清楚发给谁时，先查项目通讯录/CCR，不向用户反问基础目标对象。",
         "- 正式通知成功至少分三层判断：已生成待发送正文 / 已提交发送，待验证 / 已完成证据闭环",
+        "- 已完成证据闭环至少同时看到：announce_run_id、target_session_id、目标通道聊天区可见；缺一项都只能写“待验证”",
         "- 没有 announce_run_id 时，不得写已发出 / 已送达 / 已通知通道",
+        "- 常见误判：只看到 taskboard 临时记录、只生成可转发正文、只留下 .runs/run log、只触发内部 spawn、只执行本地 resume，均不等于已通知通道",
         "",
         "5. 学会什么时候必须回执",
         "- 收到任务先首回执，执行后再回结构化结论",
@@ -872,7 +889,7 @@
         "已完成初始化",
         "职责边界: <一句话>",
         "当前主线: <一句话>",
-        "已学习公共技能: <列出本轮已学习的关键 skills>",
+        "已学习技能: <列出本轮已学习的关键 skills>",
         "通讯录验证: 已向 <agent名称> 发送正式消息",
         "验证证据: <run_id / 目标session_id>",
         "唯一阻塞: <无/一句话>",
@@ -932,7 +949,7 @@
           : "本轮将自动收起";
       }
       if (trainingDesc) {
-        trainingDesc.textContent = "新 Agent 开始协作前，先查看所在通道资料，学习公共 skills、发消息方式与回执规则，并完成一次通讯录初始化验证。";
+        trainingDesc.textContent = "新 Agent 开始协作前，先学习项目 skills、发消息方式与回执规则，并完成一次通讯录正式发送验证。";
       }
       if (trainingSendBtn) {
         trainingSendBtn.disabled = !!PCONV.sending;
@@ -1224,16 +1241,7 @@
     function convMentionMetaText(raw, mode) {
       const item = normalizeMentionTargetItem(raw);
       if (!item) return "";
-      const parts = [];
-      if (mode === globalProjectMentionSuggestMode()) {
-        const ch = String(item.channel_name || "").trim();
-        if (ch && ch !== String(item.display_name || "").trim()) parts.push(ch);
-      }
-      const sid = shortId(String(item.session_id || ""));
-      if (sid) parts.push(sid);
-      const cli = String(item.cli_type || "codex").trim();
-      if (cli) parts.push(cli);
-      return parts.join(" · ");
+      return agentDisplaySubtitle(item, { includeSessionIdFallback: true });
     }
 
     function buildConvMentionSuggestItem(it, mode, idx, activeIndex) {
@@ -1242,7 +1250,7 @@
         type: "button",
       });
       const main = el("span", { class: "convmention-main" });
-      main.appendChild(el("span", { class: "convmention-name", text: String(it.display_name || it.channel_name || "协同对象") }));
+      main.appendChild(el("span", { class: "convmention-name", text: agentDisplayTitle(it, "协同对象") }));
       const subMeta = convMentionMetaText(it, mode);
       if (subMeta) main.appendChild(el("span", { class: "convmention-submeta", text: subMeta }));
       item.appendChild(main);
@@ -1330,6 +1338,7 @@
       const mode = String(anchor.mode || currentProjectMentionSuggestMode()) === globalProjectMentionSuggestMode()
         ? globalProjectMentionSuggestMode()
         : currentProjectMentionSuggestMode();
+      if (mode === globalProjectMentionSuggestMode()) hydrateConversationGlobalMentionDirectory(STATE.project);
       const source = mode === globalProjectMentionSuggestMode()
         ? conversationGlobalMentionDirectory(STATE.project)
         : conversationMentionDirectory(STATE.project);
@@ -3420,12 +3429,28 @@
         const msg = String((e && e.message) || e || "未知错误");
         const lower = msg.toLowerCase();
         const queuedConflict = /run is (not|no longer) queued/i.test(msg) || (lower.includes("queued") && (lower.includes("not") || lower.includes("no longer")));
+        const networkLike = (
+          lower.includes("failed to fetch")
+          || lower.includes("networkerror")
+          || lower.includes("network request failed")
+          || lower.includes("load failed")
+          || lower.includes("network connection")
+          || lower.includes("the internet connection appears to be offline")
+        );
         if (queuedConflict) {
           setHintText("conv", "该消息已不在排队态（可能已开始或已完成），正在刷新状态…");
           try {
             await refreshConversationPanel();
           } catch (_) {}
           scheduleConversationPoll(1000);
+        } else if (networkLike) {
+          setHintText("conv", "撤回请求未确认送达（连接中断或服务重启），已自动刷新最新状态。");
+          try {
+            await refreshConversationPanel();
+          } catch (_) {
+            renderConversationDetail();
+          }
+          scheduleConversationPoll(1200);
         } else {
           if (lower.includes("409")) {
             setHintText("conv", "撤回失败：状态发生变化，已自动刷新最新状态。");

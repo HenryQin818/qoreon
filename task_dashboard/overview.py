@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from .domain import bucket_key_for_status, looks_like_session_id, max_updated_at, score_bucket
+from .domain import bucket_key_for_status, looks_like_session_id, max_updated_at, normalize_task_status, score_bucket
 from .project_source import resolve_project_source
+
+_PRIMARY_STATUS_KEYS = ("待办", "进行中", "待验收", "已完成", "暂缓")
 
 
 def _is_task_item(it: dict[str, Any]) -> bool:
@@ -20,6 +22,33 @@ def _is_active_item(it: dict[str, Any]) -> bool:
 
 def _is_done_item(it: dict[str, Any]) -> bool:
     return bucket_key_for_status(str(it.get("status") or "")) == "已完成"
+
+
+def _task_primary_status(it: dict[str, Any]) -> str:
+    primary = str(it.get("primary_status") or "").strip()
+    if primary:
+        return primary
+    return str(normalize_task_status(str(it.get("status") or "")).get("primary_status") or "").strip()
+
+
+def _build_primary_status_counts(items: list[dict[str, Any]]) -> dict[str, int]:
+    counts = {key: 0 for key in _PRIMARY_STATUS_KEYS}
+    for it in items:
+        primary = _task_primary_status(it)
+        if primary in counts:
+            counts[primary] += 1
+    return counts
+
+
+def _primary_status_counts_payload(items: list[dict[str, Any]]) -> dict[str, int]:
+    counts = _build_primary_status_counts(items)
+    return {
+        "todo": counts["待办"],
+        "in_progress": counts["进行中"],
+        "pending_acceptance": counts["待验收"],
+        "done": counts["已完成"],
+        "paused": counts["暂缓"],
+    }
 
 
 def _as_optional_bool(v: Any) -> bool | None:
@@ -98,6 +127,7 @@ def build_overview(projects_meta: list[dict[str, Any]], items_payload: list[dict
             citems_all = [it for it in pitems_all if str(it.get("channel") or "") == ch_name]
             citems = [it for it in citems_all if _is_task_item(it)]
             req_items = [it for it in citems_all if _is_requirement_item(it)]
+            primary_counts_payload = _primary_status_counts_payload(citems)
             req_enabled, req_source, req_config_value = _resolve_requirements_switch(
                 proj,
                 ch_name,
@@ -135,6 +165,7 @@ def build_overview(projects_meta: list[dict[str, Any]], items_payload: list[dict
                         "items_total": len(citems_all),
                         "items_active": sum(1 for it in citems_all if _is_active_item(it)),
                         "items_done": sum(1 for it in citems_all if _is_done_item(it)),
+                        "primary_status_counts": primary_counts_payload,
                     },
                     "updated_at": max_updated_at(str(it.get("updated_at") or "") for it in citems),
                     "score": score,
@@ -162,6 +193,7 @@ def build_overview(projects_meta: list[dict[str, Any]], items_payload: list[dict
             b = bucket_key_for_status(str(it.get("status") or ""))
             p_counts[b] = p_counts.get(b, 0) + 1
             p_score += score_bucket(b)
+        project_primary_counts_payload = _primary_status_counts_payload(pitems)
         p_requirements_total = sum(int((c.get("totals") or {}).get("requirements_total") or 0) for c in chan_cards)
         p_requirements_active = sum(int((c.get("totals") or {}).get("requirements_active") or 0) for c in chan_cards)
 
@@ -186,6 +218,7 @@ def build_overview(projects_meta: list[dict[str, Any]], items_payload: list[dict
                     "items_total": len(pitems_all),
                     "items_active": sum(1 for it in pitems_all if _is_active_item(it)),
                     "items_done": sum(1 for it in pitems_all if _is_done_item(it)),
+                    "primary_status_counts": project_primary_counts_payload,
                 },
                 "updated_at": max_updated_at(str(it.get("updated_at") or "") for it in pitems),
                 "score": p_score,
@@ -207,6 +240,7 @@ def build_overview(projects_meta: list[dict[str, Any]], items_payload: list[dict
     task_items = [it for it in all_items if _is_task_item(it)]
     global_requirements_total = sum(int((p.get("totals") or {}).get("requirements_total") or 0) for p in project_cards)
     global_requirements_active = sum(int((p.get("totals") or {}).get("requirements_active") or 0) for p in project_cards)
+    global_primary_counts_payload = _primary_status_counts_payload(task_items)
     global_counts = {
         "projects": len(project_cards),
         "total": len(task_items),
@@ -221,5 +255,6 @@ def build_overview(projects_meta: list[dict[str, Any]], items_payload: list[dict
         "items_total": len(all_items),
         "items_active": sum(1 for it in all_items if _is_active_item(it)),
         "items_done": sum(1 for it in all_items if _is_done_item(it)),
+        "primary_status_counts": global_primary_counts_payload,
     }
     return {"totals": global_counts, "projects": project_cards}

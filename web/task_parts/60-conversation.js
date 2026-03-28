@@ -214,6 +214,7 @@
         ? routeResolution.source_ref
         : ((routeResolution && routeResolution.sourceRef && typeof routeResolution.sourceRef === "object") ? routeResolution.sourceRef : null);
       pushId(meta.host_run_id || meta.hostRunId);
+      pushId(meta.display_host_run_id || meta.displayHostRunId);
       pushId(sourceRef && (sourceRef.run_id || sourceRef.runId));
       pushId(routeSourceRef && (routeSourceRef.run_id || routeSourceRef.runId));
       pushId(meta.source_run_id || meta.sourceRunId);
@@ -418,6 +419,13 @@
         ? payload.callbackEventMeta
         : null;
       if (!callbackRunId || !callbackEventMeta || !runs.length) return "";
+      const explicitHostRunId = String(firstNonEmptyText([
+        payload.callbackRun && (payload.callbackRun.display_host_run_id || payload.callbackRun.displayHostRunId),
+      ]) || "").trim();
+      if (explicitHostRunId && explicitHostRunId !== callbackRunId) {
+        const visible = runs.some((row) => String((row && row.id) || "").trim() === explicitHostRunId);
+        if (visible) return explicitHostRunId;
+      }
       const detailMap = payload.detailMap || null;
       const currentSessionId = String(payload.currentSessionId || "").trim();
       const callbackIndex = runs.findIndex((row) => String((row && row.id) || "").trim() === callbackRunId);
@@ -500,10 +508,12 @@
         callbackConclusionDefault(callbackEventMeta.eventType),
       ]) || "").trim();
       const sourceAgentName = String(firstNonEmptyText([
-        senderRun.source_agent_name,
-        senderRun.sourceAgentName,
         senderRun.source_alias,
         senderRun.sourceAlias,
+        senderRun.source_agent_alias,
+        senderRun.sourceAgentAlias,
+        senderRun.source_agent_name,
+        senderRun.sourceAgentName,
       ]) || "").trim();
       const item = normalizeConversationReceiptItem({
         source_run_id: String(callbackEventMeta.sourceRunId || callbackRunId || anchorRunId).trim(),
@@ -735,7 +745,7 @@
       }
 
       const cliChipName = ctx && ctx.cliType ? String(ctx.cliType).toUpperCase() : "Codex";
-      const agentDisplay = firstNonEmptyText([ctx.agentName, ctx.displayChannel, ctx.alias]) || "未命名会话";
+      const agentDisplay = firstNonEmptyText([ctx.agentName, ctx.alias, ctx.displayChannel]) || "未命名会话";
       const currentSession = findConversationSessionById(String(ctx.sessionId || ""));
       titleEl.innerHTML = "";
       const titleRow = el("div", { class: "detail-title-row" });
@@ -978,15 +988,15 @@
           role: "user",
           cliType: firstNonEmptyText([senderRun && senderRun.cliType, r && r.cliType, ctx && ctx.cliType]),
           channelName: firstNonEmptyText([senderRun && senderRun.channelName, r && r.channelName, ctx && ctx.channelName]),
-          displayChannel: firstNonEmptyText([ctx && ctx.displayChannel, ctx && ctx.alias]),
+          displayChannel: firstNonEmptyText([ctx && ctx.alias, ctx && ctx.displayChannel]),
           textCandidates: [userText, String(r.messagePreview || "")],
         });
         const assistantSender = resolveMessageSender(senderRun, {
           role: "assistant",
           cliType: firstNonEmptyText([senderRun && senderRun.cliType, r && r.cliType, ctx && ctx.cliType]),
-          agentName: firstNonEmptyText([ctx && ctx.agentName, ctx && ctx.displayName, ctx && ctx.alias, ctx && ctx.displayChannel]),
+          agentName: firstNonEmptyText([ctx && ctx.agentName, ctx && ctx.alias, ctx && ctx.displayName, ctx && ctx.displayChannel]),
           channelName: firstNonEmptyText([senderRun && senderRun.channelName, r && r.channelName, ctx && ctx.channelName]),
-          displayChannel: firstNonEmptyText([ctx && ctx.displayChannel, ctx && ctx.alias]),
+          displayChannel: firstNonEmptyText([ctx && ctx.alias, ctx && ctx.displayChannel]),
           textCandidates: [assistantText, String(r.lastPreview || ""), String(r.partialPreview || "")],
         });
         const runSpec = readConversationSpecFields(senderRun);
@@ -1129,9 +1139,9 @@
         const shadowSender = resolveMessageSender(shadowRun, {
           role: "assistant",
           cliType: firstNonEmptyText([shadowRun.cliType, ctx && ctx.cliType]),
-          agentName: firstNonEmptyText([ctx && ctx.agentName, ctx && ctx.displayName, ctx && ctx.alias, ctx && ctx.displayChannel]),
+          agentName: firstNonEmptyText([ctx && ctx.agentName, ctx && ctx.alias, ctx && ctx.displayName, ctx && ctx.displayChannel]),
           channelName: firstNonEmptyText([shadowRun.channelName, ctx && ctx.channelName]),
-          displayChannel: firstNonEmptyText([ctx && ctx.displayChannel, ctx && ctx.alias]),
+          displayChannel: firstNonEmptyText([ctx && ctx.alias, ctx && ctx.displayChannel]),
           textCandidates: [],
         });
         const shadowAiRow = renderConversationAssistantFamily({
@@ -1347,6 +1357,8 @@
       if (!pid || pid === "overview") {
         PCONV.sessions = [];
         PCONV.sessionDirectoryByProject = Object.create(null);
+        PCONV.sessionDirectoryMetaByProject = Object.create(null);
+        PCONV.sessionDirectoryPromiseByProject = Object.create(null);
         PCONV.projectRuns = [];
         PCONV.runsBySession = Object.create(null);
         PCONV.sessionTimelineMap = Object.create(null);
@@ -1422,8 +1434,15 @@
         seedConversationUnreadCursorsForSessions(pid, baseSessions);
 
         PCONV.sessionDirectoryByProject[pid] = baseSessions.slice();
+        markConversationSessionDirectoryMeta(pid, {
+          liveLoaded: true,
+          source: "panel",
+          loadedAt: new Date().toISOString(),
+          error: "",
+        });
         PCONV.sessions = baseSessions;
         PCONV.lastRefreshAt = new Date().toISOString().slice(0, 16).replace("T", " ");
+        hydrateConversationGlobalMentionDirectory(pid);
       } catch (e) {
         console.error("loadProjectConversations error:", e);
       }
@@ -1436,6 +1455,8 @@
         stopConversationPoll();
         PCONV.sessions = [];
         PCONV.sessionDirectoryByProject = Object.create(null);
+        PCONV.sessionDirectoryMetaByProject = Object.create(null);
+        PCONV.sessionDirectoryPromiseByProject = Object.create(null);
         PCONV.projectRuns = [];
         PCONV.runsBySession = Object.create(null);
         PCONV.sessionTimelineMap = Object.create(null);
@@ -1534,6 +1555,12 @@
         seedConversationUnreadCursorsForSessions(projectId, baseSessions);
 
         PCONV.sessionDirectoryByProject[projectId] = baseSessions.slice();
+        markConversationSessionDirectoryMeta(projectId, {
+          liveLoaded: true,
+          source: "panel",
+          loadedAt: new Date().toISOString(),
+          error: "",
+        });
         const q = String(STATE.q || "").trim().toLowerCase();
         let sessions = baseSessions.slice();
         if (q) {
@@ -1556,6 +1583,7 @@
         });
         PCONV.sessions = sessions;
         PCONV.lastRefreshAt = new Date().toLocaleTimeString("zh-CN", { hour12: false });
+        hydrateConversationGlobalMentionDirectory(projectId);
 
         if (sessions.length) {
           const selectedSid = String(STATE.selectedSessionId || "");
