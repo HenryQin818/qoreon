@@ -31,3 +31,29 @@ links = [
   { label = "Start Standard Project", url = "scripts/start_standard_project.py" },
   { label = "Project Worksplit", url = "docs/onboarding/project-worksplit-playbook.md" }
 ]
+
+[[projects]]
+id = "minimal_project"
+name = "Minimal Project"
+description = "公开版内置推荐示例项目，用于完成一轮最小协作闭环，并展示 2+4+X 的推荐项目结构。"
+color = "#2f6f4f"
+project_root_rel = "examples/minimal-project"
+task_root_rel = "examples/minimal-project/tasks"
+runtime_root_rel = "examples/minimal-project/.runtime/demo"
+execution_context = { profile = "sandboxed", environment = "demo", worktree_root = "examples/minimal-project", workdir = "examples/minimal-project", runtime_root = "examples/minimal-project/.runtime/demo", sessions_root = "examples/minimal-project/.runtime/demo/.sessions", runs_root = "examples/minimal-project/.runtime/demo/.runs", server_port = "18770", health_source = "/__health" }
+channels = [
+  { name = "主体-总控", desc = "负责收敛范围、冻结节奏与发起验收。", cli_type = "codex", default_enabled = true },
+  { name = "辅助01-架构与结构治理", desc = "负责结构治理、边界把关与推荐结构落位。", cli_type = "codex", default_enabled = true },
+  { name = "子级01-运行时与后端", desc = "负责 runtime、API 与 bootstrap 支撑。", cli_type = "codex", default_enabled = true },
+  { name = "子级02-前端与交互", desc = "负责页面入口、可见结果与交互路径。", cli_type = "codex", default_enabled = true },
+  { name = "子级03-数据与契约", desc = "负责 seed 校验、字段契约与结构一致性。", cli_type = "codex", default_enabled = true },
+  { name = "子级04-测试与验收", desc = "负责 smoke、验收与最小闭环检查。", cli_type = "codex", default_enabled = true },
+  { name = "辅助02-文档与知识沉淀", desc = "负责 README、初始化文档与知识沉淀。", cli_type = "codex", default_enabled = false },
+  { name = "辅助03-用户镜像与业务判断", desc = "提供用户视角和业务判断支撑。", cli_type = "codex", default_enabled = false },
+  { name = "辅助04-Git桥接与发布同步", desc = "默认只读核查 Git 变更与发布边界。", cli_type = "codex", default_enabled = false }
+]
+links = [
+  { label = "AI Bootstrap", url = "docs/public/ai-bootstrap.md" },
+  { label = "Minimal Project", url = "examples/minimal-project/README.md" },
+  { label = "Project Worksplit", url = "docs/onboarding/project-worksplit-playbook.md" }
+]

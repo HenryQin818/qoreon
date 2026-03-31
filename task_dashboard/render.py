@@ -144,6 +144,15 @@ def render_from_template(script_dir: Path, template_name: str, data: dict[str, A
             js = shared + "\n\n" + js
         tpl = tpl.replace("__INLINE_CSS__", css).replace("__INLINE_JS__", js)
         return tpl.replace("__PAYLOAD__", payload)
+    if template_name == "template_launchpad.html" and (web_dir / "launchpad.html.tpl").exists():
+        tpl = _read_text(web_dir / "launchpad.html.tpl")
+        css = _read_text(web_dir / "launchpad.css") if (web_dir / "launchpad.css").exists() else ""
+        shared = _read_text(web_dir / "shared.js") if (web_dir / "shared.js").exists() else ""
+        js = _read_text(web_dir / "launchpad.js") if (web_dir / "launchpad.js").exists() else ""
+        if shared:
+            js = shared + "\n\n" + js
+        tpl = tpl.replace("__INLINE_CSS__", css).replace("__INLINE_JS__", js)
+        return tpl.replace("__PAYLOAD__", payload)
 
     tpl_path = script_dir / template_name
     if not tpl_path.exists():

@@ -71,7 +71,16 @@ def _replace_path_with_symlink(link_path: Path, target_path: Path) -> None:
         else:
             link_path.unlink()
     relative_target = os.path.relpath(target_path, start=link_path.parent)
-    link_path.symlink_to(relative_target, target_is_directory=target_path.is_dir())
+    try:
+        link_path.symlink_to(relative_target, target_is_directory=target_path.is_dir())
+    except OSError as exc:
+        # Windows without Developer Mode or elevated symlink privilege should still build.
+        if getattr(exc, "winerror", None) != 1314:
+            raise
+        if target_path.is_dir():
+            shutil.copytree(target_path, link_path, dirs_exist_ok=True)
+        else:
+            shutil.copy2(target_path, link_path)
 
 
 def _sync_public_share_links(root: Path, dist_root: Path) -> None:
@@ -530,6 +539,7 @@ def main(argv: list[str] | None = None) -> int:
     agent_relationship_board_page_link = str(
         os.environ.get("TASK_DASHBOARD_AGENT_RELATIONSHIP_BOARD_PAGE_LINK") or "project-agent-relationship-board.html"
     ).strip() or "project-agent-relationship-board.html"
+    launchpad_page_link = str(os.environ.get("TASK_DASHBOARD_LAUNCHPAD_PAGE_LINK") or "index.html").strip() or "index.html"
     session_health_page_link = str(
         os.environ.get("TASK_DASHBOARD_SESSION_HEALTH_PAGE_LINK") or "project-session-health-dashboard.html"
     ).strip() or "project-session-health-dashboard.html"
@@ -545,6 +555,7 @@ def main(argv: list[str] | None = None) -> int:
     out_agent_relationship_board_path = (root / args.out_agent_relationship_board).resolve()
     out_session_health_path = (root / args.out_session_health).resolve()
     out_agent_curtain_path = (root / args.out_agent_curtain).resolve()
+    out_launchpad_path = out_task_path.parent / "index.html"
     out_task_path.parent.mkdir(parents=True, exist_ok=True)
     out_overview_path.parent.mkdir(parents=True, exist_ok=True)
     out_communication_path.parent.mkdir(parents=True, exist_ok=True)
@@ -554,6 +565,7 @@ def main(argv: list[str] | None = None) -> int:
     out_agent_relationship_board_path.parent.mkdir(parents=True, exist_ok=True)
     out_session_health_path.parent.mkdir(parents=True, exist_ok=True)
     out_agent_curtain_path.parent.mkdir(parents=True, exist_ok=True)
+    out_launchpad_path.parent.mkdir(parents=True, exist_ok=True)
 
     script_dir = Path(__file__).resolve().parent.parent
     cfg = load_dashboard_config(script_dir, with_local=with_local)
@@ -1062,6 +1074,25 @@ def main(argv: list[str] | None = None) -> int:
         dashboard=task_data["dashboard"],
         links=task_data["links"],
     )
+    launchpad_page_data: dict[str, Any] = {
+        "generated_at": task_data["generated_at"],
+        "dashboard": task_data["dashboard"],
+        "projects": projects_meta,
+        "links": {
+            **task_data["links"],
+            "launchpad_page": launchpad_page_link,
+            "task_page": task_page_link,
+            "overview_page": overview_page_link,
+            "communication_page": communication_page_link,
+            "status_report_page": status_report_page_link,
+            "session_health_page": session_health_page_link,
+            "agent_directory_page": agent_directory_page_link,
+            "agent_curtain_page": agent_curtain_page_link,
+            "agent_relationship_board_page": agent_relationship_board_page_link,
+            "open_source_sync_page": open_source_sync_page_link,
+            "health_path": "/__health",
+        },
+    }
     open_source_sync_page_data = build_open_source_sync_page_data(
         script_dir,
         generated_at=task_data["generated_at"],
@@ -1111,5 +1142,9 @@ def main(argv: list[str] | None = None) -> int:
     session_health_html = render_from_template(script_dir, "template_session_health.html", session_health_page_data)
     out_session_health_path.write_text(session_health_html, encoding="utf-8")
     print(f"Wrote: {out_session_health_path}")
+
+    launchpad_html = render_from_template(script_dir, "template_launchpad.html", launchpad_page_data)
+    out_launchpad_path.write_text(launchpad_html, encoding="utf-8")
+    print(f"Wrote: {out_launchpad_path}")
     _sync_public_share_links(root, out_task_path.parent)
     return 0

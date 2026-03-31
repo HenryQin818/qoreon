@@ -164,19 +164,50 @@ def _run_build(repo_root: Path) -> dict[str, Any]:
 
 
 def _pid_on_port(port: int) -> int | None:
-    proc = subprocess.run(
-        ["lsof", "-ti", f"tcp:{int(port)}"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-        text=True,
-        check=False,
-    )
-    lines = [line.strip() for line in (proc.stdout or "").splitlines() if line.strip()]
-    for line in lines:
-        try:
-            return int(line)
-        except ValueError:
-            continue
+    lsof_path = shutil.which("lsof")
+    if lsof_path:
+        proc = subprocess.run(
+            [lsof_path, "-ti", f"tcp:{int(port)}"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            check=False,
+        )
+        lines = [line.strip() for line in (proc.stdout or "").splitlines() if line.strip()]
+        for line in lines:
+            try:
+                return int(line)
+            except ValueError:
+                continue
+    if os.name == "nt":
+        proc = subprocess.run(
+            ["netstat", "-ano"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
+            check=False,
+        )
+        needle = f":{int(port)}"
+        for raw in (proc.stdout or "").splitlines():
+            line = raw.strip()
+            if needle not in line:
+                continue
+            parts = line.split()
+            if len(parts) < 5:
+                continue
+            local_addr = parts[1]
+            state = parts[3] if len(parts) > 4 else ""
+            pid_text = parts[-1]
+            if not local_addr.endswith(needle):
+                continue
+            if state.upper() not in {"LISTENING", "ESTABLISHED"}:
+                continue
+            try:
+                return int(pid_text)
+            except ValueError:
+                continue
     return None
 
 
