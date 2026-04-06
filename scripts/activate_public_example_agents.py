@@ -40,9 +40,14 @@ def main() -> int:
         help="Optional task-dashboard token.",
     )
     parser.add_argument(
+        "--all-channels",
+        action="store_true",
+        help="Public-doc flag. Also activate the full 12-channel set instead of the default 6 core channels.",
+    )
+    parser.add_argument(
         "--include-optional",
         action="store_true",
-        help="Also activate optional extension channels and agents.",
+        help="Legacy compatibility flag. Also activate optional extension channels and agents.",
     )
     parser.add_argument(
         "--sessions-only",
@@ -68,7 +73,7 @@ def main() -> int:
         base_url=str(args.base_url),
         project_id=str(args.project_id),
         token=str(args.token or ""),
-        include_optional=bool(args.include_optional),
+        include_optional=bool(args.include_optional or args.all_channels),
         run_sample_actions=not bool(args.sessions_only),
         wait_timeout_s=float(args.wait_timeout),
         poll_interval_s=float(args.poll_interval),

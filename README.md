@@ -180,7 +180,7 @@ python3 server.py --port 18770 --static-root dist
 9. Activate the built-in example agents:
 
 ```bash
-python3 scripts/activate_public_example_agents.py --project-id standard_project --base-url http://127.0.0.1:18770 --include-optional
+python3 scripts/activate_public_example_agents.py --project-id standard_project --base-url http://127.0.0.1:18770 --all-channels
 ```
 
 This is an advanced path for local verification. The recommended cross-machine path is still: start the project first, then hand `docs/public/ai-bootstrap.md` and `examples/standard-project/.runtime/demo/startup-batch.md` to the local AI.
