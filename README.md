@@ -136,23 +136,20 @@ python3 scripts/start_standard_project.py
 ```
 
 这是默认的完整安装命令。
-它会启动 `standard_project`，并优先尝试把默认通道会话准备出来。
+它会启动 `standard_project`，并把公开可继续接手的 startup batch 一并准备出来。
 
-This bootstraps `standard_project`, clears stale machine-specific CLI path overrides, builds `dist/`, starts the local server, and then probes whether that computer can create Codex sessions non-interactively in the background.
+This bootstraps `standard_project`, clears stale machine-specific CLI path overrides, builds `dist/`, starts the local server, and prepares the startup batch that the local AI can continue from.
 
-If the background Codex probe passes, Qoreon creates the default channel sessions for the whole standard project.
+By default this command no longer blocks on automatic multi-channel session creation. That automatic activation path is still available, but it has moved behind `--with-agents`.
 
-If the background Codex probe is blocked by local auth / environment gating, Qoreon will not hang forever. It keeps the page install result, generates the startup batch, and tells you to hand that batch to the local AI so it can continue from inside its own normal working context.
+默认命令不再把“后台批量创建多通道会话”当成安装完成门槛。
+它优先保证页面、标准项目和启动批次可靠落地，然后把后续接管交给那台电脑上的 AI。
 
-如果后台创建会话被认证或环境阻塞，Qoreon 不会一直卡死。
-它会保留页面安装结果，生成启动批次文件，再把后续接管交给那台电脑上的 AI。
+This makes the first-run path much more reliable on a brand-new computer, especially when that machine has not yet proven that background Codex session creation works cleanly.
 
-On a brand-new computer, creating those 12 real CLI sessions can take noticeably longer than just starting the pages. That longer first-run wait is expected. But if the very first background Codex session cannot be created, the installer now degrades cleanly instead of staying stuck on that step.
+If you want Qoreon to also try automatic session creation, use the explicit activation command below instead of assuming the default installer should do everything at once.
 
-If you want the full public workspace, this is the command to use. Do not replace it with `install_public_bundle.py --start-server --skip-agent-activation`, because that page-only mode will not create the default agent sessions.
-
-如果你的目标是“安装完成后就带默认 Agent”，就必须使用这条命令。
-不要改成 `--skip-agent-activation`，因为那只是页面模式。
+如果你的目标是“安装后立刻尝试自动建默认 Agent 会话”，请显式执行下一条带 `--with-agents` 的命令，而不是把这个要求继续压在默认安装命令上。
 
 6. If Codex is ready on that computer and you want the default startup agent batch too:
 
@@ -160,9 +157,9 @@ If you want the full public workspace, this is the command to use. Do not replac
 python3 scripts/start_standard_project.py --with-agents
 ```
 
-This keeps the default full-channel sessions, then also runs the first-wave training / role restatement actions and prepares the default AI startup batch files. Use the generated startup batch together with `docs/public/ai-bootstrap.md` to let the local AI continue the project startup.
+This enables the automatic activation path. By default it tries to create the 6 core-channel sessions first, then also runs the first-wave training / role restatement actions and prepares the default AI startup batch files. Add `--all-channels` if you explicitly want the full 12-channel activation attempt.
 
-这一步会在默认会话基础上继续做首轮培训、职责复述和示例协作，并生成完整启动批次，方便本机 AI 接手。
+这一步会显式开启自动建会话，再继续做首轮培训、职责复述和示例协作，并生成完整启动批次，方便本机 AI 接手。
 
 7. If you prefer the generic installer:
 
@@ -170,7 +167,7 @@ This keeps the default full-channel sessions, then also runs the first-wave trai
 python3 scripts/install_public_bundle.py --start-server
 ```
 
-It now defaults to the single public project: `standard_project`, and it will also try to create the standard project's default channel sessions unless you explicitly skip agent activation. If that background session probe fails, it will keep the page install result and switch to "hand startup-batch to local AI" mode.
+It now defaults to the single public project: `standard_project`, and by default it only prepares pages plus startup-batch. If you want it to also try automatic activation, add `--activate-project standard_project` and optionally `--all-channels`.
 
 8. Manual step-by-step path if you prefer:
 

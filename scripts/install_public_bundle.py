@@ -59,7 +59,7 @@ def main() -> int:
         "--activate-project",
         default="",
         choices=("", *tuple(PUBLIC_EXAMPLE_ROOTS.keys())),
-        help="Override which public example project to activate. Defaults to standard_project unless --skip-agent-activation is set.",
+        help="Explicitly enable automatic session activation for a public example project. By default this installer only prepares pages and startup-batch files.",
     )
     parser.add_argument(
         "--token",
@@ -69,12 +69,17 @@ def main() -> int:
     parser.add_argument(
         "--include-optional",
         action="store_true",
-        help="Also activate optional extension channels when activation is enabled. Standard install defaults to all channels unless --core-only is set.",
+        help="When activation is enabled, also include the optional extension channels. Default activation scope is the 6 core channels.",
     )
     parser.add_argument(
         "--core-only",
         action="store_true",
-        help="Only create the default core channels. By default standard install creates all standard_project channels.",
+        help="When activation is enabled, only create the default core channels.",
+    )
+    parser.add_argument(
+        "--all-channels",
+        action="store_true",
+        help="When activation is enabled, create all 12 standard_project channels instead of the default 6 core channels.",
     )
     parser.add_argument(
         "--skip-agent-activation",
@@ -103,11 +108,10 @@ def main() -> int:
     bootstrap_projects = {
         "standard": ["standard_project"],
     }[str(args.bootstrap_profile)]
-    default_activate_project = ""
-    if not bool(args.skip_agent_activation):
-        default_activate_project = bootstrap_projects[0]
-    activate_project = str(args.activate_project or default_activate_project or "")
-    include_optional = bool(args.include_optional) or (activate_project == "standard_project" and not bool(args.core_only))
+    if args.core_only and args.all_channels:
+        parser.error("--core-only and --all-channels cannot be used together")
+    activate_project = "" if bool(args.skip_agent_activation) else str(args.activate_project or "")
+    include_optional = bool(args.all_channels) or bool(args.include_optional)
 
     result = install_public_bundle(
         Path(str(args.repo_root)).expanduser().resolve(),

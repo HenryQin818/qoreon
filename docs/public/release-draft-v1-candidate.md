@@ -67,13 +67,15 @@ python3 scripts/start_standard_project.py
 ```
 
 这是默认完整安装命令。
-如果本机后台会话创建被阻塞，系统会降级保留页面结果，并把后续接管交给本机 AI。
+它默认保证页面、`standard_project` 和 startup-batch 一次准备好；如果你还要自动建 Agent，会话激活改走显式命令。
 
 If Codex is ready and you also want the default AI startup batch:
 
 ```bash
 python3 scripts/start_standard_project.py --with-agents
 ```
+
+Add `--all-channels` if you explicitly want the full 12-channel activation attempt.
 
 Then open:
 

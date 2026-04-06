@@ -427,12 +427,12 @@ def install_public_bundle(
         ],
     }
     if not normalized_activate_project:
-        manifest["agent_activation_state"] = "skipped_by_flag_or_mode"
+        manifest["agent_activation_state"] = "startup_batch_ready"
         manifest["next_steps"].append(
-            "当前安装结果不包含默认 Agent 会话；如果你希望安装后 standard_project 里直接出现 Agent，请执行 python3 scripts/start_standard_project.py"
+            "当前默认安装结果已经准备好 standard_project、页面和 startup-batch；如果你希望自动创建默认 Agent 会话，请执行 python3 scripts/start_standard_project.py --with-agents"
         )
         manifest["next_steps"].append(
-            "若要在创建默认会话后，再补首轮培训/职责复述/示例动作，可执行 python3 scripts/start_standard_project.py --with-agents"
+            "如果你只想让本机 AI 继续接手，直接把 docs/public/ai-bootstrap.md 与 startup-batch.md 发给它即可"
         )
     elif activation_result and activation_result.get("ok"):
         manifest["agent_activation_state"] = "sessions_created"

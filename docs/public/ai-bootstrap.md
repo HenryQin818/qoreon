@@ -16,7 +16,7 @@
 - 服务能启动
 - `standard_project` 能被扫描
 - 种子包和技能包能被理解
-- 如果当前电脑的 `codex` 已准备好，默认启动批次文件能指导 AI 拉起 12 个通道的 Agent
+- 默认启动批次文件能指导 AI 继续拉起标准项目 Agent
 - 每个通道的 Agent 知道先去看自己负责通道中的文件和知识沉淀
 
 补充边界：
@@ -52,9 +52,8 @@
 python3 scripts/start_standard_project.py
 ```
 
-这是默认的完整安装入口。目标不是“只把页面起起来”，而是让 `standard_project` 在安装完成后就带默认通道会话。
-
-这里的默认会话创建，本质上是在调用用户电脑本地的 `codex` CLI。
+这是默认的完整安装入口。目标不是“只把页面起起来”，而是让 `standard_project`、页面和 startup-batch 在安装完成后一起就位。
+这是默认的可靠安装入口。目标不是“只把页面起起来”，而是让 `standard_project`、页面和 startup-batch 一次准备好，然后由本机 AI 在自己的正常工作上下文里继续接手。
 
 这条命令会做 5 件事：
 
@@ -62,28 +61,27 @@ python3 scripts/start_standard_project.py
 2. 自动清理旧机器留下来的 `codex` 路径覆盖
 3. build 页面
 4. 启动 `18770` 服务
-5. 如果当前电脑的 `codex` 已就绪，默认创建 `standard_project` 的 12 个通道 Agent 会话；若未就绪，则保留页面安装结果并提示后续补激活
+5. 生成 `startup-batch.json` / `startup-batch.md` 和 `.run/public-install-result.json`
 
 注意：
 
-- 第一次在新电脑上创建这 12 个真实会话可能需要更久，这是正常的冷启动成本，不要在中途主动打断。
-- 安装器会先尝试创建第一个后台 Codex 会话作为真实探测。
-- 如果这一步被认证/环境阻塞，安装器会自动降级为“页面已安装 + startup-batch 已生成”，而不是一直卡住。
-- 这时不要反复重试登录；优先把 `docs/public/ai-bootstrap.md` 和 `examples/standard-project/.runtime/demo/startup-batch.md` 交给本机 AI，让它在自己的正常工作上下文里继续接管。
+- 默认命令不再把“后台批量创建多通道会话”作为安装完成门槛。
+- 先把页面、标准项目和 startup-batch 稳定落地，再由本机 AI 接手，是当前公开预览版的推荐路径。
+- 如果你只是要确认公开包能装起来，执行到这一步就足够了。
 
-如果当前电脑的 `codex` 已准备好，再执行：
+如果当前电脑的 `codex` 已准备好，而且你明确希望 Qoreon 自动尝试创建默认 Agent，再执行：
 
 ```bash
 python3 scripts/start_standard_project.py --with-agents
 ```
 
-这条命令会在默认创建会话的基础上，再运行首轮培训、职责复述和示例协作动作，并生成标准项目的默认启动批次文件。
+这条命令会在默认安装完成后，先尝试创建 6 个核心通道 Agent 会话，再运行首轮培训、职责复述和示例协作动作，并生成标准项目的默认启动批次文件。
 然后把下面两份文件一起交给本机 AI：
 
 - `docs/public/ai-bootstrap.md`
 - `examples/standard-project/.runtime/demo/startup-batch.md`
 
-由 AI 按启动批次接管已经建好的 12 个通道，后续协作动作由 `主体-总控` 继续编排。
+由 AI 按启动批次接管已经建好的核心通道，后续协作动作由 `主体-总控` 继续编排。若你明确需要 12 个通道一起自动激活，再追加 `--all-channels`。
 
 不要默认把下面这条当成完整安装：
 
@@ -91,7 +89,7 @@ python3 scripts/start_standard_project.py --with-agents
 python3 scripts/install_public_bundle.py --start-server --skip-agent-activation
 ```
 
-这只是页面模式。它适合排障或先验证静态页，不适合“安装后就要看到标准项目默认 Agent”的目标。
+这只是页面模式。它适合排障或先验证静态页，不适合“安装后就要拿到 startup-batch 或让本机 AI继续接手”的目标。
 
 如果你不想一把做完，也可以手动拆步：
 
@@ -99,7 +97,7 @@ python3 scripts/install_public_bundle.py --start-server --skip-agent-activation
 python3 scripts/bootstrap_public_example.py --project-id standard_project
 python3 build_project_task_dashboard.py
 python3 server.py --port 18770 --static-root dist
-python3 scripts/activate_public_example_agents.py --project-id standard_project --base-url http://127.0.0.1:18770 --include-optional
+python3 scripts/activate_public_example_agents.py --project-id standard_project --base-url http://127.0.0.1:18770
 ```
 
 ## 3. 初始化规则
@@ -124,7 +122,7 @@ python3 scripts/activate_public_example_agents.py --project-id standard_project 
 
 ## 5. 默认启动批次
 
-标准项目的推荐启动批次会拉起 12 个通道：
+标准项目完整启动批次覆盖 12 个通道：
 
 - `主体-总控`
 - `辅助01-结构治理与项目接入`
@@ -142,11 +140,12 @@ python3 scripts/activate_public_example_agents.py --project-id standard_project 
 ## 6. 成功标准
 
 - `examples/standard-project/.runtime/demo/bootstrap-result.json` 已生成
-- 若当前电脑 `codex` 已就绪，`examples/standard-project/.runtime/demo/activation-result.json` 与 `startup-batch.md` 已生成
+- `examples/standard-project/.runtime/demo/startup-batch.md` 已生成
+- 如果你显式执行了 `python3 scripts/start_standard_project.py --with-agents`，则 `examples/standard-project/.runtime/demo/activation-result.json` 也应生成
 - `GET /__health` 正常
 - `dist/project-task-dashboard.html` 已生成
 - 页面里能看到 `standard_project`
-- 页面里能看到标准项目的 12 个通道和对应默认会话
+- 页面里能看到标准项目与默认种子结构
 - 页面里能扫描到标准项目任务
 
 ## 7. 遇到问题先查哪里

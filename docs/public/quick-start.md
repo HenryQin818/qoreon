@@ -24,9 +24,7 @@
 python3 scripts/start_standard_project.py
 ```
 
-这是“完整安装”入口。目标结果是：页面启动后，`standard_project` 里直接带默认通道 Agent 会话。
-
-这里的“默认 Agent 会话”依赖本机 `codex` CLI 可用，不是 Qoreon 自带了一个内置执行器。
+这是默认的可靠安装入口。目标结果是：页面启动后，`standard_project`、startup batch 和公开文档都已准备好，可以马上交给本机 AI 继续接手。
 
 这条命令会完成：
 
@@ -34,29 +32,29 @@ python3 scripts/start_standard_project.py
 - 自动清理旧机器留下来的 `codex` 路径覆盖，并重写为当前电脑可用路径
 - build `dist/`
 - 启动 `18770` 本地服务
-- 如果当前电脑的 `codex` 已安装并可用，默认创建 `standard_project` 的 12 个通道 Agent 会话
-- 如果当前电脑还没准备好 `codex`，会保留页面安装结果，并在结果文件里明确提示稍后补激活
+- 生成 `startup-batch.json` / `startup-batch.md`
+- 产出 `.run/public-install-result.json`
 
-第一次在新电脑上创建 12 个真实 CLI 会话会比单纯起页面慢，这是正常现象；安装器会等待这批会话创建完成后再结束。
+默认命令不再把“后台批量创建多通道 Agent 会话”作为安装完成前提，所以新电脑上的首轮成功率会更高。
 
-如果当前电脑的 `codex` 已安装并完成登录，再执行：
+如果当前电脑的 `codex` 已安装并完成登录，而且你明确希望 Qoreon 自动尝试创建默认 Agent，会话激活再执行：
 
 ```bash
 python3 scripts/start_standard_project.py --with-agents
 ```
 
-这条命令会在默认创建会话的基础上，再跑首轮培训、职责复述和示例协作动作，并生成标准项目完整启动批次文件：
+这条命令会在默认安装完成后，先尝试创建 6 个核心通道 Agent 会话，再跑首轮培训、职责复述和示例协作动作，并生成标准项目完整启动批次文件：
 
 - `examples/standard-project/.runtime/demo/startup-batch.json`
 - `examples/standard-project/.runtime/demo/startup-batch.md`
 
-然后把这两份文件和 `docs/public/ai-bootstrap.md` 一起交给安装电脑上的 AI，让它按启动批次继续接管已经建好的 12 个通道。
+然后把这两份文件和 `docs/public/ai-bootstrap.md` 一起交给安装电脑上的 AI，让它按启动批次继续接管。若你明确需要 12 个通道一起自动激活，再追加 `--all-channels`。
 
 补充说明：
 
-- `python3 scripts/start_standard_project.py` 会先尝试创建第一个后台 Codex 会话，作为“这台电脑是否能无交互建会话”的真实探测。
-- 如果这个探测通过，就继续把默认 12 个通道会话建出来。
-- 如果这个探测被认证/环境阻塞，安装器不会一直卡住；它会保留页面安装结果，并明确提示你把 `startup-batch.md` 交给本机 AI 接手。
+- `python3 scripts/start_standard_project.py` 默认只保证公开页面、标准项目和 startup-batch 可靠落地。
+- `python3 scripts/start_standard_project.py --with-agents` 才会显式尝试自动建会话。
+- 自动建会话依赖本机 `codex` CLI 可用，不是 Qoreon 自带内置执行器。
 - 所以“能打开 codex CLI”是一个好信号，但不等于“后台无交互批量建会话”一定没问题。
 - 如果你后面要切到 Claude Code、OpenCode、Gemini CLI 或 Trae CLI，请把它视为“进阶接入”，不要当成当前预览版的默认路径。
 
@@ -74,7 +72,7 @@ python3 scripts/install_public_bundle.py --start-server --skip-agent-activation
 - 页面能打开
 - 但不会创建默认 Agent 会话
 
-所以如果你打开后看到项目存在、但里面没有 Agent，这通常不是安装失败，而是执行了 `--skip-agent-activation`。
+所以如果你打开后看到项目存在、但里面没有 Agent，这通常不是安装失败，而是还没有执行自动激活。
 
 ## 3. 手动拆步路径
 
@@ -84,10 +82,10 @@ python3 scripts/install_public_bundle.py --start-server --skip-agent-activation
 python3 scripts/bootstrap_public_example.py --project-id standard_project
 python3 build_project_task_dashboard.py
 python3 server.py --port 18770 --static-root dist
-python3 scripts/activate_public_example_agents.py --project-id standard_project --base-url http://127.0.0.1:18770 --include-optional
+python3 scripts/activate_public_example_agents.py --project-id standard_project --base-url http://127.0.0.1:18770
 ```
 
-如果你的电脑还没有可用的 `codex` 环境，先不要执行第 4 步；只完成前 3 步，页面和标准项目也可以正常打开。等 `codex` 环境就绪后，再补第 4 步把 12 个通道会话建出来。
+如果你的电脑还没有可用的 `codex` 环境，先不要执行第 4 步；只完成前 3 步，页面和标准项目也可以正常打开。等 `codex` 环境就绪后，再补第 4 步把 6 个核心通道会话建出来；若明确需要 12 个通道，再改成 `--include-optional`。
 
 ## 4. 打开页面
 

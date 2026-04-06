@@ -77,7 +77,9 @@
 python3 scripts/start_standard_project.py
 ```
 
-如果你希望把后续 Agent 启动交给安装电脑上的 AI，再执行：
+这条默认命令优先把页面、标准项目和 startup-batch 稳定准备好。
+
+如果你希望显式尝试自动创建默认 Agent，再执行：
 
 ```bash
 python3 scripts/start_standard_project.py --with-agents
@@ -88,7 +90,7 @@ python3 scripts/start_standard_project.py --with-agents
 - `docs/public/ai-bootstrap.md`
 - `examples/standard-project/.runtime/demo/startup-batch.md`
 
-这份启动批次会覆盖标准项目的 12 个通道，不再只限核心 6 个。
+默认 `--with-agents` 先覆盖 6 个核心通道；如果你明确需要 12 个通道一起自动激活，再追加 `--all-channels`。启动批次本身仍覆盖标准项目的 12 个通道。
 启动后的 AI 先不要凭角色名直接行动，而是要先读自己负责通道下的 `任务/`、`反馈/`、`产出物/材料/`、`产出物/沉淀/`。
 
 如果你想手动拆步，再执行：

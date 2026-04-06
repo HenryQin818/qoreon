@@ -20,15 +20,23 @@ def main() -> int:
     parser.add_argument(
         "--with-agents",
         action="store_true",
-        help="After creating all standard_project sessions, also run the first-wave training and sample coordination actions.",
+        help="After the public install is ready, also try to create the default standard_project sessions and run the first-wave training/sample coordination actions.",
+    )
+    parser.add_argument(
+        "--all-channels",
+        action="store_true",
+        help="When --with-agents is enabled, include all 12 standard_project channels. Default activation only targets the 6 core channels.",
     )
     parser.add_argument(
         "--core-only",
         action="store_true",
-        help="Only create the core channels. By default this command creates all standard_project channel sessions.",
+        help="Compatibility flag. When --with-agents is enabled, keep activation scoped to the 6 core channels.",
     )
     args = parser.parse_args()
-    include_optional = not bool(args.core_only)
+    if args.core_only and args.all_channels:
+        parser.error("--core-only and --all-channels cannot be used together")
+    activate_agents = bool(args.with_agents)
+    include_optional = bool(args.all_channels)
 
     result = install_public_bundle(
         REPO_ROOT,
@@ -36,14 +44,15 @@ def main() -> int:
         build_pages=True,
         start_server=True,
         port=18770,
-        activate_project="standard_project",
+        activate_project="standard_project" if activate_agents else "",
         include_optional=include_optional,
-        activation_run_samples=bool(args.with_agents),
+        activation_run_samples=activate_agents,
         wait_timeout_s=900.0,
         poll_interval_s=2.0,
     )
     batches = result.get("startup_batches") if isinstance(result.get("startup_batches"), list) else []
-    result["agent_startup_mode"] = "activated" if bool(args.with_agents) else "sessions_ready"
+    result["agent_startup_mode"] = "activated" if activate_agents else "startup_batch_ready"
+    result["agent_session_scope"] = "all_channels" if include_optional else "core_channels"
     result["agent_startup_batch"] = batches[0] if batches else {}
     sys.stdout.write(json.dumps(result, ensure_ascii=False, indent=2) + "\n")
     return 0
