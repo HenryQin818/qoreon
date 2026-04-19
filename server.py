@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-Task dashboard local server with CCB (CLI Control Bridge) endpoints.
+Qoreon local server with CCB (CLI Control Bridge) endpoints.
 
 Serves static files from a given directory (default: <repo>/static_sites)
 and exposes a small API surface on the same origin:
@@ -13,7 +13,7 @@ and exposes a small API surface on the same origin:
 - GET  /api/codex/run/<id>
 - GET  /api/cli/types
 
-All run artifacts are stored under: task-dashboard/.runs/
+All run artifacts are stored under: .runs/
 
 Supports multiple CLI tools: codex, claude, opencode, gemini, trae.
 """
@@ -1439,7 +1439,7 @@ def _clean_business_path(raw: Any) -> str:
         return ""
     p = p[: m.end()]
     low = p.lower()
-    if low.endswith("/skill.md") or "/.codex/skills/" in low:
+    if low.endswith("/skill.md") or ("/skills/" in low and "skill.md" in low):
         return ""
     if not any(seg in p for seg in _BUSINESS_PATH_SEGMENTS):
         return ""
@@ -1900,14 +1900,13 @@ def _server_token() -> str:
 
 def _dashboard_build_paths() -> dict[str, Path]:
     """Resolve static dashboard build script and output paths."""
-    repo_root = _repo_root()
-    task_dir = repo_root / "项目管理-小秘书" / "项目看板" / "task-dashboard"
-    script = task_dir / "build_project_task_dashboard.py"
-    out_task = task_dir / "dist" / "project-task-dashboard.html"
-    out_overview = task_dir / "dist" / "project-overview-dashboard.html"
-    out_communication = task_dir / "dist" / "project-communication-audit.html"
-    out_message_risk_dashboard = task_dir / "dist" / "project-message-risk-dashboard.html"
-    out_status_report = task_dir / "dist" / "project-status-report.html"
+    repo_root = Path(__file__).resolve().parent
+    script = repo_root / "build_project_task_dashboard.py"
+    out_task = repo_root / "dist" / "project-task-dashboard.html"
+    out_overview = repo_root / "dist" / "project-overview-dashboard.html"
+    out_communication = repo_root / "dist" / "project-communication-audit.html"
+    out_message_risk_dashboard = repo_root / "dist" / "project-message-risk-dashboard.html"
+    out_status_report = repo_root / "dist" / "project-status-report.html"
     return {
         "repo_root": repo_root,
         "script": script,
@@ -1933,15 +1932,15 @@ def _rebuild_dashboard_static(timeout_s: int = 120) -> dict[str, Any]:
         "--root",
         str(repo_root),
         "--out-task",
-        "项目管理-小秘书/项目看板/task-dashboard/dist/project-task-dashboard.html",
+        "dist/project-task-dashboard.html",
         "--out-overview",
-        "项目管理-小秘书/项目看板/task-dashboard/dist/project-overview-dashboard.html",
+        "dist/project-overview-dashboard.html",
         "--out-communication",
-        "项目管理-小秘书/项目看板/task-dashboard/dist/project-communication-audit.html",
+        "dist/project-communication-audit.html",
         "--out-message-risk-dashboard",
-        "项目管理-小秘书/项目看板/task-dashboard/dist/project-message-risk-dashboard.html",
+        "dist/project-message-risk-dashboard.html",
         "--out-status-report",
-        "项目管理-小秘书/项目看板/task-dashboard/dist/project-status-report.html",
+        "dist/project-status-report.html",
     ]
     started = time.time()
     proc = subprocess.run(

@@ -3363,7 +3363,7 @@
         ? window.location.origin
         : ((window.location.protocol && window.location.host)
           ? `${window.location.protocol}//${window.location.host}`
-          : "http://127.0.0.1:18765");
+          : "http://127.0.0.1:18770");
       return {
         primary: new URL("/share/avatar-library.html", origin).toString(),
         fallback: new URL("/dist/avatar-library.html", origin).toString(),

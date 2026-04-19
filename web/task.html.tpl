@@ -961,7 +961,7 @@
           </div>
         </section>
         <div class="channel-delete-warning">
-          会删除该通道目录及配套文件夹，并清理相关会话绑定；不会删除 <code>.runtime/.runs</code> 历史回溯记录。
+          会删除该通道目录及配套文件夹，并清理相关会话绑定；不会删除历史回溯记录。
         </div>
         <div class="ncfield">
           <label for="channelDeleteConfirmInput">请输入完整通道名确认删除</label>

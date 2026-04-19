@@ -122,6 +122,10 @@ def create_session_response(
     session_role = str(payload.get("session_role") or "").strip()
     purpose = str(payload.get("purpose") or "").strip()
     reuse_strategy = _normalize_reuse_strategy(payload.get("reuse_strategy"))
+    try:
+        create_timeout_s = max(30, int(payload.get("create_timeout_s") or 90))
+    except Exception:
+        create_timeout_s = 90
     set_as_primary = payload.get("set_as_primary")
     first_message = str(payload.get("first_message") or "")
     if not project_id or not channel_name:
@@ -293,14 +297,21 @@ def create_session_response(
     )
     create_result = create_cli_session(
         seed_prompt=seed,
-        timeout_s=90,
+        timeout_s=create_timeout_s,
         cli_type=cli_type,
         workdir=project_workdir,
         model=model,
         reasoning_effort=reasoning_effort,
         execution_profile=execution_profile,
     )
-    if not create_result.get("ok"):
+    create_result_ok = bool(create_result.get("ok"))
+    recovered_session_id = str(create_result.get("sessionId") or "").strip()
+    recovered_on_timeout = (
+        not create_result_ok
+        and _looks_like_uuid_local(recovered_session_id)
+        and "timeout" in str(create_result.get("error") or "").strip().lower()
+    )
+    if not create_result_ok and not recovered_on_timeout:
         err = RuntimeError("create session failed")
         setattr(err, "detail", create_result)
         raise err
@@ -320,7 +331,7 @@ def create_session_response(
         purpose=purpose,
         reuse_strategy=reuse_strategy,
         schema_version="session.create.v2",
-        created_via="api.create_session_v2",
+        created_via="api.create_session_v2.timeout_recovered" if recovered_on_timeout else "api.create_session_v2",
         context_binding_state=effective_binding_state,
         project_execution_context=context_meta,
         is_primary=effective_primary if isinstance(effective_primary, bool) else None,
@@ -338,6 +349,7 @@ def create_session_response(
         "workdir": create_result.get("workdir", str(project_workdir)),
         "created": True,
         "reused": False,
+        "timeoutRecovered": recovered_on_timeout,
     }
 
 

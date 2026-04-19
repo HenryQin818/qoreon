@@ -65,6 +65,13 @@ def _coerce_optional_bool_local(value: Any) -> bool | None:
     return None
 
 
+def _coerce_int_local(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return int(default)
+
+
 def _normalize_execution_profile_local(value: Any) -> str:
     return normalize_execution_profile(_safe_text_local(value, 40), allow_empty=True)
 
@@ -100,6 +107,14 @@ def parse_session_create_request(body: dict[str, Any]) -> dict[str, Any]:
     set_as_primary = _coerce_optional_bool_local(
         row.get("set_as_primary") if "set_as_primary" in row else row.get("setAsPrimary")
     )
+    reuse_strategy = _safe_text_local(
+        row.get("reuse_strategy") if "reuse_strategy" in row else row.get("reuseStrategy"),
+        80,
+    ).strip()
+    create_timeout_s = _coerce_int_local(
+        row.get("create_timeout_s") if "create_timeout_s" in row else row.get("createTimeoutS"),
+        0,
+    )
     return {
         "mode": _normalize_session_create_mode_local(
             row.get("mode") if "mode" in row else row.get("createMode")
@@ -132,10 +147,8 @@ def parse_session_create_request(body: dict[str, Any]) -> dict[str, Any]:
             row.get("session_role") if "session_role" in row else row.get("sessionRole")
         ),
         "purpose": _safe_text_local(row.get("purpose"), 200).strip(),
-        "reuse_strategy": _safe_text_local(
-            row.get("reuse_strategy") if "reuse_strategy" in row else row.get("reuseStrategy"),
-            80,
-        ).strip(),
+        "reuse_strategy": reuse_strategy or "reuse_active",
+        "create_timeout_s": max(0, create_timeout_s),
         "set_as_primary": set_as_primary,
         "first_message": _safe_text_local(
             row.get("first_message") if "first_message" in row else row.get("firstMessage"),

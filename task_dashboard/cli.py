@@ -551,7 +551,7 @@ def _task_item_bundle_dir_name(out_task_path: Path) -> str:
 
 
 def _task_item_bundle_url(bundle_dir_name: str, file_name: str) -> str:
-    return f"/dist/{quote(bundle_dir_name)}/items/{quote(file_name)}"
+    return f"{quote(bundle_dir_name)}/items/{quote(file_name)}"
 
 
 def _unique_existing_paths(paths: list[Path]) -> list[Path]:
