@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>统一任务样式 · 顶部任务面板全量视图场景 v2</title>
+  <link rel="stylesheet" href="./task-shell-preview-base.css" />
+  <link rel="stylesheet" href="./task-style-unified-preview-v2.css" />
+</head>
+<body class="unified-preview-v2">
+  <div class="ambient-bg">
+    <div class="blob blob-1"></div>
+    <div class="blob blob-2"></div>
+    <div class="blob blob-3"></div>
+    <div class="blob blob-4"></div>
+    <div class="blob blob-5"></div>
+    <div class="blob blob-6"></div>
+    <div class="blob blob-7"></div>
+    <div class="blob blob-8"></div>
+  </div>
+  <div class="shell">
+    <header>
+      <div class="header-main">
+        <a class="back-link" href="/share/task-style-unified-scenarios-v2.html" title="返回场景包">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" width="18" height="18">
+            <path d="M15 19l-7-7 7-7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <span>场景包</span>
+        </a>
+        <div class="project-info">
+          <h1 class="project-title">task_dashboard</h1>
+          <div class="project-meta-row">
+            <span class="project-desc">统一任务样式 v2 · 顶部任务面板全量视图</span>
+            <span class="env-chip is-stable">stable</span>
+            <span class="source-chip is-fixtures">静态 demo</span>
+            <span class="project-mode-chip is-privileged">task</span>
+          </div>
+        </div>
+      </div>
+      <div class="header-nav">
+        <div class="header-mode-tabs" role="tablist" aria-label="一级页面切换">
+          <button class="header-mode-btn" type="button" role="tab" aria-selected="false">通道</button>
+          <button class="header-mode-btn" type="button" role="tab" aria-selected="false">对话</button>
+          <button class="header-mode-btn active" type="button" role="tab" aria-selected="true">任务</button>
+        </div>
+      </div>
+      <div class="hctrl">
+        <span class="pill is-active">任务面板</span>
+      </div>
+    </header>
+
+    <main class="scenario-page">
+      <section class="banner">
+        <h2 class="banner-title">场景 3：顶部任务面板全量视图</h2>
+        <div class="banner-copy">切到任务面板后，阅读关系仍然回到时间轴主布局。每行一条总任务，右侧直接展开子任务链，证明全量任务浏览场景也能使用与通道页同源的任务语法。</div>
+        <div class="banner-row">
+          <span class="pill is-active">左总右子</span>
+          <span class="pill">五态样本齐</span>
+          <span class="pill">角色气泡前置</span>
+        </div>
+      </section>
+
+      <section class="panel-stage">
+        <div class="section-head">
+          <div>
+            <h2>全部任务</h2>
+            <div class="section-copy">这里不再用卡墙总览替代任务面板，而是保留总任务主位和子任务链的时间轴阅读关系。</div>
+          </div>
+          <div class="chip-row">
+            <span class="pill is-active">全部</span>
+            <span class="pill">按状态</span>
+            <span class="pill">按更新时间</span>
+          </div>
+        </div>
+
+        <div class="toolbar">
+          <div class="chip-row">
+            <span class="pill">待办 1</span>
+            <span class="pill">进行中 1</span>
+            <span class="pill">待验收 1</span>
+            <span class="pill">已完成 1</span>
+            <span class="pill">暂缓 1</span>
+          </div>
+          <div class="chip-row">
+            <span class="pill">总任务 2</span>
+            <span class="pill">子任务 5</span>
+          </div>
+        </div>
+
+        <div class="timeline-board">
+          <section class="timeline-day">
+            <div class="timeline-day-head">
+              <div class="timeline-day-title">当前主线</div>
+              <div class="timeline-day-meta">最新总任务优先</div>
+            </div>
+            <div class="timeline-row">
+              <div class="timeline-track"><span class="timeline-track-dot"></span></div>
+              <div class="timeline-parent">
+                <article class="task-card is-selected">
+                  <div class="task-role-row">
+                    <span class="task-role-chip is-owner"><span class="task-role-badge">主</span><span class="task-role-text">前端页面-规范策划</span></span>
+                    <span class="task-role-chip is-manager"><span class="task-role-badge">管</span><span class="task-role-text">产品策划-任务派发</span></span>
+                    <span class="task-role-chip is-core"><span class="task-role-badge">协</span><span class="task-role-text">数据治理-消息监控</span></span>
+                  </div>
+                  <div class="task-card-head">
+                    <div class="task-card-title">A 批统一任务样式场景包 v2 重做</div>
+                    <span class="task-status is-ongoing">进行中</span>
+                  </div>
+                  <div class="task-card-meta">更新：21:18 · 下一责任人：<strong>前端页面-规范策划</strong></div>
+                  <p class="task-card-summary">这条总任务负责把三类场景统一到角色气泡前置与时间轴布局基线，不再允许某个宽场景回退成普通列表或卡墙。</p>
+                  <div class="task-card-footer">
+                    <div class="task-agent-stack">
+                      <span class="task-agent-label">参与Agent</span>
+                      <div class="task-agent-avatars">
+                        <span class="task-agent-avatar is-blue">前</span>
+                        <span class="task-agent-avatar is-green">产</span>
+                        <span class="task-agent-avatar is-orange">数</span>
+                      </div>
+                      <span class="task-agent-count">3 位</span>
+                    </div>
+                  </div>
+                </article>
+              </div>
+              <div class="timeline-children">
+                <article class="task-card">
+                  <div class="task-role-row">
+                    <span class="task-role-chip is-owner"><span class="task-role-badge">主</span><span class="task-role-text">前端页面-规范策划</span></span>
+                    <span class="task-role-chip is-core"><span class="task-role-badge">协</span><span class="task-role-text">产品策划-任务派发</span></span>
+                  </div>
+                  <div class="task-card-head">
+                    <div class="task-card-title">子任务：总入口页 v2 组装</div>
+                    <span class="task-status is-todo">待办</span>
+                  </div>
+                  <div class="task-card-meta">更新：21:10 · 下一责任人：<strong>前端页面-规范策划</strong></div>
+                  <p class="task-card-summary">需要把通道页、消息侧边栏、任务面板三个场景串成一个可直接评审的总入口。</p>
+                  <div class="task-card-footer">
+                    <div class="task-agent-stack">
+                      <span class="task-agent-label">参与Agent</span>
+                      <div class="task-agent-avatars">
+                        <span class="task-agent-avatar is-blue">前</span>
+                        <span class="task-agent-avatar is-green">产</span>
+                      </div>
+                      <span class="task-agent-count">2 位</span>
+                    </div>
+                  </div>
+                </article>
+
+                <article class="task-card">
+                  <div class="task-role-row">
+                    <span class="task-role-chip is-owner"><span class="task-role-badge">主</span><span class="task-role-text">产品策划-任务派发</span></span>
+                    <span class="task-role-chip is-reviewer"><span class="task-role-badge">验</span><span class="task-role-text">产品确认</span></span>
+                  </div>
+                  <div class="task-card-head">
+                    <div class="task-card-title">子任务：角色气泡前置确认</div>
+                    <span class="task-status is-review">待验收</span>
+                  </div>
+                  <div class="task-card-meta">更新：21:06 · 下一责任人：<strong>产品策划-任务派发</strong></div>
+                  <p class="task-card-summary">验证角色气泡是否已经成为卡片第一眼信息，而不是继续埋在说明文案里。</p>
+                  <div class="task-card-footer">
+                    <div class="task-agent-stack">
+                      <span class="task-agent-label">参与Agent</span>
+                      <div class="task-agent-avatars">
+                        <span class="task-agent-avatar is-green">产</span>
+                        <span class="task-agent-avatar is-purple">验</span>
+                      </div>
+                      <span class="task-agent-count">2 位</span>
+                    </div>
+                  </div>
+                </article>
+
+                <article class="task-card">
+                  <div class="task-role-row">
+                    <span class="task-role-chip is-manager"><span class="task-role-badge">管</span><span class="task-role-text">总控-项目经理</span></span>
+                    <span class="task-role-chip is-core"><span class="task-role-badge">协</span><span class="task-role-text">产品策划-任务派发</span></span>
+                  </div>
+                  <div class="task-card-head">
+                    <div class="task-card-title">子任务：宽场景回归时间轴布局</div>
+                    <span class="task-status is-paused">暂缓</span>
+                  </div>
+                  <div class="task-card-meta">更新：20:58 · 下一责任人：<strong>总控-项目经理</strong></div>
+                  <p class="task-card-summary">这条风险任务保留在链路中，只为提醒宽场景不得脱离现网基线，不再实际推进。</p>
+                  <div class="task-card-footer">
+                    <div class="task-agent-stack">
+                      <span class="task-agent-label">参与Agent</span>
+                      <div class="task-agent-avatars">
+                        <span class="task-agent-avatar is-purple">总</span>
+                        <span class="task-agent-avatar is-green">产</span>
+                      </div>
+                      <span class="task-agent-count">2 位</span>
+                    </div>
+                  </div>
+                </article>
+              </div>
+            </div>
+          </section>
+
+          <section class="timeline-day">
+            <div class="timeline-day-head">
+              <div class="timeline-day-title">已完成前置</div>
+              <div class="timeline-day-meta">历史结果继续作为可复用基座</div>
+            </div>
+            <div class="timeline-row">
+              <div class="timeline-track"><span class="timeline-track-dot"></span></div>
+              <div class="timeline-parent">
+                <article class="task-card">
+                  <div class="task-role-row">
+                    <span class="task-role-chip is-owner"><span class="task-role-badge">主</span><span class="task-role-text">产品策划-任务派发</span></span>
+                    <span class="task-role-chip is-manager"><span class="task-role-badge">管</span><span class="task-role-text">总控-项目经理</span></span>
+                  </div>
+                  <div class="task-card-head">
+                    <div class="task-card-title">统一任务语法冻结</div>
+                    <span class="task-status is-done">已完成</span>
+                  </div>
+                  <div class="task-card-meta">更新：20:40 · 下一责任人：<strong>无</strong></div>
+                  <p class="task-card-summary">只聚焦任务项、正式状态唯一强标签、单条结论文案、参与Agent 轻量表达已冻结为当前系统统一任务语法。</p>
+                  <div class="task-card-footer">
+                    <div class="task-agent-stack">
+                      <span class="task-agent-label">参与Agent</span>
+                      <div class="task-agent-avatars">
+                        <span class="task-agent-avatar is-green">产</span>
+                        <span class="task-agent-avatar is-purple">总</span>
+                      </div>
+                      <span class="task-agent-count">2 位</span>
+                    </div>
+                  </div>
+                </article>
+              </div>
+              <div class="timeline-children">
+                <article class="task-card">
+                  <div class="task-role-row">
+                    <span class="task-role-chip is-owner"><span class="task-role-badge">主</span><span class="task-role-text">前端页面-规范策划</span></span>
+                    <span class="task-role-chip is-core"><span class="task-role-badge">协</span><span class="task-role-text">数据治理-消息监控</span></span>
+                  </div>
+                  <div class="task-card-head">
+                    <div class="task-card-title">子任务：统一状态样本补齐</div>
+                    <span class="task-status is-done">已完成</span>
+                  </div>
+                  <div class="task-card-meta">更新：20:52 · 下一责任人：<strong>无</strong></div>
+                  <p class="task-card-summary">五种正式状态样本已补齐并在三个场景里保持同一套颜色和阅读优先级。</p>
+                  <div class="task-card-footer">
+                    <div class="task-agent-stack">
+                      <span class="task-agent-label">参与Agent</span>
+                      <div class="task-agent-avatars">
+                        <span class="task-agent-avatar is-blue">前</span>
+                        <span class="task-agent-avatar is-orange">数</span>
+                      </div>
+                      <span class="task-agent-count">2 位</span>
+                    </div>
+                  </div>
+                </article>
+              </div>
+            </div>
+          </section>
+        </div>
+      </section>
+    </main>
+  </div>
+</body>
+</html>

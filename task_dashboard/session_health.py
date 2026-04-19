@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -17,6 +18,29 @@ ONE_DAY = timedelta(days=1)
 DEFAULT_SESSION_HEALTH_INTERVAL_MINUTES = 120
 MIN_SESSION_HEALTH_INTERVAL_MINUTES = 15
 MAX_SESSION_HEALTH_INTERVAL_MINUTES = 1440
+DEFAULT_SESSION_HEALTH_MAX_LOG_FILES = 24
+DEFAULT_SESSION_HEALTH_MAX_LOG_BYTES = 6 * 1024 * 1024
+
+
+def _coerce_positive_int(value: Any, default: int) -> int:
+    try:
+        number = int(str(value or "").strip() or default)
+    except (TypeError, ValueError):
+        return default
+    return number if number > 0 else default
+
+
+def _coerce_bool(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    txt = str(value).strip().lower()
+    if txt in {"1", "true", "yes", "on"}:
+        return True
+    if txt in {"0", "false", "no", "off"}:
+        return False
+    return default
 
 
 def _parse_iso(value: Any) -> datetime | None:
@@ -323,6 +347,37 @@ def _find_codex_log_paths(session_id: str, log_index: dict[str, list[Path]]) -> 
     return sorted(uniq.values(), key=lambda item: str(item))
 
 
+def _path_stat(path: Path) -> tuple[int, float]:
+    try:
+        stat = path.stat()
+    except OSError:
+        return 0, 0.0
+    return int(stat.st_size or 0), float(stat.st_mtime or 0.0)
+
+
+def _read_recent_jsonl_bytes(path: Path, *, max_bytes: int) -> bytes:
+    if max_bytes <= 0:
+        return b""
+    file_size, _ = _path_stat(path)
+    if file_size <= 0:
+        return b""
+    try:
+        with path.open("rb") as handle:
+            if file_size <= max_bytes:
+                return handle.read()
+            start = max(0, file_size - max_bytes)
+            handle.seek(start)
+            raw = handle.read(max_bytes)
+    except OSError:
+        return b""
+    if start <= 0:
+        return raw
+    first_break = raw.find(b"\n")
+    if first_break < 0:
+        return b""
+    return raw[first_break + 1 :]
+
+
 def index_codex_log_files(log_roots: list[Path]) -> dict[str, list[Path]]:
     out: dict[str, list[Path]] = {}
     for root in log_roots:
@@ -345,12 +400,23 @@ def index_codex_log_files(log_roots: list[Path]) -> dict[str, list[Path]]:
 
 def analyze_codex_session_logs(session_id: str, log_index: dict[str, list[Path]]) -> dict[str, Any]:
     paths = _find_codex_log_paths(session_id, log_index)
+    skip_log_scan = _coerce_bool(os.environ.get("TASK_DASHBOARD_SESSION_HEALTH_SKIP_LOG_SCAN"))
+    max_files = _coerce_positive_int(
+        os.environ.get("TASK_DASHBOARD_SESSION_HEALTH_MAX_LOG_FILES"),
+        DEFAULT_SESSION_HEALTH_MAX_LOG_FILES,
+    )
+    max_bytes = _coerce_positive_int(
+        os.environ.get("TASK_DASHBOARD_SESSION_HEALTH_MAX_LOG_BYTES"),
+        DEFAULT_SESSION_HEALTH_MAX_LOG_BYTES,
+    )
     metrics: dict[str, Any] = {
         "has_log": bool(paths),
         "log_paths": [str(path) for path in paths],
         "log_paths_count": len(paths),
         "log_size_bytes": 0,
         "log_size_mb": 0.0,
+        "log_scanned_bytes": 0,
+        "log_truncated": False,
         "turn_context_count": 0,
         "compacted_count": 0,
         "first_event_at": "",
@@ -366,6 +432,20 @@ def analyze_codex_session_logs(session_id: str, log_index: dict[str, list[Path]]
     }
     if not paths:
         return metrics
+    if skip_log_scan:
+        metrics["log_truncated"] = True
+        return metrics
+
+    path_meta: list[tuple[Path, int, float]] = []
+    total_size_bytes = 0
+    for path in paths:
+        size_bytes, mtime = _path_stat(path)
+        total_size_bytes += size_bytes
+        path_meta.append((path, size_bytes, mtime))
+    path_meta.sort(key=lambda item: (item[2], str(item[0])))
+    if len(path_meta) > max_files:
+        metrics["log_truncated"] = True
+        path_meta = path_meta[-max_files:]
 
     first_event: datetime | None = None
     last_event: datetime | None = None
@@ -373,85 +453,96 @@ def analyze_codex_session_logs(session_id: str, log_index: dict[str, list[Path]]
     turn_context_count = 0
     compacted_count = 0
     size_bytes = 0
+    scanned_bytes = 0
+    scanned_files = 0
     compaction_timestamps: list[datetime] = []
     turns_between_compactions: list[int] = []
     hours_between_compactions: list[float] = []
     turns_since_last_compaction = 0
     seen_first_compaction = False
     timeline_events: list[dict[str, Any]] = []
+    observed_events: list[dict[str, Any]] = []
 
-    for path in paths:
-        try:
-            size_bytes += path.stat().st_size
-        except OSError:
-            continue
-        try:
-            with path.open("r", encoding="utf-8") as handle:
-                for line in handle:
-                    text = line.strip()
-                    if not text:
-                        continue
-                    try:
-                        event = json.loads(text)
-                    except json.JSONDecodeError:
-                        continue
-                    ts = _parse_iso(event.get("timestamp"))
-                    if ts is not None:
-                        if first_event is None or ts < first_event:
-                            first_event = ts
-                        if last_event is None or ts > last_event:
-                            last_event = ts
-                    event_type = str(event.get("type") or "").strip()
-                    if event_type == "turn_context":
-                        turn_context_count += 1
-                        if seen_first_compaction:
-                            turns_since_last_compaction += 1
-                    elif event_type == "compacted":
-                        compacted_count += 1
-                        if seen_first_compaction:
-                            turns_between_compactions.append(turns_since_last_compaction)
-                        turns_since_last_compaction = 0
-                        seen_first_compaction = True
-                        if ts is not None and (last_compacted is None or ts > last_compacted):
-                            last_compacted = ts
-                        if ts is not None:
-                            if compaction_timestamps:
-                                gap_hours = _hours_between(compaction_timestamps[-1], ts)
-                                if gap_hours is not None:
-                                    hours_between_compactions.append(gap_hours)
-                            compaction_timestamps.append(ts)
-                            timeline_events.append({"kind": "compact", "timestamp": ts})
-                    elif event_type == "event_msg":
-                        payload = event.get("payload")
-                        if not isinstance(payload, dict):
-                            continue
-                        payload_type = str(payload.get("type") or "").strip()
-                        if payload_type == "token_count":
-                            usage_pct = _token_usage_pct(payload.get("info"))
-                            if ts is not None and usage_pct is not None:
-                                timeline_events.append({"kind": "token", "timestamp": ts, "usage_pct": usage_pct})
-                        elif payload_type == "context_compacted":
-                            compacted_count += 1
-                            if seen_first_compaction:
-                                turns_between_compactions.append(turns_since_last_compaction)
-                            turns_since_last_compaction = 0
-                            seen_first_compaction = True
-                            if ts is not None and (last_compacted is None or ts > last_compacted):
-                                last_compacted = ts
-                            if ts is not None:
-                                if compaction_timestamps:
-                                    gap_hours = _hours_between(compaction_timestamps[-1], ts)
-                                    if gap_hours is not None:
-                                        hours_between_compactions.append(gap_hours)
-                                compaction_timestamps.append(ts)
-                                timeline_events.append({"kind": "compact", "timestamp": ts})
-        except OSError:
-            continue
+    for path, path_size, _mtime in reversed(path_meta):
+        if scanned_bytes >= max_bytes:
+            metrics["log_truncated"] = True
+            break
+        remaining_bytes = max_bytes - scanned_bytes
+        if remaining_bytes <= 0:
+            metrics["log_truncated"] = True
+            break
+        raw = _read_recent_jsonl_bytes(path, max_bytes=remaining_bytes)
+        if path_size > len(raw):
+            metrics["log_truncated"] = True
+        scanned_bytes += len(raw)
+        scanned_files += 1
+        for line in raw.decode("utf-8", errors="replace").splitlines():
+            text = line.strip()
+            if not text:
+                continue
+            try:
+                event = json.loads(text)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(event, dict):
+                observed_events.append(event)
+
+    observed_events.sort(key=lambda item: _parse_iso(item.get("timestamp")) or datetime.min.replace(tzinfo=timezone.utc))
+    for event in observed_events:
+        ts = _parse_iso(event.get("timestamp"))
+        if ts is not None:
+            if first_event is None or ts < first_event:
+                first_event = ts
+            if last_event is None or ts > last_event:
+                last_event = ts
+        event_type = str(event.get("type") or "").strip()
+        if event_type == "turn_context":
+            turn_context_count += 1
+            if seen_first_compaction:
+                turns_since_last_compaction += 1
+        elif event_type == "compacted":
+            compacted_count += 1
+            if seen_first_compaction:
+                turns_between_compactions.append(turns_since_last_compaction)
+            turns_since_last_compaction = 0
+            seen_first_compaction = True
+            if ts is not None and (last_compacted is None or ts > last_compacted):
+                last_compacted = ts
+            if ts is not None:
+                gap_hours = _hours_between(compaction_timestamps[-1], ts) if compaction_timestamps else None
+                if gap_hours is not None:
+                    hours_between_compactions.append(gap_hours)
+                compaction_timestamps.append(ts)
+                timeline_events.append({"kind": "compact", "timestamp": ts})
+        elif event_type == "event_msg":
+            payload = event.get("payload")
+            if not isinstance(payload, dict):
+                continue
+            payload_type = str(payload.get("type") or "").strip()
+            if payload_type == "token_count":
+                usage_pct = _token_usage_pct(payload.get("info"))
+                if ts is not None and usage_pct is not None:
+                    timeline_events.append({"kind": "token", "timestamp": ts, "usage_pct": usage_pct})
+            elif payload_type == "context_compacted":
+                compacted_count += 1
+                if seen_first_compaction:
+                    turns_between_compactions.append(turns_since_last_compaction)
+                turns_since_last_compaction = 0
+                seen_first_compaction = True
+                if ts is not None and (last_compacted is None or ts > last_compacted):
+                    last_compacted = ts
+                if ts is not None:
+                    gap_hours = _hours_between(compaction_timestamps[-1], ts) if compaction_timestamps else None
+                    if gap_hours is not None:
+                        hours_between_compactions.append(gap_hours)
+                    compaction_timestamps.append(ts)
+                    timeline_events.append({"kind": "compact", "timestamp": ts})
 
     timeline_events.sort(key=lambda item: item.get("timestamp") or datetime.min.replace(tzinfo=timezone.utc))
     compaction_observations, post_compact_values = _build_compaction_observations(timeline_events)
-    metrics["log_size_bytes"] = size_bytes
-    metrics["log_size_mb"] = _round_mb(size_bytes)
+    metrics["log_size_bytes"] = total_size_bytes
+    metrics["log_size_mb"] = _round_mb(total_size_bytes)
+    metrics["log_scanned_bytes"] = scanned_bytes
     metrics["turn_context_count"] = turn_context_count
     metrics["compacted_count"] = compacted_count
     metrics["first_event_at"] = _iso_local(first_event)
@@ -537,9 +628,6 @@ def build_session_health_page(
                 "branch": str(session.get("branch") or "").strip(),
                 "worktree_root": str(session.get("worktree_root") or "").strip(),
                 "workdir": str(session.get("workdir") or "").strip(),
-                "task_tracking": dict(session.get("task_tracking") or {})
-                if isinstance(session.get("task_tracking"), dict)
-                else {},
                 "is_primary": bool(session.get("is_primary")),
                 "session_role": str(session.get("session_role") or "").strip() or ("primary" if bool(session.get("is_primary")) else "child"),
                 "status": str(session.get("status") or "").strip() or "active",
@@ -835,6 +923,8 @@ def build_session_health_page(
             "warning": "55%-70%",
             "rotate": ">=70%",
             "priority_rotate": "连续多次 compact 后仍 >=60%",
+            "reset_button_threshold_pct": 20,
+            "reset_button_rule": ">=20%",
             "note": "优先展示日志实测的 compact 前后占用比例；缺少 token_count 时才退回节奏估算。",
         },
         "projects": project_summaries,

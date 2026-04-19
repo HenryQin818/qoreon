@@ -4,6 +4,17 @@
       return !!(j && j.ok);
     }
 
+    function taskDashboardCodexApiReadState() {
+      const root = (typeof window !== "undefined" && window) ? window : globalThis;
+      if (!root.__taskDashboardCodexApiReadState || typeof root.__taskDashboardCodexApiReadState !== "object") {
+        root.__taskDashboardCodexApiReadState = {
+          runsPromiseByUrl: Object.create(null),
+          runPromiseById: Object.create(null),
+        };
+      }
+      return root.__taskDashboardCodexApiReadState;
+    }
+
     async function loadRuns(params = {}) {
       const qs = new URLSearchParams();
       qs.set("limit", String(params.limit || 30));
@@ -14,9 +25,16 @@
       if (params.beforeCreatedAt) qs.set("beforeCreatedAt", String(params.beforeCreatedAt));
       if (params.payloadMode) qs.set("payloadMode", String(params.payloadMode));
       const url = "/api/codex/runs?" + qs.toString();
-      const r = await fetch(url, { cache: "no-store" });
-      if (!r.ok) throw new Error("runs fetch failed");
-      return await r.json();
+      const state = taskDashboardCodexApiReadState();
+      if (state.runsPromiseByUrl[url]) return state.runsPromiseByUrl[url];
+      state.runsPromiseByUrl[url] = (async () => {
+        const r = await fetch(url, { cache: "no-store" });
+        if (!r.ok) throw new Error("runs fetch failed");
+        return await r.json();
+      })().finally(() => {
+        delete state.runsPromiseByUrl[url];
+      });
+      return state.runsPromiseByUrl[url];
     }
 
     function runsLatestCreatedAt(runs) {
@@ -141,35 +159,20 @@
       const nextFinishedTs = runSnapshotFinishedTs(next);
       const merged = { ...prev, ...next };
 
-      // 防止旧终态快照在轮询乱序时覆盖较新的运行态。
+      // 同一 runId 的状态只能单向流转到终态；一旦服务端新快照已是终态，
+      // 不要再把页面内旧的 working 快照保留下来，否则会出现
+      // “正文已完成但状态仍显示处理中/执行异常，刷新后才正常”的错位。
       if (prevWorking && nextTerminal) {
-        const nextClearlyNewer = nextFinishedTs >= 0 && nextFinishedTs >= Math.max(prevProgressTs, nextProgressTs);
-        if (!nextClearlyNewer) {
-          merged.status = String(prev.status || merged.status || "");
-          merged.display_state = String(
-            firstNonEmptyText([prev.display_state, prev.displayState, merged.display_state, merged.displayState]) || ""
-          );
-          merged.finishedAt = String(prev.finishedAt || prev.finished_at || "");
-          merged.error = String(prev.error || "");
-          merged.lastProgressAt = String(firstNonEmptyText([prev.lastProgressAt, merged.lastProgressAt]) || "");
-          if (Number(prev.agentMessagesCount || 0) > Number(merged.agentMessagesCount || 0)) {
-            merged.agentMessagesCount = Number(prev.agentMessagesCount || 0);
-          }
-          if (!String(merged.partialPreview || "").trim() && String(prev.partialPreview || "").trim()) {
-            merged.partialPreview = String(prev.partialPreview || "");
-          }
-          if (!String(merged.logPreview || "").trim() && String(prev.logPreview || "").trim()) {
-            merged.logPreview = String(prev.logPreview || "");
-          }
-          return merged;
-        }
+        return merged;
+      }
+
+      // 同理，若页面已经拿到终态，不允许后续乱序/滞后的 working 快照把它压回去。
+      if (prevTerminal && nextWorking) {
+        return { ...merged, ...prev };
       }
 
       if (prevTerminal && nextTerminal && prevFinishedTs > nextFinishedTs && prevFinishedTs >= 0) {
         return { ...merged, ...prev };
-      }
-      if (nextWorking && !prevWorking) {
-        return merged;
       }
       return merged;
     }
@@ -209,9 +212,17 @@
     }
 
     async function loadRun(id) {
-      const r = await fetch("/api/codex/run/" + encodeURIComponent(String(id || "")), { cache: "no-store" });
-      if (!r.ok) throw new Error("run fetch failed");
-      return await r.json();
+      const runId = String(id || "").trim();
+      const state = taskDashboardCodexApiReadState();
+      if (state.runPromiseById[runId]) return state.runPromiseById[runId];
+      state.runPromiseById[runId] = (async () => {
+        const r = await fetch("/api/codex/run/" + encodeURIComponent(runId), { cache: "no-store" });
+        if (!r.ok) throw new Error("run fetch failed");
+        return await r.json();
+      })().finally(() => {
+        delete state.runPromiseById[runId];
+      });
+      return state.runPromiseById[runId];
     }
 
     async function callRunAction(runId, action) {

@@ -8,6 +8,9 @@ RUNTIME_IDENTITY_COMPARE_KEYS = (
     "project_id",
     "runtime_role",
     "environment",
+    "port",
+    "bind",
+    "publicOrigin",
     "runsDir",
     "staticRoot",
     "worktreeRoot",
@@ -35,6 +38,8 @@ def build_health_runtime_identity(
     runtime_role: str,
     environment: str,
     port: int,
+    bind_host: str = "",
+    public_origin: str = "",
     runs_dir: Path | str,
     sessions_file: Path | str,
     static_root: Path | str,
@@ -46,6 +51,8 @@ def build_health_runtime_identity(
         "runtime_role": _norm_text(runtime_role),
         "environment": _norm_text(environment),
         "port": int(port or 0),
+        "bind": _norm_text(bind_host),
+        "publicOrigin": _norm_text(public_origin),
         "runsDir": _norm_path(runs_dir),
         "sessionsFile": _norm_path(sessions_file),
         "staticRoot": _norm_path(static_root),
@@ -72,4 +79,3 @@ def compare_runtime_identity(
         if left != right:
             mismatches.append(f"{key}: expected={left or '-'} actual={right or '-'}")
     return mismatches
-

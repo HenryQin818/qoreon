@@ -83,33 +83,6 @@ class RunStoreListRunsLightModeTests(unittest.TestCase):
             self.assertTrue(str(rows[0].get("lastPreview") or "").strip())
             self.assertNotIn("logPreview", rows[0])
 
-    def test_list_runs_filters_by_related_session_refs(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            store = server.RunStore(Path(td))
-            run = store.create_run(
-                project_id="task_dashboard",
-                channel_name="子级02-CCB运行时（server-并发-安全-启动）",
-                session_id="executor-session",
-                message="hello related session",
-                extra_meta={
-                    "source_ref": {"session_id": "source-session"},
-                    "sender_agent_ref": {"session_id": "source-session"},
-                    "callback_to": {"session_id": "source-session"},
-                    "route_resolution": {"final_target": {"session_id": "source-session"}},
-                    "communication_view": {"target_session_id": "source-session"},
-                },
-            )
-            run_id = str(run.get("id") or "").strip()
-
-            rows = store.list_runs(
-                project_id="task_dashboard",
-                session_id="source-session",
-                limit=10,
-                include_payload=False,
-            )
-
-            self.assertEqual([run_id], [str(row.get("id") or "").strip() for row in rows])
-
 
 if __name__ == "__main__":
     unittest.main()

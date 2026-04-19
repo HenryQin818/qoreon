@@ -36,13 +36,10 @@ from task_dashboard.helpers import (
     coerce_bool as _coerce_bool,
     coerce_int as _coerce_int,
 )
-from task_dashboard.parser_md import extract_field
 from task_dashboard.runtime.request_parsing import (
     _normalize_reasoning_effort_local as _normalize_reasoning_effort,
 )
 from task_dashboard.runtime.project_execution_context import build_project_execution_context
-from task_dashboard.task_identity import extract_task_identity_from_markdown
-from task_dashboard.utils import safe_read_text
 
 
 __all__ = [
@@ -81,13 +78,10 @@ __all__ = [
     "_build_default_auto_inspection_task",
     "_build_heartbeat_patch_with_tasks",
     "_build_inspection_record_id",
-    "_build_project_schedule_queue_item",
-    "_build_project_schedule_queue_payload",
     "_build_project_scheduler_status",
     "_build_project_task_item_from_path",
     "_build_runtime_bubbles_payload",
     "_build_session_binding_required_payload",
-    "_canonicalize_project_schedule_task_path",
     "_classify_auto_inspection_execution_result",
     "_collect_auto_inspection_candidates",
     "_enqueue_run_for_dispatch",
@@ -109,7 +103,6 @@ __all__ = [
     "_load_project_auto_dispatch_config",
     "_load_project_auto_inspection_config",
     "_load_project_heartbeat_config",
-    "_load_project_schedule_queue",
     "_load_project_scheduler_contract_config",
     "_load_project_scheduler_runtime_snapshot",
     "_load_session_heartbeat_config",
@@ -134,9 +127,6 @@ __all__ = [
     "_normalize_inspection_records",
     "_normalize_inspection_targets",
     "_normalize_inspection_task_id",
-    "_normalize_project_schedule_task_paths",
-    "_project_schedule_state_path",
-    "_project_schedule_state_root",
     "_project_scheduler_state_path",
     "_project_scheduler_state_root",
     "_promote_auto_inspection_task_to_in_progress",
@@ -146,7 +136,6 @@ __all__ = [
     "_resolve_channel_primary_session_id",
     "_resolve_cli_type_for_session",
     "_resolve_model_for_session",
-    "_resolve_project_schedule_archived_task_path",
     "_resolve_project_task_abs_path",
     "_resolve_reasoning_effort_for_session",
     "_resolve_scheduler_engine_enabled",
@@ -156,10 +145,8 @@ __all__ = [
     "_runtime_expire_at_from_base",
     "_runtime_related_objects_from_meta",
     "_runtime_relations_from_meta",
-    "_save_project_schedule_queue",
     "_save_project_scheduler_runtime_snapshot",
     "_scan_project_task_items",
-    "_schedule_queue_item_is_active_candidate",
     "_select_active_auto_inspection_task",
     "_set_project_scheduler_contract_in_config",
     "_set_project_scheduler_contract_in_config_text",
@@ -226,14 +213,6 @@ def _normalize_task_path_identity(task_path: str) -> str:
     return __getattr__("_normalize_task_path_identity")(task_path)
 
 
-def _schedule_queue_cache_enabled() -> bool:
-    return bool(__getattr__("_schedule_queue_cache_enabled")())
-
-
-def _schedule_queue_cache_signature(path: Path):
-    return __getattr__("_schedule_queue_cache_signature")(path)
-
-
 def _repo_root() -> Path:
     return __getattr__("_repo_root")()
 
@@ -248,18 +227,6 @@ def _resolve_task_project_channel(task_path: str, *, project_hint: str = ""):
 
 def _resolve_primary_target_by_channel(project_id: str, channel_name: str):
     return __getattr__("_resolve_primary_target_by_channel")(project_id, channel_name)
-
-
-def _project_schedule_queue_cache_lock():
-    return __getattr__("_PROJECT_SCHEDULE_QUEUE_CACHE_LOCK")
-
-
-def _project_schedule_queue_cache():
-    return __getattr__("_PROJECT_SCHEDULE_QUEUE_CACHE")
-
-
-def _clear_project_schedule_queue_cache(project_id: str) -> None:
-    __getattr__("_clear_project_schedule_queue_cache")(project_id)
 
 
 def _clear_auto_inspection_preview_cache(project_id: str) -> None:
@@ -411,21 +378,19 @@ def _heartbeat_task_runtime_key(heartbeat_task_id: str, session_id: str = "") ->
 
 
 _INSPECTION_TARGET_ORDER = [
-    "scheduled",
+    "todo",
     "in_progress",
     "pending",
-    "todo",
     "pending_acceptance",
 ]
 _INSPECTION_TARGET_SET = set(_INSPECTION_TARGET_ORDER)
 _AUTO_INSPECTION_OBJECT_TYPE_ORDER = _INSPECTION_TARGET_ORDER + ["custom"]
 _AUTO_INSPECTION_OBJECT_TYPE_SET = set(_AUTO_INSPECTION_OBJECT_TYPE_ORDER)
-_DEFAULT_INSPECTION_TARGETS = ["scheduled", "in_progress"]
+_DEFAULT_INSPECTION_TARGETS = ["todo", "in_progress"]
 _INSPECTION_TARGET_LABELS = {
-    "scheduled": "排期任务",
+    "todo": "待开始",
     "in_progress": "进行中",
     "pending": "待处理",
-    "todo": "待开始",
     "pending_acceptance": "待验收",
 }
 _AUTO_INSPECTION_RECORD_LIMIT = 50
@@ -1739,15 +1704,6 @@ def _build_runtime_bubbles_payload(
     }
 
 
-def _project_schedule_state_root(store: "RunStore") -> Path:
-    return _store_runtime_base_dir(store) / ".run" / "project_schedule"
-
-
-def _project_schedule_state_path(store: "RunStore", project_id: str) -> Path:
-    pid = str(project_id or "").strip()
-    return _project_schedule_state_root(store) / f"{pid}.json"
-
-
 def _extract_status_from_task_filename(task_path: str) -> str:
     name = Path(str(task_path or "")).name
     hits = re.findall(r"【([^】]+)】", name)
@@ -1805,7 +1761,6 @@ def _scan_project_task_items(project_id: str, root: Path) -> list[dict[str, Any]
             if updated_ts > 0
             else ""
         )
-        task_meta = _read_project_task_time_meta(p)
         rows.append(
             {
                 "task_path": task_path,
@@ -1814,8 +1769,6 @@ def _scan_project_task_items(project_id: str, root: Path) -> list[dict[str, Any]
                 "status_bucket": status_bucket,
                 "lane": _task_lane_from_bucket(status_bucket),
                 "channel_name": str(channel_name or rel_parts[task_idx - 1] or "").strip(),
-                "created_at": task_meta.get("created_at") or "",
-                "due": task_meta.get("due") or "",
                 "updated_at": updated_at,
                 "updated_ts": updated_ts,
                 "exists": True,
@@ -1931,26 +1884,6 @@ def _resolve_project_task_abs_path(project_id: str, task_path: str) -> Optional[
     return None
 
 
-def _read_project_task_time_meta(task_file: Path) -> dict[str, str]:
-    path = Path(task_file)
-    try:
-        if not path.exists() or not path.is_file():
-            return {"created_at": "", "due": ""}
-    except Exception:
-        return {"created_at": "", "due": ""}
-    try:
-        markdown = safe_read_text(path)
-    except Exception:
-        return {"created_at": "", "due": ""}
-    identity = extract_task_identity_from_markdown(markdown)
-    created_at = str(identity.get("created_at") or "").strip()
-    due = extract_field(markdown, "截止日期") or extract_field(markdown, "截止")
-    return {
-        "created_at": created_at,
-        "due": str(due or "").strip(),
-    }
-
-
 def _build_project_task_item_from_path(project_id: str, task_path: str) -> Optional[dict[str, Any]]:
     pid = str(project_id or "").strip()
     path_txt = _normalize_task_path_identity(task_path)
@@ -1974,7 +1907,6 @@ def _build_project_task_item_from_path(project_id: str, task_path: str) -> Optio
         if updated_ts > 0
         else ""
     )
-    task_meta = _read_project_task_time_meta(abs_path)
     status = _extract_status_from_task_filename(path_txt)
     status_bucket = bucket_key_for_status(status)
     return {
@@ -1984,276 +1916,10 @@ def _build_project_task_item_from_path(project_id: str, task_path: str) -> Optio
         "status_bucket": status_bucket,
         "lane": _task_lane_from_bucket(status_bucket),
         "channel_name": str(channel_name or "").strip(),
-        "created_at": task_meta.get("created_at") or "",
-        "due": task_meta.get("due") or "",
         "updated_at": updated_at,
         "updated_ts": updated_ts,
         "exists": True,
     }
-
-
-def _resolve_project_schedule_archived_task_path(task_path: str) -> Optional[Path]:
-    txt = str(task_path or "").strip()
-    if not txt:
-        return None
-    root = _repo_root()
-    norm = txt.replace("\\", "/")
-    candidate = Path(txt) if Path(txt).is_absolute() else (root / txt)
-    try:
-        if candidate.exists() and candidate.is_file():
-            return candidate
-    except Exception:
-        pass
-
-    filename = Path(norm).name
-    if "/任务/" in norm and filename:
-        prefix = norm.split("/任务/")[0]
-        for bucket in ("已完成", "暂缓"):
-            probe = root / Path(prefix) / bucket / filename
-            try:
-                if probe.exists() and probe.is_file():
-                    return probe
-            except Exception:
-                continue
-    if ("/已完成/" in norm or "/暂缓/" in norm) and filename:
-        try:
-            if candidate.exists() and candidate.is_file():
-                return candidate
-        except Exception:
-            pass
-    return None
-
-
-def _schedule_queue_item_is_active_candidate(item: dict[str, Any]) -> bool:
-    if not isinstance(item, dict):
-        return False
-    if bool(item.get("read_only")) or bool(item.get("is_archived")):
-        return False
-    if not bool(item.get("exists")):
-        return False
-    lane = str(item.get("lane") or "").strip()
-    bucket = str(item.get("status_bucket") or "").strip()
-    return lane in {"进行中", "待开始"} or bucket in {"进行中", "待开始"}
-
-
-def _build_project_schedule_queue_item(project_id: str, task_path: str) -> dict[str, Any]:
-    pid = str(project_id or "").strip()
-    raw_path = str(task_path or "").strip()
-    path_txt = _normalize_task_path_identity(raw_path)
-    row = _build_project_task_item_from_path(pid, raw_path)
-    if row:
-        item = dict(row)
-        item.update(
-            {
-                "exists": True,
-                "activity_state": "active",
-                "is_archived": False,
-                "read_only": False,
-                "archive_reason": "",
-                "archived_task_path": "",
-            }
-        )
-        item["is_active_candidate"] = _schedule_queue_item_is_active_candidate(item)
-        return item
-
-    _, channel_name, _ = _resolve_task_project_channel(path_txt or raw_path, project_hint=pid)
-    task_act = _inspect_callback_task_activity(raw_path or path_txt)
-    archived_path = _resolve_project_schedule_archived_task_path(raw_path or path_txt)
-    archived_path_txt = _normalize_task_path_identity(str(archived_path)) if archived_path else ""
-    updated_ts = 0.0
-    updated_at = ""
-    if archived_path is not None:
-        try:
-            updated_ts = float(archived_path.stat().st_mtime)
-        except Exception:
-            updated_ts = 0.0
-    if updated_ts > 0:
-        updated_at = time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime(updated_ts))
-
-    is_archived = bool(task_act.get("is_archived")) or bool(archived_path_txt)
-    item = {
-        "task_path": path_txt,
-        "title": _extract_task_title(path_txt),
-        "status": "已归档" if is_archived else "",
-        "status_bucket": "已归档" if is_archived else "其他",
-        "lane": "已归档",
-        "channel_name": channel_name,
-        "updated_at": updated_at,
-        "updated_ts": updated_ts,
-        "exists": bool(archived_path_txt),
-        "activity_state": "archived" if is_archived else "missing",
-        "is_archived": is_archived,
-        "read_only": is_archived,
-        "archive_reason": str(task_act.get("reason") or ""),
-        "archived_task_path": archived_path_txt,
-    }
-    item["is_active_candidate"] = _schedule_queue_item_is_active_candidate(item)
-    return item
-
-
-def _canonicalize_project_schedule_task_path(project_id: str, task_path: str) -> str:
-    """
-    Canonicalize schedule-queue task path into project-root-relative identity.
-
-    Compatibility:
-    - Accept legacy short paths like "任务规划/...".
-    - Accept project-prefixed paths like ".../task-dashboard/任务规划/...".
-    - Accept absolute paths and normalize into repo-relative when possible.
-    """
-    pid = str(project_id or "").strip()
-    norm = _normalize_task_path_identity(task_path)
-    if not norm:
-        return ""
-
-    repo_root = _repo_root().resolve()
-    task_root = _resolve_project_task_root(pid)
-    task_root_rel = ""
-    if task_root is not None:
-        try:
-            task_root_rel = _normalize_task_path_identity(str(task_root.resolve().relative_to(repo_root)))
-        except Exception:
-            task_root_rel = _normalize_task_path_identity(str(task_root))
-
-    candidates: list[str] = []
-    abs_candidates: list[Path] = []
-
-    def _push_candidate(value: str) -> None:
-        txt = _normalize_task_path_identity(value)
-        if txt and txt not in candidates:
-            candidates.append(txt)
-
-    def _push_abs_candidate(value: Path) -> None:
-        if value not in abs_candidates:
-            abs_candidates.append(value)
-
-    _push_candidate(norm)
-    if task_root_rel:
-        prefix = task_root_rel.rstrip("/") + "/"
-        if not norm.startswith(prefix):
-            marker = "任务规划/"
-            idx = norm.find(marker)
-            if idx >= 0:
-                tail = norm[idx + len(marker):]
-                _push_candidate(f"{task_root_rel}/{tail}")
-                if task_root is not None:
-                    _push_abs_candidate(task_root / tail)
-            root_last = task_root_rel.split("/")[-1] if task_root_rel else ""
-            if root_last and norm.startswith(root_last + "/"):
-                tail = norm[len(root_last) + 1:]
-                _push_candidate(f"{task_root_rel}/{tail}")
-                if task_root is not None:
-                    _push_abs_candidate(task_root / tail)
-            _push_candidate(f"{task_root_rel}/{norm}")
-            if task_root is not None:
-                _push_abs_candidate(task_root / norm)
-
-    for ap in abs_candidates:
-        try:
-            if ap.exists() and ap.is_file():
-                return _normalize_task_path_identity(str(ap))
-        except Exception:
-            continue
-
-    for cand in candidates:
-        rid, _, bucket = _resolve_task_project_channel(cand, project_hint=pid)
-        if rid and rid != pid:
-            continue
-        if bucket and bucket != "任务":
-            continue
-        try:
-            if (repo_root / cand).exists():
-                return cand
-        except Exception:
-            pass
-
-    for cand in candidates:
-        rid, _, bucket = _resolve_task_project_channel(cand, project_hint=pid)
-        if rid and rid != pid:
-            continue
-        if bucket and bucket != "任务":
-            continue
-        return cand
-    return norm
-
-
-def _normalize_project_schedule_task_paths(project_id: str, raw: Any) -> list[str]:
-    pid = str(project_id or "").strip()
-    values = raw if isinstance(raw, list) else []
-    out: list[str] = []
-    seen: set[str] = set()
-    for item in values:
-        txt = item.get("task_path") if isinstance(item, dict) else item
-        path = _canonicalize_project_schedule_task_path(pid, str(txt or ""))
-        if not path or path in seen:
-            continue
-        rid, _, bucket = _resolve_task_project_channel(path, project_hint=pid)
-        if rid and rid != pid:
-            continue
-        if bucket and bucket not in {"任务", "已完成", "暂缓"}:
-            continue
-        seen.add(path)
-        out.append(path)
-    return out
-
-
-def _load_project_schedule_queue(store: "RunStore", project_id: str) -> dict[str, Any]:
-    try:
-        import server
-
-        override = getattr(server, "_load_project_schedule_queue", None)
-        if callable(override) and override is not _load_project_schedule_queue:
-            data = override(store, project_id)
-            if isinstance(data, dict):
-                return {
-                    "project_id": str(data.get("project_id") or str(project_id or "").strip()),
-                    "task_paths": list(data.get("task_paths") or []),
-                    "updated_at": str(data.get("updated_at") or ""),
-                }
-    except Exception:
-        pass
-    pid = str(project_id or "").strip()
-    path = _project_schedule_state_path(store, pid)
-    if _schedule_queue_cache_enabled():
-        sig = _schedule_queue_cache_signature(path)
-        with _project_schedule_queue_cache_lock():
-            cached = _project_schedule_queue_cache().get(pid)
-            if isinstance(cached, dict) and cached.get("signature") == sig:
-                data = cached.get("data")
-                if isinstance(data, dict):
-                    return {
-                        "project_id": str(data.get("project_id") or pid),
-                        "task_paths": list(data.get("task_paths") or []),
-                        "updated_at": str(data.get("updated_at") or ""),
-                    }
-    raw = _read_json_file(path)
-    data = {
-        "project_id": pid,
-        "task_paths": _normalize_project_schedule_task_paths(
-        pid,
-        raw.get("task_paths")
-        if isinstance(raw.get("task_paths"), list)
-        else raw.get("taskPaths") if isinstance(raw.get("taskPaths"), list) else [],
-        ),
-        "updated_at": str(raw.get("updated_at") or ""),
-    }
-    if _schedule_queue_cache_enabled():
-        sig = _schedule_queue_cache_signature(path)
-        with _project_schedule_queue_cache_lock():
-            _project_schedule_queue_cache()[pid] = {"signature": sig, "data": data}
-    return data
-
-
-def _save_project_schedule_queue(store: "RunStore", project_id: str, task_paths: list[str]) -> dict[str, Any]:
-    pid = str(project_id or "").strip()
-    out = {
-        "project_id": pid,
-        "task_paths": _normalize_project_schedule_task_paths(pid, task_paths),
-        "updated_at": _now_iso(),
-    }
-    _write_json_file(_project_schedule_state_path(store, pid), out)
-    _clear_project_schedule_queue_cache(pid)
-    _clear_auto_inspection_preview_cache(pid)
-    return out
 
 
 def _promote_auto_inspection_task_to_in_progress(
@@ -2285,8 +1951,7 @@ def _promote_auto_inspection_task_to_in_progress(
     if not norm:
         out["reason"] = "missing_task_path"
         return out
-    canonical = _canonicalize_project_schedule_task_path(pid, norm)
-    old_path = canonical or norm
+    old_path = norm
     out["old_task_path"] = old_path
     row = _build_project_task_item_from_path(pid, old_path)
     if not row:
@@ -2320,61 +1985,7 @@ def _promote_auto_inspection_task_to_in_progress(
     )
     if new_path == old_path:
         return out
-
-    queue = _load_project_schedule_queue(store, pid)
-    paths = list(queue.get("task_paths") or [])
-    replaced = False
-    replaced_paths: list[str] = []
-    for p in paths:
-        cp = _canonicalize_project_schedule_task_path(pid, str(p or ""))
-        if cp == old_path:
-            replaced_paths.append(new_path)
-            replaced = True
-        else:
-            replaced_paths.append(cp or _normalize_task_path_identity(str(p or "")))
-    if replaced:
-        _save_project_schedule_queue(store, pid, replaced_paths)
-        out["queue_updated"] = True
     return out
-
-
-def _build_project_schedule_queue_payload(store: "RunStore", project_id: str) -> dict[str, Any]:
-    pid = str(project_id or "").strip()
-    data = _load_project_schedule_queue(store, pid)
-    paths = list(data.get("task_paths") or [])
-    queue_items: list[dict[str, Any]] = []
-    lane_counts: dict[str, int] = {"进行中": 0, "待处理": 0, "待开始": 0, "已完成": 0, "已归档": 0}
-    active_item: Optional[dict[str, Any]] = None
-    for idx, task_path in enumerate(paths, start=1):
-        path_txt = _normalize_task_path_identity(task_path)
-        if not path_txt:
-            continue
-        item = _build_project_schedule_queue_item(pid, path_txt)
-        lane = str(item.get("lane") or "已归档")
-        if lane not in lane_counts:
-            lane = "已归档"
-            item["lane"] = lane
-        lane_counts[lane] = int(lane_counts.get(lane) or 0) + 1
-        item["order_index"] = idx
-        queue_items.append(item)
-        if active_item is None and _schedule_queue_item_is_active_candidate(item):
-            active_item = dict(item)
-    eligible_active_count = sum(1 for item in queue_items if _schedule_queue_item_is_active_candidate(item))
-    archived_only = bool(queue_items) and all(str(item.get("lane") or "") == "已归档" for item in queue_items)
-    return {
-        "project_id": pid,
-        "task_paths": paths,
-        "items": queue_items,
-        "count": len(queue_items),
-        "lane_counts": lane_counts,
-        "has_active_item": active_item is not None,
-        "active_task_path": str((active_item or {}).get("task_path") or ""),
-        "active_order_index": int((active_item or {}).get("order_index") or 0),
-        "active_item": active_item or None,
-        "eligible_active_count": eligible_active_count,
-        "archived_only": archived_only,
-        "updated_at": str(data.get("updated_at") or ""),
-    }
 
 
 def _matches_inspection_target(target: str, status_bucket: str) -> bool:
@@ -2442,28 +2053,13 @@ def _collect_auto_inspection_candidates(
         norm = _normalize_task_path_identity(path_txt)
         if not norm:
             return None
-        # 优先精确读取：只查目标路径，避免全量扫描。
         precise = _build_project_task_item_from_path(pid, norm)
         if precise:
             return precise
+        _ensure_indexes()
         row = by_path.get(norm)
         if isinstance(row, dict) and row:
             return row
-        # 兜底1：按项目规则做 canonicalize，再次命中。
-        canon = _canonicalize_project_schedule_task_path(pid, norm)
-        if canon and canon != norm:
-            precise2 = _build_project_task_item_from_path(pid, canon)
-            if precise2:
-                alias_hit += 1
-                return precise2
-        if canon and canon != norm:
-            _ensure_indexes()
-            row2 = by_path.get(canon)
-            if isinstance(row2, dict) and row2:
-                alias_hit += 1
-                return row2
-        # 兜底2：历史短路径（含“任务规划/...”）与绝对路径不一致时，按 tail 唯一命中。
-        _ensure_indexes()
         marker = "任务规划/"
         idx = norm.find(marker)
         if idx >= 0:
@@ -2512,27 +2108,9 @@ def _collect_auto_inspection_candidates(
             }
         )
 
-    if "scheduled" in targets:
-        queue = _load_project_schedule_queue(store, pid)
-        scheduled_active_path = ""
-        for task_path in queue.get("task_paths") or []:
-            row = _resolve_row(str(task_path or ""))
-            if not row:
-                continue
-            bucket = str(row.get("status_bucket") or "").strip()
-            if bucket not in {"进行中", "待开始"}:
-                continue
-            scheduled_active_path = _normalize_task_path_identity(str(row.get("task_path") or task_path))
-            break
-        if scheduled_active_path:
-            _append_candidate(scheduled_active_path, "scheduled")
-
     if len(selected) < limit:
-        if any(target != "scheduled" for target in targets):
-            _ensure_indexes()
+        _ensure_indexes()
         for target in targets:
-            if target == "scheduled":
-                continue
             for row in all_items:
                 bucket = str(row.get("status_bucket") or "")
                 if not _matches_inspection_target(target, bucket):
@@ -3580,9 +3158,7 @@ def _attach_auto_inspection_candidate_preview(
         row.get("auto_inspection_targets"),
         default=_DEFAULT_INSPECTION_TARGETS,
     )
-    queue_state = _load_project_schedule_queue(store, pid)
-    queue_updated_at = str(queue_state.get("updated_at") or "")
-    preview_key = f"{pid}|{','.join(targets)}|{queue_updated_at}"
+    preview_key = f"{pid}|{','.join(targets)}"
     ttl_s = _auto_inspection_preview_cache_ttl_s()
     now_mono = time.monotonic()
     preview_cache = _auto_inspection_preview_cache()
@@ -4261,6 +3837,95 @@ def _compact_route_resolution_v1(route_resolution: Any) -> dict[str, Any]:
     return out
 
 
+def _sanitize_communication_view(value: Any) -> Optional[dict[str, Any]]:
+    if not isinstance(value, dict):
+        return None
+    communication_view = value
+    cv: dict[str, Any] = {}
+    message_kind = _safe_text(
+        communication_view.get("message_kind") if "message_kind" in communication_view else communication_view.get("messageKind"),
+        80,
+    ).strip().lower()
+    if message_kind:
+        cv["message_kind"] = message_kind
+    cv_event_reason = _safe_text(
+        communication_view.get("event_reason") if "event_reason" in communication_view else communication_view.get("eventReason"),
+        80,
+    ).strip().lower()
+    if cv_event_reason:
+        cv["event_reason"] = (
+            cv_event_reason
+            if cv_event_reason in {"success", "unverified", "route_mismatch"}
+            else "unverified"
+        )
+    cv_dispatch_state = _safe_text(
+        communication_view.get("dispatch_state") if "dispatch_state" in communication_view else communication_view.get("dispatchState"),
+        80,
+    ).strip().lower()
+    if cv_dispatch_state:
+        cv["dispatch_state"] = (
+            cv_dispatch_state
+            if cv_dispatch_state in {"resolved", "fallback", "route_mismatch", "pending"}
+            else "pending"
+        )
+    cv_dispatch_run_id = _safe_text(
+        communication_view.get("dispatch_run_id") if "dispatch_run_id" in communication_view else communication_view.get("dispatchRunId"),
+        120,
+    ).strip()
+    if cv_dispatch_run_id:
+        cv["dispatch_run_id"] = cv_dispatch_run_id
+    cv_route_mismatch = (
+        communication_view.get("route_mismatch")
+        if "route_mismatch" in communication_view
+        else communication_view.get("routeMismatch")
+    )
+    if isinstance(cv_route_mismatch, bool):
+        cv["route_mismatch"] = cv_route_mismatch
+    cv_source_project_id = _safe_text(
+        communication_view.get("source_project_id") if "source_project_id" in communication_view else communication_view.get("sourceProjectId"),
+        80,
+    ).strip()
+    if cv_source_project_id:
+        cv["source_project_id"] = cv_source_project_id
+    cv_source_channel = _safe_text(
+        communication_view.get("source_channel") if "source_channel" in communication_view else communication_view.get("sourceChannel"),
+        200,
+    ).strip()
+    if cv_source_channel:
+        cv["source_channel"] = cv_source_channel
+    cv_source_session_id = _safe_text(
+        communication_view.get("source_session_id") if "source_session_id" in communication_view else communication_view.get("sourceSessionId"),
+        80,
+    ).strip()
+    if cv_source_session_id:
+        cv["source_session_id"] = cv_source_session_id
+    cv_target_project_id = _safe_text(
+        communication_view.get("target_project_id") if "target_project_id" in communication_view else communication_view.get("targetProjectId"),
+        80,
+    ).strip()
+    if cv_target_project_id:
+        cv["target_project_id"] = cv_target_project_id
+    cv_target_channel = _safe_text(
+        communication_view.get("target_channel") if "target_channel" in communication_view else communication_view.get("targetChannel"),
+        200,
+    ).strip()
+    if cv_target_channel:
+        cv["target_channel"] = cv_target_channel
+    cv_target_session_id = _safe_text(
+        communication_view.get("target_session_id") if "target_session_id" in communication_view else communication_view.get("targetSessionId"),
+        80,
+    ).strip()
+    if cv_target_session_id:
+        cv["target_session_id"] = cv_target_session_id
+    cv_route_resolution = _compact_route_resolution_v1(communication_view.get("route_resolution") if "route_resolution" in communication_view else communication_view.get("routeResolution"))
+    if cv_route_resolution:
+        cv["route_resolution"] = cv_route_resolution
+    cv_version = _safe_text(communication_view.get("version"), 20).strip()
+    if cv_version:
+        cv["version"] = cv_version
+    return cv or None
+
+
 def _sanitize_receipt_summary(value: Any) -> Optional[dict[str, Any]]:
     if not isinstance(value, dict):
         return None
@@ -4662,6 +4327,16 @@ def _sanitize_run_extra_meta(extra_meta: Any) -> dict[str, Any]:
     if interaction_mode in {"dialog_now", "task_with_receipt", "notify_only"}:
         out["interaction_mode"] = interaction_mode
 
+    visible_in_channel_chat = (
+        src.get("visible_in_channel_chat")
+        if "visible_in_channel_chat" in src
+        else src.get("visibleInChannelChat")
+    )
+    if isinstance(visible_in_channel_chat, bool):
+        out["visible_in_channel_chat"] = visible_in_channel_chat
+    elif visible_in_channel_chat is not None:
+        out["visible_in_channel_chat"] = _coerce_bool(visible_in_channel_chat, False)
+
     plan_first = src.get("plan_first") if "plan_first" in src else src.get("planFirst")
     if isinstance(plan_first, bool):
         if plan_first:
@@ -4859,58 +4534,9 @@ def _sanitize_run_extra_meta(extra_meta: Any) -> dict[str, Any]:
     if display_host_run_id:
         out["display_host_run_id"] = display_host_run_id
 
-    communication_view = src.get("communication_view")
-    if isinstance(communication_view, dict):
-        cv: dict[str, Any] = {}
-        message_kind = _safe_text(communication_view.get("message_kind"), 80).strip().lower()
-        if message_kind:
-            cv["message_kind"] = message_kind
-        cv_event_reason = _safe_text(communication_view.get("event_reason"), 80).strip().lower()
-        if cv_event_reason:
-            cv["event_reason"] = (
-                cv_event_reason
-                if cv_event_reason in {"success", "unverified", "route_mismatch"}
-                else "unverified"
-            )
-        cv_dispatch_state = _safe_text(communication_view.get("dispatch_state"), 80).strip().lower()
-        if cv_dispatch_state:
-            cv["dispatch_state"] = (
-                cv_dispatch_state
-                if cv_dispatch_state in {"resolved", "fallback", "route_mismatch", "pending"}
-                else "pending"
-            )
-        cv_dispatch_run_id = _safe_text(communication_view.get("dispatch_run_id"), 120).strip()
-        if cv_dispatch_run_id:
-            cv["dispatch_run_id"] = cv_dispatch_run_id
-        cv_route_mismatch = communication_view.get("route_mismatch")
-        if isinstance(cv_route_mismatch, bool):
-            cv["route_mismatch"] = cv_route_mismatch
-        cv_source_project_id = _safe_text(communication_view.get("source_project_id"), 80).strip()
-        if cv_source_project_id:
-            cv["source_project_id"] = cv_source_project_id
-        cv_source_channel = _safe_text(communication_view.get("source_channel"), 200).strip()
-        if cv_source_channel:
-            cv["source_channel"] = cv_source_channel
-        cv_source_session_id = _safe_text(communication_view.get("source_session_id"), 80).strip()
-        if cv_source_session_id:
-            cv["source_session_id"] = cv_source_session_id
-        cv_target_project_id = _safe_text(communication_view.get("target_project_id"), 80).strip()
-        if cv_target_project_id:
-            cv["target_project_id"] = cv_target_project_id
-        cv_target_channel = _safe_text(communication_view.get("target_channel"), 200).strip()
-        if cv_target_channel:
-            cv["target_channel"] = cv_target_channel
-        cv_target_session_id = _safe_text(communication_view.get("target_session_id"), 80).strip()
-        if cv_target_session_id:
-            cv["target_session_id"] = cv_target_session_id
-        cv_route_resolution = _compact_route_resolution_v1(communication_view.get("route_resolution"))
-        if cv_route_resolution:
-            cv["route_resolution"] = cv_route_resolution
-        cv_version = _safe_text(communication_view.get("version"), 20).strip()
-        if cv_version:
-            cv["version"] = cv_version
-        if cv:
-            out["communication_view"] = cv
+    communication_view = _sanitize_communication_view(src.get("communication_view"))
+    if communication_view:
+        out["communication_view"] = communication_view
 
     receipt_summary = _sanitize_receipt_summary(src.get("receipt_summary"))
     if receipt_summary:

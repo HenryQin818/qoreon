@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>任务类型标记与主负责任务数 · Agent 列表静态确认稿 v2</title>
+  <link rel="stylesheet" href="./task-shell-preview-base.css" />
+  <link rel="stylesheet" href="./task-type-and-owner-count-preview-v2.css" />
+</head>
+<body class="task-owner-preview">
+  <div class="ambient-bg"></div>
+
+  <div class="shell">
+    <header>
+      <div class="header-main">
+        <a class="back-link" href="/share/task-type-and-owner-count-unified-scenarios-v2.html" title="返回统一入口">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" width="18" height="18">
+            <path d="M15 19l-7-7 7-7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
+          </svg>
+          <span>场景包</span>
+        </a>
+        <div class="project-info">
+          <h1 class="project-title">task_dashboard</h1>
+          <div class="project-meta-row">
+            <span class="project-desc">Agent 列表静态确认稿 · 头像下方任务数收敛版</span>
+            <span class="pill is-active">v2</span>
+          </div>
+        </div>
+      </div>
+      <div class="header-nav">
+        <div class="header-mode-tabs" role="tablist" aria-label="一级页面切换">
+          <button class="header-mode-btn active" type="button" role="tab" aria-selected="true">总览</button>
+          <button class="header-mode-btn" type="button" role="tab" aria-selected="false">消息瀑布</button>
+          <button class="header-mode-btn" type="button" role="tab" aria-selected="false">Agent</button>
+        </div>
+      </div>
+      <div class="hctrl">
+        <span class="pill">静态确认</span>
+      </div>
+    </header>
+
+    <main class="agent-list-page">
+      <section class="surface">
+        <div class="section-head">
+          <div>
+            <h2>Agent 列表</h2>
+            <div class="section-copy">任务数移到头像下方，和对话页右上角按钮共用同一套图标 + 双数字语法。</div>
+          </div>
+          <span class="meta-chip is-active">overview / agent list</span>
+        </div>
+        <div class="agent-grid" id="agentGrid"></div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const agents = [
+      {
+        name: "前端页面-规范策划",
+        channel: "子级04-前端体验",
+        session: "主会话",
+        todo: 2,
+        progress: 3,
+        note: "当前聚焦确认稿与最小回归。",
+        active: true
+      },
+      {
+        name: "产品策划-任务派发",
+        channel: "辅助04-原型设计与 Demo 可视化",
+        session: "子会话",
+        todo: 1,
+        progress: 2,
+        note: "以冻结口径与回执推进为主。"
+      },
+      {
+        name: "数据治理-消息监控",
+        channel: "子级06-数据治理与契约",
+        session: "子会话",
+        todo: 1,
+        progress: 1,
+        note: "只统计主负责任务，不把协作位带进来。"
+      },
+      {
+        name: "测试验收-Agent",
+        channel: "测试验收",
+        session: "待触达",
+        todo: 0,
+        progress: 1,
+        note: "当前只有一条进行中主负责任务。"
+      },
+      {
+        name: "总控-项目经理",
+        channel: "主体-总控（合并与验收）",
+        session: "主会话",
+        todo: 0,
+        progress: 0,
+        note: "无主负责任务时保留空态数字即可。"
+      },
+      {
+        name: "服务开发",
+        channel: "子级02-CCB 运行时",
+        session: "当前未进入该批",
+        todo: 3,
+        progress: 0,
+        note: "后续真实实施也可沿用同一套数字语法。"
+      }
+    ];
+
+    function escapeHtml(value) {
+      return String(value || "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/\"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+    }
+
+    document.getElementById("agentGrid").innerHTML = agents.map((agent) => {
+      const label = String(agent.name).trim().slice(0, 1) || "A";
+      return `
+        <article class="agent-card${agent.active ? " is-active" : ""}">
+          <div class="agent-card-top">
+            <div class="agent-card-head">
+              <span class="agent-avatar">${escapeHtml(label)}</span>
+              <div>
+                <div class="agent-name">${escapeHtml(agent.name)}</div>
+                <div class="agent-meta">${escapeHtml(agent.channel)}</div>
+              </div>
+            </div>
+            <span class="pill">${escapeHtml(agent.session)}</span>
+          </div>
+          <div class="agent-card-body">
+            <div class="agent-task-strip">
+              <span class="task-icon-badge" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none">
+                  <path d="M9 11.5l2 2 4-4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
+                  <rect x="4" y="4" width="16" height="16" rx="4" stroke="currentColor" stroke-width="2"></rect>
+                </svg>
+              </span>
+              <span class="owner-task-num is-todo">${agent.todo}</span>
+              <span class="count-divider">/</span>
+              <span class="owner-task-num is-progress">${agent.progress}</span>
+            </div>
+            <div class="agent-note">${escapeHtml(agent.note)}</div>
+          </div>
+        </article>
+      `;
+    }).join("");
+  </script>
+</body>
+</html>

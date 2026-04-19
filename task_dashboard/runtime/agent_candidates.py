@@ -5,6 +5,9 @@ from __future__ import annotations
 from typing import Any, Callable
 from urllib.parse import parse_qs
 
+from task_dashboard.runtime.agent_display_name import apply_agent_display_fields, build_agent_identity_audit
+from task_dashboard.runtime.session_views import apply_session_heartbeat_summary_rows
+
 
 _ACTIVE_STATE_PRIORITY = {
     "running": 5,
@@ -63,6 +66,9 @@ def build_agent_candidates_payload(
     apply_session_context_rows: Callable[..., list[dict[str, Any]]],
     apply_session_work_context: Callable[..., dict[str, Any]],
     attach_runtime_state_to_sessions: Callable[[Any, list[dict[str, Any]]], list[dict[str, Any]]],
+    heartbeat_runtime: Any,
+    load_session_heartbeat_config: Callable[[dict[str, Any]], dict[str, Any]],
+    heartbeat_summary_payload: Callable[[Any], Any],
 ) -> dict[str, Any]:
     sessions = session_store.list_sessions(project_id, include_deleted=False)
     sessions = apply_effective_primary_flags(session_store, project_id, sessions)
@@ -74,7 +80,15 @@ def build_agent_candidates_payload(
         worktree_root=worktree_root,
         apply_session_work_context=apply_session_work_context,
     )
+    sessions = apply_session_heartbeat_summary_rows(
+        sessions,
+        project_id=project_id,
+        heartbeat_runtime=heartbeat_runtime,
+        load_session_heartbeat_config=load_session_heartbeat_config,
+        heartbeat_summary_payload=heartbeat_summary_payload,
+    )
     sessions = attach_runtime_state_to_sessions(store, sessions, project_id=project_id)
+    sessions = apply_agent_display_fields(sessions)
 
     by_channel: dict[str, list[dict[str, Any]]] = {}
     for raw in sessions:
@@ -102,6 +116,7 @@ def build_agent_candidates_payload(
         "source": "session_store_recommended",
         "selection_policy": "per_channel_recommended_session",
         "raw_session_count": len(sessions),
+        "agent_identity_audit": build_agent_identity_audit(sessions, project_id=project_id),
         "agent_targets": agent_targets,
         "count": len(agent_targets),
     }
@@ -119,6 +134,9 @@ def list_agent_candidates_response(
     apply_session_context_rows: Callable[..., list[dict[str, Any]]],
     apply_session_work_context: Callable[..., dict[str, Any]],
     attach_runtime_state_to_sessions: Callable[[Any, list[dict[str, Any]]], list[dict[str, Any]]],
+    heartbeat_runtime: Any,
+    load_session_heartbeat_config: Callable[[dict[str, Any]], dict[str, Any]],
+    heartbeat_summary_payload: Callable[[Any], Any],
 ) -> tuple[int, dict[str, Any]]:
     qs = parse_qs(query_string or "")
     project_id = _safe_text((qs.get("project_id") or qs.get("projectId") or [""])[0])
@@ -136,5 +154,8 @@ def list_agent_candidates_response(
         apply_session_context_rows=apply_session_context_rows,
         apply_session_work_context=apply_session_work_context,
         attach_runtime_state_to_sessions=attach_runtime_state_to_sessions,
+        heartbeat_runtime=heartbeat_runtime,
+        load_session_heartbeat_config=load_session_heartbeat_config,
+        heartbeat_summary_payload=heartbeat_summary_payload,
     )
     return 200, payload

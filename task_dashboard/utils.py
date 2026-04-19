@@ -20,15 +20,15 @@ def repo_root_from_here(anchor_file: str) -> Path:
     for parent in [p.parent] + list(p.parents):
         if (parent / ".git").exists():
             return parent
-    for parent in [p.parent] + list(p.parents):
-        if (parent / "task_dashboard").exists() and (parent / "web").exists():
-            return parent
-    return p.parents[1]
+    return p.parents[3]
 
 
 def safe_read_text(p: Path, max_bytes: int = 256_000) -> str:
-    with p.open("rb") as f:
-        raw = f.read(max_bytes + 1)
+    try:
+        with p.open("rb") as f:
+            raw = f.read(max_bytes + 1)
+    except OSError:
+        return ""
     raw = raw[:max_bytes]
     try:
         return raw.decode("utf-8")

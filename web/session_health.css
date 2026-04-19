@@ -602,6 +602,24 @@ body {
   line-height: 1.5;
 }
 
+.task-handoff-block {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed rgba(100, 69, 31, 0.14);
+}
+
+.task-handoff-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.task-handoff-title {
+  font-size: 12px;
+  color: var(--muted);
+}
+
 .metric-cell,
 .recent-cell,
 .action-cell {
@@ -657,6 +675,57 @@ body {
 .pace-title {
   font-weight: 700;
   line-height: 1.45;
+}
+
+.pace-history-wrap {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed rgba(100, 69, 31, 0.14);
+}
+
+.pace-history-label {
+  font-size: 12px;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+}
+
+.pace-history {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.pace-history-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 10px;
+  background: rgba(113, 102, 88, 0.06);
+}
+
+.pace-history-time,
+.pace-history-change {
+  font-variant-numeric: tabular-nums;
+}
+
+.pace-history-time {
+  min-width: 86px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.pace-history-change {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.pace-history-empty {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--muted);
 }
 
 .copy-btn {

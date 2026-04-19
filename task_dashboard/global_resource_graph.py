@@ -7,6 +7,7 @@ from typing import Any
 
 from .domain import normalize_task_status
 from .parser_md import iter_items
+from .runtime.agent_display_name import attach_agent_display_fields
 from .session_store import session_binding_sort_key
 from .utils import iso_now_local
 
@@ -288,6 +289,13 @@ def _layout_xy(*, level: int, idx: int) -> tuple[int, int]:
     return x, y
 
 
+def _agent_snapshot_label(name_state: Any) -> str:
+    state = _as_str(name_state).strip().lower()
+    if state == "polluted":
+        return "名称异常"
+    return "身份未解析"
+
+
 def _build_org_snapshot(
     *,
     nodes: dict[str, dict[str, Any]],
@@ -361,6 +369,7 @@ def _build_org_snapshot(
 
     layout_edges: list[dict[str, Any]] = []
     edge_seen: set[str] = set()
+    parent_by_node_id: dict[str, str] = {}
     for row in edges:
         edge_type = _as_str(row.get("type")).strip()
         if edge_type not in included_edge_types:
@@ -373,6 +382,7 @@ def _build_org_snapshot(
         if edge_id in edge_seen:
             continue
         edge_seen.add(edge_id)
+        parent_by_node_id.setdefault(target_node_id, source_node_id)
         layout_edges.append(
             {
                 "edge_id": edge_id,
@@ -387,6 +397,10 @@ def _build_org_snapshot(
 
     snapshot_scope = project_id_filter or ("all" if len(project_ids) != 1 else next(iter(project_ids)))
     snapshot_id = f"org_snapshot:{snapshot_scope}:{generated_at}"
+    for layout_node in layout_nodes:
+        node_id = _as_str(layout_node.get("node_id")).strip()
+        if node_id:
+            layout_node["parent_node_id"] = parent_by_node_id.get(node_id, "")
     return {
         "snapshot_id": snapshot_id,
         "project_id": project_id_filter,
@@ -427,6 +441,7 @@ def _make_channel_meta_map(
             "cli_type": _as_str(ch.get("cli_type")).strip() or "codex",
             "session_id": _as_str(ch.get("session_id")).strip(),
             "alias": _as_str(ch.get("alias")).strip(),
+            "agent_name": _as_str(ch.get("agent_name") if "agent_name" in ch else ch.get("agentName")).strip(),
             "session_source": "config" if _as_str(ch.get("session_id")).strip() else "none",
         }
 
@@ -443,11 +458,25 @@ def _make_channel_meta_map(
             name = _as_str(row.get("channel_name")).strip()
             if not name:
                 continue
-            base = out.get(name, {"name": name, "desc": "", "cli_type": "codex", "session_id": "", "alias": ""})
+            base = out.get(
+                name,
+                {
+                    "name": name,
+                    "desc": "",
+                    "cli_type": "codex",
+                    "session_id": "",
+                    "alias": "",
+                    "agent_name": "",
+                },
+            )
             sid = _as_str(row.get("id")).strip()
             if sid:
                 base["session_id"] = sid
                 base["alias"] = _as_str(row.get("alias")).strip() or _as_str(base.get("alias")).strip()
+                base["agent_name"] = (
+                    _as_str(row.get("agent_name") if "agent_name" in row else row.get("agentName")).strip()
+                    or _as_str(base.get("agent_name")).strip()
+                )
                 base["cli_type"] = _as_str(row.get("cli_type")).strip() or _as_str(base.get("cli_type")).strip() or "codex"
                 base["session_source"] = "session_store"
             out[name] = base
@@ -538,7 +567,18 @@ def build_global_resource_graph(
     def ensure_channel(project: str, channel: str, ch_meta: dict[str, dict[str, Any]]) -> tuple[str, dict[str, Any]]:
         cname = _as_str(channel).strip() or "未归类"
         channel_id = f"channel:{project}:{cname}"
-        meta = ch_meta.get(cname, {"name": cname, "desc": "", "cli_type": "codex", "session_id": "", "alias": "", "session_source": "none"})
+        meta = ch_meta.get(
+            cname,
+            {
+                "name": cname,
+                "desc": "",
+                "cli_type": "codex",
+                "session_id": "",
+                "alias": "",
+                "agent_name": "",
+                "session_source": "none",
+            },
+        )
         add_node(
             channel_id,
             "channel",
@@ -600,13 +640,14 @@ def build_global_resource_graph(
                 add_node(
                     agent_id,
                     "agent",
-                    ch_name or session_alias or session_id,
+                    session_alias or _as_str(channel_meta.get(ch_name, {}).get("agent_name")).strip() or session_id,
                     project_id=pid,
                     channel_name=ch_name,
                     channel_display_name=ch_name,
-                    display_name=ch_name or session_alias or session_id,
                     session_id=session_id,
+                    alias=session_alias,
                     session_alias=session_alias,
+                    agent_name=_as_str(channel_meta.get(ch_name, {}).get("agent_name")).strip(),
                     cli_type=_as_str(channel_meta.get(ch_name, {}).get("cli_type")).strip() or "codex",
                     source=session_source,
                 )
@@ -661,6 +702,13 @@ def build_global_resource_graph(
                 updated_at=_as_str(it.updated_at).strip(),
                 owner=_as_str(it.owner).strip(),
                 due=_as_str(it.due).strip(),
+                main_owner=it.main_owner,
+                collaborators=it.collaborators,
+                validators=it.validators,
+                challengers=it.challengers,
+                backup_owners=it.backup_owners,
+                management_slot=it.management_slot,
+                custom_roles=it.custom_roles,
                 **(_build_task_support_snapshot(it.path, assist_index) if node_type == "task" else {}),
             )
             add_edge(ch_id, node_id, "channel_item")
@@ -794,13 +842,14 @@ def build_global_resource_graph(
                 add_node(
                     agent_id,
                     "agent",
-                    cname or session_alias or sid,
+                    session_alias or _as_str(channel_meta.get(cname, {}).get("agent_name")).strip() or sid,
                     project_id=pid,
                     channel_name=cname,
                     channel_display_name=cname,
-                    display_name=cname or session_alias or sid,
                     session_id=sid,
+                    alias=session_alias,
                     session_alias=session_alias,
+                    agent_name=_as_str(channel_meta.get(cname, {}).get("agent_name")).strip(),
                     cli_type=_as_str(run.get("cliType")).strip() or "codex",
                     source="run_meta",
                 )
@@ -858,13 +907,14 @@ def build_global_resource_graph(
                     add_node(
                         target_agent_id,
                         "agent",
-                        target_alias or target_channel or target_sid,
+                        target_alias or _as_str(channel_meta.get(target_channel, {}).get("agent_name")).strip() or target_sid,
                         project_id=pid,
                         channel_name=target_channel,
                         channel_display_name=target_channel,
-                        display_name=target_alias or target_channel or target_sid,
                         session_id=target_sid,
+                        alias=target_alias,
                         session_alias=target_alias,
+                        agent_name=_as_str(channel_meta.get(target_channel, {}).get("agent_name")).strip(),
                         cli_type="codex",
                         source="callback_to",
                     )
@@ -1024,12 +1074,34 @@ def build_global_resource_graph(
         cur["current_run_status"] = _as_str(ctx.get("run_status")).strip()
         cur["current_run_at"] = _as_str(ctx.get("run_at")).strip()
 
+    parent_by_node_id: dict[str, str] = {}
+    for edge in edges:
+        edge_type = _as_str(edge.get("type")).strip()
+        if edge_type not in {"project_channel", "channel_agent"}:
+            continue
+        source_id = _as_str(edge.get("source")).strip()
+        target_id = _as_str(edge.get("target")).strip()
+        if source_id and target_id:
+            parent_by_node_id.setdefault(target_id, source_id)
+    for node_id, row in nodes.items():
+        row["parent_node_id"] = parent_by_node_id.get(node_id, "")
+
     for row in nodes.values():
         if _as_str(row.get("type")).strip() != "agent":
             continue
+        resolved = attach_agent_display_fields(row)
+        row.update(
+            {
+                "agent_display_name": _as_str(resolved.get("agent_display_name")).strip(),
+                "agent_display_name_source": _as_str(resolved.get("agent_display_name_source")).strip(),
+                "agent_name_state": _as_str(resolved.get("agent_name_state")).strip(),
+                "agent_display_issue": _as_str(resolved.get("agent_display_issue")).strip(),
+            }
+        )
         channel_name = _as_str(row.get("channel_name")).strip()
-        session_alias = _as_str(row.get("session_alias")).strip()
-        display_name = channel_name or session_alias or _as_str(row.get("label")).strip() or _as_str(row.get("session_id")).strip()
+        display_name = _as_str(row.get("agent_display_name")).strip()
+        if not display_name:
+            display_name = _agent_snapshot_label(row.get("agent_name_state"))
         if display_name:
             row["display_name"] = display_name
             row["label"] = display_name

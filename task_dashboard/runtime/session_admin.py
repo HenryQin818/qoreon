@@ -122,7 +122,6 @@ def create_session_response(
     session_role = str(payload.get("session_role") or "").strip()
     purpose = str(payload.get("purpose") or "").strip()
     reuse_strategy = _normalize_reuse_strategy(payload.get("reuse_strategy"))
-    create_timeout_s = int(payload.get("create_timeout_s") or 0)
     set_as_primary = payload.get("set_as_primary")
     first_message = str(payload.get("first_message") or "")
     if not project_id or not channel_name:
@@ -294,21 +293,14 @@ def create_session_response(
     )
     create_result = create_cli_session(
         seed_prompt=seed,
-        timeout_s=create_timeout_s or 90,
+        timeout_s=90,
         cli_type=cli_type,
         workdir=project_workdir,
         model=model,
         reasoning_effort=reasoning_effort,
         execution_profile=execution_profile,
     )
-    recovered_from_timeout = False
-    if (
-        not create_result.get("ok")
-        and str(create_result.get("error") or "").strip().lower() == "timeout"
-        and _looks_like_uuid_local(create_result.get("sessionId"))
-    ):
-        recovered_from_timeout = True
-    if not create_result.get("ok") and not recovered_from_timeout:
+    if not create_result.get("ok"):
         err = RuntimeError("create session failed")
         setattr(err, "detail", create_result)
         raise err
@@ -328,7 +320,7 @@ def create_session_response(
         purpose=purpose,
         reuse_strategy=reuse_strategy,
         schema_version="session.create.v2",
-        created_via="api.create_session_v2.timeout_recovered" if recovered_from_timeout else "api.create_session_v2",
+        created_via="api.create_session_v2",
         context_binding_state=effective_binding_state,
         project_execution_context=context_meta,
         is_primary=effective_primary if isinstance(effective_primary, bool) else None,
@@ -346,7 +338,6 @@ def create_session_response(
         "workdir": create_result.get("workdir", str(project_workdir)),
         "created": True,
         "reused": False,
-        "timeoutRecovered": recovered_from_timeout,
     }
 
 
@@ -358,8 +349,15 @@ def save_binding_response(
     channel_name: str,
     cli_type: str,
 ) -> dict[str, Any]:
+    compat_meta = {
+        "compatibility_entry": True,
+        "entry_role": "compatibility_management",
+        "writable": True,
+        "primary_truth_hint": "/api/sessions + /api/agent-candidates",
+    }
     return {
-        "binding": session_binding_store.save_binding(session_id, project_id, channel_name, cli_type)
+        "binding": session_binding_store.save_binding(session_id, project_id, channel_name, cli_type),
+        **compat_meta,
     }
 
 
@@ -368,7 +366,13 @@ def delete_binding_response(
     session_binding_store: Any,
     session_id: str,
 ) -> dict[str, Any]:
-    return {"deleted": session_binding_store.delete_binding(session_id)}
+    return {
+        "deleted": session_binding_store.delete_binding(session_id),
+        "compatibility_entry": True,
+        "entry_role": "compatibility_management",
+        "writable": True,
+        "primary_truth_hint": "/api/sessions + /api/agent-candidates",
+    }
 
 
 def manage_channel_sessions_response(
@@ -503,8 +507,19 @@ def delete_session_response(
     *,
     session_store: Any,
     session_id: str,
+    session_binding_store: Any | None = None,
 ) -> dict[str, Any]:
     deleted = session_store.delete_session(session_id)
     if not deleted:
         raise LookupError("session not found")
-    return {"deleted": True}
+    binding_deleted = False
+    if session_binding_store is not None:
+        try:
+            binding_deleted = bool(session_binding_store.delete_binding(session_id))
+        except Exception:
+            binding_deleted = False
+    return {
+        "deleted": True,
+        "soft_deleted": True,
+        "binding_deleted": binding_deleted,
+    }

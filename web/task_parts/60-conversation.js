@@ -1,4 +1,118 @@
 // 第六刀：会话详情壳层与会话 API/缓存桥接
+    function conversationSyntheticRunStatusFromOutcomeState(raw) {
+      const outcome = String(raw || "").trim().toLowerCase();
+      if (!outcome || outcome === "success" || outcome === "done" || outcome === "recovered_notice") return "done";
+      if (
+        outcome === "interrupted_infra"
+        || outcome === "interrupted_user"
+        || outcome === "failed_config"
+        || outcome === "failed_business"
+      ) {
+        return "error";
+      }
+      return "done";
+    }
+
+    function conversationSyntheticRunStatusFromAction(actionKind, rawStatus = "") {
+      const status = String(rawStatus || "").trim().toLowerCase();
+      if (status === "done" || status === "success") return "done";
+      if (status === "error" || status === "failed" || status === "blocked") return "error";
+      const action = String(actionKind || "").trim().toLowerCase();
+      if (action === "block") return "error";
+      if (action === "update" || action === "done") return "done";
+      return "done";
+    }
+
+    function buildConversationSyntheticTimelineRunsFromSessionDetail(session, ctx = {}) {
+      const s = (session && typeof session === "object") ? session : {};
+      const tracking = (s.task_tracking && typeof s.task_tracking === "object") ? s.task_tracking : {};
+      const actions = Array.isArray(tracking.recent_task_actions) ? tracking.recent_task_actions : [];
+      const rows = [];
+      const seen = new Set();
+      const blockedSourceRunIds = [];
+      actions.forEach((item) => {
+        const action = (item && typeof item === "object") ? item : {};
+        const runId = String(action.source_run_id || "").trim();
+        if (!runId || seen.has(runId)) return;
+        const status = conversationSyntheticRunStatusFromAction(action.action_kind, action.status);
+        const row = {
+          id: runId,
+          status,
+          display_state: status,
+          createdAt: String(action.at || "").trim(),
+          updatedAt: String(action.at || "").trim(),
+          lastPreview: String(action.action_text || "").trim(),
+          preview: String(action.action_text || "").trim(),
+          channelName: String(action.source_channel || ctx.channelName || s.channel_name || "").trim(),
+          cliType: String(ctx.cliType || s.cli_type || "codex").trim() || "codex",
+          sourceAgentName: String(action.source_agent_name || "").trim(),
+        };
+        if (status === "error") blockedSourceRunIds.push(runId);
+        if (String(action.source_agent_name || "").trim() === "系统") {
+          row.trigger_type = "restart_recovery_summary";
+          row.restartRecoverySourceRunIds = blockedSourceRunIds.filter((one) => one && one !== runId);
+        }
+        rows.push(row);
+        seen.add(runId);
+      });
+      return rows;
+    }
+
+    function resolvePreferredConversationSelection(allSessions, visibleSessions, explicitSessionId, explicitSelected, rememberedSessionId, channelName) {
+      const explicitSid = String(explicitSessionId || "").trim();
+      if (explicitSelected && explicitSid) {
+        return {
+          sessionId: explicitSid,
+          explicit: true,
+          rememberSelection: false,
+          channelName: String(channelName || "").trim(),
+        };
+      }
+      const rememberedSid = String(rememberedSessionId || "").trim();
+      const all = Array.isArray(allSessions) ? allSessions : [];
+      const visible = Array.isArray(visibleSessions) ? visibleSessions : [];
+      if (rememberedSid && all.some((item) => String((item && item.sessionId) || "").trim() === rememberedSid)) {
+        return {
+          sessionId: rememberedSid,
+          explicit: false,
+          rememberSelection: true,
+          channelName: String(channelName || "").trim(),
+        };
+      }
+      const fallbackPool = visible.length ? visible : all;
+      const defaultSid = typeof pickDefaultConversationSessionId === "function"
+        ? String(pickDefaultConversationSessionId(fallbackPool) || "").trim()
+        : String((((fallbackPool || [])[0] || {}).sessionId) || "").trim();
+      return {
+        sessionId: defaultSid,
+        explicit: false,
+        rememberSelection: !!defaultSid,
+        channelName: String(channelName || "").trim(),
+      };
+    }
+
+    function buildExplicitConversationSessionStub(projectId, channelName, sessionId) {
+      const sid = String(sessionId || "").trim();
+      const channel = String(channelName || "").trim();
+      const shortId = sid.replace(/[^0-9a-z]/ig, "").slice(0, 8).toLowerCase() || sid.slice(0, 8);
+      const displayName = channel || (shortId ? ("会话 " + shortId) : "显式会话");
+      return {
+        id: sid,
+        sessionId: sid,
+        session_id: sid,
+        project_id: String(projectId || "").trim(),
+        channel_name: channel,
+        channelName: channel,
+        displayName,
+        display_name: displayName,
+        displayNameSource: channel ? "channel_name" : "explicit_sid_fallback",
+        display_name_source: channel ? "channel_name" : "explicit_sid_fallback",
+        agent_name_state: "identity_pending",
+        agent_display_issue: "pending_resolution",
+        alias: "",
+      };
+    }
+
     function renderConversationQuickTips(ctx, runs) {
       const box = document.getElementById("convQuickTips");
       if (!box) return;
@@ -226,51 +340,6 @@
           runtime_state_shadow: true,
         } : null,
       };
-    }
-
-    function normalizeConversationOptimisticText(value) {
-      return String(value || "").replace(/\s+/g, " ").trim();
-    }
-
-    function conversationOptimisticTextLikelySame(leftValue, rightValue) {
-      const left = normalizeConversationOptimisticText(leftValue);
-      const right = normalizeConversationOptimisticText(rightValue);
-      if (!left || !right) return false;
-      return left === right || left.startsWith(right) || right.startsWith(left);
-    }
-
-    function isConversationRunMaterializedForOptimistic(run, optimisticMessage) {
-      const runRow = (run && typeof run === "object") ? run : null;
-      const optimistic = (optimisticMessage && typeof optimisticMessage === "object") ? optimisticMessage : null;
-      if (!runRow || !optimistic) return false;
-
-      const runId = String((runRow && runRow.id) || "").trim();
-      const optimisticRunId = String((optimistic && optimistic.runId) || "").trim();
-      if (runId && optimisticRunId && runId === optimisticRunId) return true;
-
-      const optimisticText = String((optimistic && optimistic.message) || "").trim();
-      const previewText = String((runRow && runRow.messagePreview) || "").trim();
-      if (!conversationOptimisticTextLikelySame(previewText, optimisticText)) return false;
-
-      const optimisticCreatedAtNum = toTimeNum((optimistic && optimistic.createdAt) || "");
-      const runCreatedAtNum = toTimeNum((runRow && runRow.createdAt) || "");
-      if (optimisticCreatedAtNum < 0 || runCreatedAtNum < 0) return false;
-      const deltaMs = runCreatedAtNum - optimisticCreatedAtNum;
-      return deltaMs >= -3_000 && deltaMs <= 120_000;
-    }
-
-    function shouldSuppressConversationQueuedShadow(queuedShadowRun, optimisticMessage) {
-      const shadowRun = (queuedShadowRun && typeof queuedShadowRun === "object") ? queuedShadowRun : null;
-      const optimistic = (optimisticMessage && typeof optimisticMessage === "object") ? optimisticMessage : null;
-      if (!shadowRun || !optimistic) return false;
-
-      const shadowRunId = String((shadowRun && shadowRun.id) || "").trim();
-      const optimisticRunId = String((optimistic && optimistic.runId) || "").trim();
-      if (shadowRunId && optimisticRunId && shadowRunId === optimisticRunId) return true;
-
-      const shadowText = String((shadowRun && shadowRun.messagePreview) || "").trim();
-      const optimisticText = String((optimistic && optimistic.message) || "").trim();
-      return conversationOptimisticTextLikelySame(shadowText, optimisticText);
     }
 
     function captureDebugLogScrollPositions(container) {
@@ -567,7 +636,12 @@
           || info.messageKind === "system_callback"
           || info.messageKind === "system_callback_summary"
           || info.messageKind === "restart_recovery_summary";
-        if (info.senderType === "system" || callbackLike || isRunWorking(candidateStatus)) continue;
+        const workingCandidate = isRunWorking(candidateStatus);
+        const isRelatedWorkingCandidate = workingCandidate && (
+          (sourceRunId && candidateRunId === sourceRunId)
+          || relatedRunIds.has(candidateRunId)
+        );
+        if (info.senderType === "system" || callbackLike || (workingCandidate && !isRelatedWorkingCandidate)) continue;
         let score = 0;
         if (idx < callbackIndex) score += 40;
         else score += 10;
@@ -575,6 +649,7 @@
         if (relatedRunIds.has(candidateRunId)) score += 160;
         if (sourceChannel && info.sourceChannel && info.sourceChannel === sourceChannel) score += 120;
         if (sourceRunId && candidateRunId === sourceRunId) score += 200;
+        if (workingCandidate) score += 180;
         if (info.messageKind === "collab_update" || info.messageKind === "manual_update") score += 20;
         if (info.senderType === "agent") score += 12;
         if (currentSessionId && info.targetSessionId && info.targetSessionId === currentSessionId) score += 8;
@@ -786,7 +861,13 @@
     }
 
     function conversationTaskStatusTone(statusText) {
-      return taskDisplayStatusMeta(statusText, "待办").tone;
+      const text = String(statusText || "").trim();
+      if (!text) return "muted";
+      if (/(完成|已完成|done)/i.test(text)) return "good";
+      if (/(异常|阻塞|失败|error)/i.test(text)) return "bad";
+      if (/(暂停|中断)/i.test(text)) return "warn";
+      if (/(进行|待办|处理中|排队|跟进)/i.test(text)) return "warn";
+      return "muted";
     }
 
     function conversationTaskActionLabel(kind) {
@@ -837,10 +918,10 @@
       return raw ? shortTitle(raw) : "未命名任务";
     }
 
-    function buildConversationTaskOwnerNode(rawOwner, label = "负责Agent") {
+    function buildConversationTaskOwnerNode(rawOwner, label = "下一责任人") {
       const info = conversationTaskOwnerDisplayMeta(rawOwner);
       const box = el("div", { class: "convtaskowner" });
-      box.appendChild(el("div", { class: "convtaskowner-label", text: String(label || "").trim() || "负责Agent" }));
+      box.appendChild(el("div", { class: "convtaskowner-label", text: String(label || "").trim() || "下一责任人" }));
       box.appendChild(el("div", { class: "convtaskowner-name", text: info.text }));
       if (info.meta) box.appendChild(el("div", { class: "convtaskowner-meta", text: info.meta }));
       return box;
@@ -1028,7 +1109,7 @@
         if (owner.text) {
           out.push({
             roleKey: "next_owner",
-            roleLabel: "负责Agent",
+            roleLabel: "下一责任人",
             text: owner.text,
             meta: owner.meta,
             emphasis: "primary",
@@ -1062,10 +1143,45 @@
     }
 
     function buildConversationTaskCoreAgentCluster(raw, opts = {}) {
-      return buildTaskRoleGroups(raw, {
-        className: "convtask-role-groups" + (opts.compact ? " is-compact" : ""),
-        avatarClassName: opts.compact ? "is-compact" : "",
-      });
+      const entries = conversationTaskCoreAgentEntries(raw);
+      if (!entries.length) return null;
+      const model = conversationTaskResponsibilityModel(raw);
+      const secondaryLimit = Math.max(0, Number(opts.secondaryLimit || 3) || 3);
+      const cluster = el("div", { class: "convtaskagents" + (opts.compact ? " is-compact" : "") });
+      const primary = entries[0];
+      const primaryNode = el("div", { class: "convtaskagents-primary" });
+      primaryNode.appendChild(el("div", {
+        class: "convtaskagents-primary-label",
+        text: String(primary.roleLabel || "").trim() || "主负责位",
+      }));
+      primaryNode.appendChild(el("div", {
+        class: "convtaskagents-primary-name",
+        text: String(primary.text || "").trim() || "待补充",
+      }));
+      if (primary.meta) {
+        primaryNode.appendChild(el("div", {
+          class: "convtaskagents-primary-meta",
+          text: String(primary.meta || "").trim(),
+        }));
+      }
+      cluster.appendChild(primaryNode);
+
+      const secondaryEntries = entries.slice(1);
+      if (secondaryEntries.length) {
+        const chips = el("div", { class: "convtaskagents-secondary" });
+        secondaryEntries.slice(0, secondaryLimit).forEach((entry) => chips.appendChild(buildConversationTaskAgentChip(entry)));
+        if (secondaryEntries.length > secondaryLimit) {
+          chips.appendChild(el("div", {
+            class: "convtaskagentchip is-overflow",
+            text: "+" + (secondaryEntries.length - secondaryLimit),
+          }));
+        }
+        cluster.appendChild(chips);
+      }
+
+      const managementHint = buildConversationTaskManagementHint(model);
+      if (managementHint) cluster.appendChild(managementHint);
+      return cluster;
     }
 
     function conversationTaskProgressText(raw) {
@@ -1247,14 +1363,12 @@
       const base = (PCONV.taskDetailViewer && typeof PCONV.taskDetailViewer === "object") ? PCONV.taskDetailViewer : {};
       const state = {
         open: !!base.open,
-        sourceMode: String(base.sourceMode || "drawer").trim() === "standalone" ? "standalone" : "drawer",
         sessionKey: String(base.sessionKey || "").trim(),
         taskId: normalizeConversationTaskStableId(base.taskId || ""),
         taskPath: String(base.taskPath || "").trim(),
         groupTitle: String(base.groupTitle || "").trim(),
         showActionContext: !!base.showActionContext,
         fallbackRef: cloneConversationTaskDetailFallback(base.fallbackRef),
-        payload: cloneConversationTaskDetailPayload(base.payload),
       };
       PCONV.taskDetailViewer = state;
       return state;
@@ -1307,27 +1421,7 @@
       const viewer = ensureConversationTaskDetailViewerState();
       const key = String(taskPath || "").trim();
       if (!viewer.open || !key || viewer.taskPath !== key) return;
-      renderConversationTaskDetailViewer(currentConversationTaskDetailViewerPayload(viewer));
-    }
-
-    function cloneConversationTaskDetailPayload(payload = null) {
-      const src = (payload && typeof payload === "object") ? payload : null;
-      if (!src) return null;
-      const tracking = (src.taskTracking && typeof src.taskTracking === "object") ? src.taskTracking : null;
-      return {
-        taskTracking: tracking ? {
-          ...tracking,
-          current_task_ref: cloneConversationTaskDetailFallback(tracking.current_task_ref),
-          conversation_task_refs: Array.isArray(tracking.conversation_task_refs)
-            ? tracking.conversation_task_refs.map((row) => cloneConversationTaskDetailFallback(row)).filter(Boolean)
-            : [],
-          recent_task_actions: Array.isArray(tracking.recent_task_actions)
-            ? tracking.recent_task_actions.map((row) => ((row && typeof row === "object") ? { ...row } : null)).filter(Boolean)
-            : [],
-        } : null,
-        loading: !!src.loading,
-        error: String(src.error || "").trim(),
-      };
+      renderConversationTaskDetailViewer(currentConversationTaskPayload());
     }
 
     function requestConversationTaskFilePreview(taskPath, opts = {}) {
@@ -1382,13 +1476,11 @@
       const viewer = ensureConversationTaskDetailViewerState();
       const clearSession = opts.clearSession !== false;
       viewer.open = false;
-      viewer.sourceMode = "drawer";
       viewer.taskId = "";
       viewer.taskPath = "";
       viewer.groupTitle = "";
       viewer.showActionContext = false;
       viewer.fallbackRef = null;
-      viewer.payload = null;
       if (clearSession) viewer.sessionKey = "";
       return viewer;
     }
@@ -1543,14 +1635,6 @@
         matchedRef && matchedRef.task_summary_text,
         fallback && fallback.task_summary_text,
       ]) || "").trim();
-      const createdAt = String(firstNonEmptyText([
-        matchedRef && matchedRef.created_at,
-        fallback && fallback.created_at,
-      ]) || "").trim();
-      const dueAt = String(firstNonEmptyText([
-        matchedRef && matchedRef.due,
-        fallback && fallback.due,
-      ]) || "").trim();
       const taskSummaryPlaceholder = "任务一句话说明待接入正式真源。";
       const whyParts = [];
       if (groupTitle) whyParts.push("当前在“" + groupTitle + "”中展示。");
@@ -1570,8 +1654,6 @@
         latestActionSource,
         taskSummaryText,
         taskSummaryPlaceholder,
-        createdAt,
-        dueAt,
         sourceText,
         whyAppearsText: whyParts.join(" "),
         firstSeenAt: String(matchedRef && matchedRef.first_seen_at || "").trim(),
@@ -1684,14 +1766,13 @@
       const viewer = ensureConversationTaskDetailViewerState();
       if (!viewer.open) return;
       viewer.showActionContext = !viewer.showActionContext;
-      renderConversationTaskDetailViewer(currentConversationTaskDetailViewerPayload(viewer));
+      renderConversationTaskDetailViewer(currentConversationTaskPayload());
     }
 
     function openConversationTaskDetailViewer(row, opts = {}) {
       const viewer = ensureConversationTaskDetailViewerState();
       const item = (row && typeof row === "object") ? row : null;
       viewer.open = true;
-      viewer.sourceMode = "drawer";
       viewer.sessionKey = String(firstNonEmptyText([
         opts.sessionKey,
         PCONV.taskDrawerSessionKey,
@@ -1702,26 +1783,7 @@
       viewer.groupTitle = conversationTaskGroupLabel(opts.groupTitle || "", item && item.relation);
       viewer.showActionContext = false;
       viewer.fallbackRef = cloneConversationTaskDetailFallback(item);
-      viewer.payload = null;
       renderConversationTaskDetailViewer(currentConversationTaskPayload());
-    }
-
-    function openConversationTaskDetailViewerStandalone(row, payload = null, opts = {}) {
-      const viewer = ensureConversationTaskDetailViewerState();
-      const item = (row && typeof row === "object") ? row : null;
-      viewer.open = true;
-      viewer.sourceMode = "standalone";
-      viewer.sessionKey = String(firstNonEmptyText([
-        opts.sessionKey,
-        "task-standalone-viewer",
-      ]) || "").trim();
-      viewer.taskId = conversationTaskStableId(item);
-      viewer.taskPath = String(item && item.task_path || "").trim();
-      viewer.groupTitle = conversationTaskGroupLabel(opts.groupTitle || "", item && item.relation);
-      viewer.showActionContext = false;
-      viewer.fallbackRef = cloneConversationTaskDetailFallback(item);
-      viewer.payload = cloneConversationTaskDetailPayload(payload);
-      renderConversationTaskDetailViewer(viewer.payload);
     }
 
     function bindConversationTaskCardOpenDetail(node, row, opts = {}) {
@@ -1740,27 +1802,44 @@
     function buildConversationTaskRefCard(row, opts = {}) {
       const item = (row && typeof row === "object") ? row : {};
       const compact = !!opts.compact;
-      const statusMeta = taskDisplayStatusMeta(item.task_primary_status || item, "待办");
-      const card = el("div", { class: "convtaskcard status-" + statusMeta.key + (compact ? " compact" : "") });
+      const card = el("div", { class: "convtaskcard" + (compact ? " compact" : "") });
       const titleRow = el("div", { class: "convtaskcard-title-row" });
-      titleRow.appendChild(buildTaskTypeBadge(item));
       titleRow.appendChild(el("div", {
         class: "convtaskcard-title",
         text: conversationTaskTitleText(item),
         title: String(item.task_title || item.task_path || "").trim(),
       }));
-      titleRow.appendChild(buildTaskStatusChip(item.task_primary_status || item, "待办"));
+      if (item.task_primary_status) {
+        titleRow.appendChild(chip(String(item.task_primary_status || ""), conversationTaskStatusTone(item.task_primary_status)));
+      }
+      const relationLabel = String(item.relation_label || conversationTaskRelationLabel(item.relation) || "").trim();
+      if (relationLabel && relationLabel !== "当前任务") {
+        titleRow.appendChild(chip(relationLabel, "muted"));
+      }
+      const activityCountText = conversationTaskActivityCountText(item.activity_count);
+      if (activityCountText) {
+        titleRow.appendChild(chip(activityCountText, "muted"));
+      }
+      if (item.latest_action_kind) {
+        titleRow.appendChild(chip(
+          conversationTaskActionLabel(item.latest_action_kind),
+          conversationTaskActionTone(item.latest_action_kind)
+        ));
+      }
       card.appendChild(titleRow);
 
+      const agentCluster = buildConversationTaskCoreAgentCluster(item, { compact, secondaryLimit: compact ? 2 : 3 });
+      if (agentCluster) card.appendChild(agentCluster);
+
       const activity = el("div", { class: "convtaskcard-activity" });
-      activity.appendChild(el("div", { class: "convtaskcard-activity-label", text: "最近进展" }));
+      activity.appendChild(el("div", { class: "convtaskcard-activity-label", text: "最近活动" }));
       activity.appendChild(el("div", {
         class: "convtaskcard-activity-text",
-        text: taskSummaryText(item, "最近暂无补充说明。"),
+        text: String(item.latest_action_text || "").trim() || "最近暂无补充说明。",
       }));
       const actionAt = compactDateTime(item.latest_action_at) || shortDateTime(item.latest_action_at);
       const activityMeta = buildConversationTaskMetaLine([
-        actionAt ? ("更新 " + actionAt) : "",
+        actionAt ? ("时间 " + actionAt) : "",
         firstNonEmptyText([
           item.latest_action_source,
           item.source,
@@ -1774,8 +1853,6 @@
         activity.appendChild(activityMeta);
       }
       card.appendChild(activity);
-      const agentCluster = buildConversationTaskCoreAgentCluster(item, { compact });
-      if (agentCluster) card.appendChild(agentCluster);
       bindConversationTaskCardOpenDetail(card, item, opts);
       return card;
     }
@@ -1784,7 +1861,6 @@
       const item = (row && typeof row === "object") ? row : {};
       const card = el("div", { class: "convtaskaction" });
       const titleRow = el("div", { class: "convtaskaction-title-row" });
-      titleRow.appendChild(buildTaskTypeBadge(item));
       titleRow.appendChild(el("div", {
         class: "convtaskaction-title",
         text: conversationTaskTitleText(item),
@@ -1846,11 +1922,63 @@
     function resolveConversationTaskTrackingPayload(payload = {}) {
       const src = (payload && typeof payload === "object") ? payload : {};
       const tracking = normalizeTaskTrackingClient(src.taskTracking || null);
+      const normalizeCurrentTaskSummaryRef = (raw) => {
+        if (!raw || typeof raw !== "object") return null;
+        if (typeof normalizeConversationTaskRef === "function") {
+          return normalizeConversationTaskRef(raw, "current");
+        }
+        const taskId = String(firstNonEmptyText([raw.task_id, raw.taskId]) || "").trim();
+        const taskPath = String(firstNonEmptyText([raw.task_path, raw.taskPath]) || "").trim();
+        const taskTitle = String(firstNonEmptyText([raw.task_title, raw.taskTitle]) || "").trim();
+        if (!taskId && !taskPath && !taskTitle) return null;
+        return {
+          task_id: taskId,
+          task_path: taskPath,
+          task_title: taskTitle || taskPath || taskId,
+          task_primary_status: String(firstNonEmptyText([raw.task_primary_status, raw.taskPrimaryStatus]) || "").trim(),
+          task_summary_text: String(firstNonEmptyText([raw.task_summary_text, raw.taskSummaryText]) || "").trim(),
+          latest_action_at: String(firstNonEmptyText([raw.latest_action_at, raw.latestActionAt]) || "").trim(),
+          latest_action_kind: String(firstNonEmptyText([raw.latest_action_kind, raw.latestActionKind]) || "").trim().toLowerCase(),
+          latest_action_text: String(firstNonEmptyText([raw.latest_action_text, raw.latestActionText]) || "").trim(),
+          relation: "current",
+        };
+      };
       const loading = !!src.loading;
       const errorText = String(src.error || "").trim();
-      const currentRef = tracking && tracking.current_task_ref ? tracking.current_task_ref : null;
-      const refs = tracking && Array.isArray(tracking.conversation_task_refs) ? tracking.conversation_task_refs : [];
-      const actions = tracking && Array.isArray(tracking.recent_task_actions) ? tracking.recent_task_actions : [];
+      const currentTaskSummaryRef = normalizeCurrentTaskSummaryRef(src.currentTaskSummary || null);
+      const currentTaskUpdatedAt = String(firstNonEmptyText([src.currentTaskUpdatedAt, src.current_task_updated_at]) || "").trim();
+      let effectiveTracking = tracking && typeof tracking === "object"
+        ? {
+          ...tracking,
+          conversation_task_refs: Array.isArray(tracking.conversation_task_refs) ? tracking.conversation_task_refs.slice() : [],
+          recent_task_actions: Array.isArray(tracking.recent_task_actions) ? tracking.recent_task_actions.slice() : [],
+        }
+        : null;
+      let currentRef = effectiveTracking && effectiveTracking.current_task_ref ? effectiveTracking.current_task_ref : null;
+      if (currentTaskSummaryRef) {
+        currentRef = currentRef
+          ? { ...currentRef, ...currentTaskSummaryRef, relation: "current" }
+          : { ...currentTaskSummaryRef, relation: "current" };
+      }
+      if (currentRef || currentTaskUpdatedAt) {
+        effectiveTracking = effectiveTracking || {
+          version: "v1.1",
+          current_task_ref: null,
+          conversation_task_refs: [],
+          recent_task_actions: [],
+          updated_at: "",
+        };
+        effectiveTracking.current_task_ref = currentRef || null;
+        if (currentTaskUpdatedAt && (currentTaskSummaryRef || !String(effectiveTracking.updated_at || "").trim())) {
+          effectiveTracking.updated_at = currentTaskUpdatedAt;
+        }
+      }
+      const refs = effectiveTracking && Array.isArray(effectiveTracking.conversation_task_refs)
+        ? effectiveTracking.conversation_task_refs
+        : [];
+      const actions = effectiveTracking && Array.isArray(effectiveTracking.recent_task_actions)
+        ? effectiveTracking.recent_task_actions
+        : [];
       const currentKey = conversationTaskStableKey(currentRef);
       const actionMap = buildConversationTaskActionSummaryMap(actions);
       const createdRows = refs.filter((row) => {
@@ -1863,8 +1991,7 @@
       }).map((row) => mergeConversationTaskActivity(row, actionMap));
       const relatedRows = createdRows.concat(trackingRows);
       return {
-        ctx: src.ctx || null,
-        tracking,
+        tracking: effectiveTracking,
         loading,
         errorText,
         currentRef: currentRef ? mergeConversationTaskActivity(currentRef, actionMap) : null,
@@ -1877,37 +2004,461 @@
 
     function buildConversationTaskSummaryCard(data, opts = {}) {
       const view = (data && typeof data === "object") ? data : {};
+      const tracking = view.tracking || null;
       const loading = !!view.loading;
       const errorText = String(view.errorText || "").trim();
       const currentRef = view.currentRef || null;
-      return renderConversationTaskGroup(
-        "当前任务",
-        currentRef ? [currentRef] : [],
-        (row) => buildConversationTaskRefCard(row, {
-          onOpenDetail: typeof opts.onOpenDetail === "function"
-            ? ((item) => opts.onOpenDetail(item, { groupTitle: "当前任务" }))
-            : null,
-        }),
-        {
-          limit: 1,
-          singleColumn: true,
-          emptyText: errorText || (loading
-            ? "正在读取会话 task_tracking 真源。"
-            : "本轮对话暂未汇总出 current_task_ref。"),
-          loading: loading && !currentRef,
-          error: !!errorText && !currentRef,
+      const card = el("div", { class: "convtasksummary-card" });
+      if (currentRef) {
+        const main = el("div", { class: "convtasksummary-main" });
+        main.appendChild(el("div", { class: "convtasksummary-label", text: "当前任务" }));
+        const titleRow = el("div", { class: "convtasksummary-title-row" });
+        titleRow.appendChild(el("div", {
+          class: "convtasksummary-title",
+          text: conversationTaskTitleText(currentRef),
+          title: String(currentRef.task_title || currentRef.task_path || "").trim(),
+        }));
+        if (currentRef.task_primary_status) {
+          titleRow.appendChild(chip(String(currentRef.task_primary_status || ""), conversationTaskStatusTone(currentRef.task_primary_status)));
         }
-      );
+        const activityCountText = conversationTaskActivityCountText(currentRef.activity_count);
+        if (activityCountText) {
+          titleRow.appendChild(chip(activityCountText, "muted"));
+        }
+        if (currentRef.latest_action_kind) {
+          titleRow.appendChild(chip(
+            conversationTaskActionLabel(currentRef.latest_action_kind),
+            conversationTaskActionTone(currentRef.latest_action_kind)
+          ));
+        }
+        main.appendChild(titleRow);
+        main.appendChild(el("div", {
+          class: "convtasksummary-progress",
+          text: String(currentRef.latest_action_text || "").trim() || "当前任务已建立，最近活动待补充。",
+        }));
+        const meta = buildConversationTaskMetaLine([
+          compactDateTime(currentRef.latest_action_at) || shortDateTime(currentRef.latest_action_at),
+          tracking && tracking.updated_at ? ("tracking " + (compactDateTime(tracking.updated_at) || shortDateTime(tracking.updated_at))) : "",
+        ]);
+        if (meta) main.appendChild(meta);
+        if (typeof opts.onOpenDetail === "function") {
+          const actions = el("div", { class: "convtasksummary-actions" });
+          const detailBtn = el("button", {
+            class: "btn convtasksummary-action-btn",
+            type: "button",
+            text: "查看详情",
+          });
+          detailBtn.addEventListener("click", () => opts.onOpenDetail(currentRef, { groupTitle: "当前任务" }));
+          actions.appendChild(detailBtn);
+          main.appendChild(actions);
+        }
+        card.appendChild(main);
+        const roleRail = buildConversationTaskResponsibilityRail(currentRef);
+        card.appendChild(roleRail || buildConversationTaskOwnerNode(currentRef.next_owner || null));
+        return card;
+      }
+      const main = el("div", { class: "convtasksummary-main" });
+      main.appendChild(el("div", { class: "convtasksummary-label", text: "当前任务" }));
+      main.appendChild(el("div", {
+        class: "convtasksummary-title",
+        text: loading ? "任务上下文同步中…" : "当前会话尚未形成稳定当前任务",
+      }));
+      main.appendChild(el("div", {
+        class: errorText ? "convtaskerror" : "convtasksummary-progress",
+        text: errorText || (loading
+          ? "正在读取会话 task_tracking 真源。"
+          : "本轮对话暂未汇总出 current_task_ref。"),
+      }));
+      card.appendChild(main);
+      card.appendChild(buildConversationTaskRoleCard({ display_name: "主负责位待接入正式读模型" }, { label: "主负责位", compact: true }));
+      return card;
     }
 
+    function compactConversationTimelineSignatureText(raw, limit = 160) {
+      const text = String(raw || "").replace(/\s+/g, " ").trim();
+      if (!text) return "";
+      const maxLen = Math.max(16, Number(limit) || 160);
+      if (text.length <= maxLen) return text;
+      return text.slice(0, maxLen - 1).trimEnd() + "…";
+    }
+
+    function conversationAttachmentSignature(raw) {
+      const src = (raw && typeof raw === "object") ? raw : {};
+      return [
+        String(src.localId || src.local_id || "").trim(),
+        String(src.attachment_id || src.attachmentId || "").trim(),
+        String(src.url || src.dataUrl || src.preview_url || src.path || "").trim(),
+        String(src.originalName || src.filename || "").trim(),
+      ].filter(Boolean).join("|");
+    }
+
+    function buildConversationTimelineRenderSignature(ctx = {}, payload = {}) {
+      const context = (ctx && typeof ctx === "object") ? ctx : {};
+      const src = (payload && typeof payload === "object") ? payload : {};
+      const displayRuns = Array.isArray(src.displayRuns) ? src.displayRuns : [];
+      const runtimeState = (src.runtimeState && typeof src.runtimeState === "object") ? src.runtimeState : {};
+      const runs = displayRuns.map((run) => {
+        const row = (run && typeof run === "object") ? run : {};
+        const runId = String(row.id || "").trim();
+        const detail = runId && PCONV.detailMap ? PCONV.detailMap[runId] : null;
+        const processTrail = runId && PCONV.processTrailByRun ? PCONV.processTrailByRun[runId] : null;
+        return {
+          id: runId,
+          status: String(row.status || "").trim(),
+          createdAt: String(row.createdAt || "").trim(),
+          messagePreview: compactConversationTimelineSignatureText(row.messagePreview || row.preview || ""),
+          lastPreview: compactConversationTimelineSignatureText(row.lastPreview || ""),
+          attachments: (Array.isArray(row.attachments) ? row.attachments : []).map(conversationAttachmentSignature),
+          detail: detail ? {
+            loading: !!detail.loading,
+            status: String((((detail.full || {}).run || {}).status) || "").trim(),
+            lastMessage: compactConversationTimelineSignatureText(((detail.full || {}).lastMessage) || ""),
+          } : null,
+          processTrail: processTrail ? {
+            status: String(processTrail.status || "").trim(),
+            updatedAt: Number(processTrail.updatedAt || 0) || 0,
+            latest: compactConversationTimelineSignatureText(
+              processTrail.latest
+              || (Array.isArray(processTrail.rows) && processTrail.rows.length ? processTrail.rows[processTrail.rows.length - 1].text : "")
+              || ""
+            ),
+          } : null,
+        };
+      });
+      return JSON.stringify({
+        projectId: String(context.projectId || "").trim(),
+        sessionId: String(context.sessionId || "").trim(),
+        runtimeState: {
+          status: String(runtimeState.status || runtimeState.display_state || "").trim(),
+          active_run_id: String(runtimeState.active_run_id || "").trim(),
+          queued_run_id: String(runtimeState.queued_run_id || "").trim(),
+        },
+        runs,
+      });
+    }
+
+    function shouldReuseConversationTimelineDom(timeline, timelineRenderSignature, opts = {}) {
+      const node = (timeline && typeof timeline === "object") ? timeline : null;
+      const signature = String(timelineRenderSignature || "").trim();
+      if (!node || !signature) return false;
+      if (opts && opts.forceScroll) return false;
+      const prev = String((node.dataset && node.dataset.conversationTimelineRenderSignature) || "").trim();
+      return !!prev && prev === signature;
+    }
+
+    function markConversationTimelineRenderSignature(timeline, timelineRenderSignature) {
+      const node = (timeline && typeof timeline === "object") ? timeline : null;
+      if (!node) return;
+      if (!node.dataset || typeof node.dataset !== "object") node.dataset = {};
+      node.dataset.conversationTimelineRenderSignature = String(timelineRenderSignature || "").trim();
+    }
+
+    function conversationTimelineStableAttachmentKey(raw, index = 0) {
+      const src = (raw && typeof raw === "object") ? raw : {};
+      return String(
+        src.localId
+        || src.local_id
+        || src.attachment_id
+        || src.attachmentId
+        || src.url
+        || src.dataUrl
+        || src.preview_url
+        || src.path
+        || src.originalName
+        || src.filename
+        || ("attachment-" + Number(index || 0))
+      ).trim();
+    }
+
+    function conversationStableAttachmentSignature(list) {
+      return (Array.isArray(list) ? list : [])
+        .map((item, index) => conversationTimelineStableAttachmentKey(item, index))
+        .join("||");
+    }
+
+    function buildConversationStableAttachmentPatchMap(list) {
+      const map = new Map();
+      (Array.isArray(list) ? list : []).forEach((item, index) => {
+        const key = conversationTimelineStableAttachmentKey(item, index);
+        if (!key) return;
+        map.set(key, {
+          src: typeof resolveAttachmentUrl === "function"
+            ? String(resolveAttachmentUrl(item) || "").trim()
+            : String((item && (item.url || item.dataUrl || item.preview_url || item.path)) || "").trim(),
+          alt: String((item && (item.originalName || item.filename)) || "").trim(),
+        });
+      });
+      return map;
+    }
+
+    function syncConversationStableTimelineRowAttachments(row, attachments) {
+      if (!row || typeof row.querySelectorAll !== "function") return;
+      const patchMap = buildConversationStableAttachmentPatchMap(attachments);
+      const nodes = row.querySelectorAll("[data-conversation-attachment-key], img, source");
+      Array.from(nodes || []).forEach((node) => {
+        const key = String((node && node.dataset && node.dataset.conversationAttachmentKey) || "").trim();
+        if (!key || !patchMap.has(key)) return;
+        const patch = patchMap.get(key) || {};
+        if (patch.src && typeof node.setAttribute === "function") {
+          node.setAttribute("src", patch.src);
+          if (node.dataset && typeof node.dataset === "object") node.dataset.conversationAttachmentSrc = patch.src;
+        }
+        if (patch.alt && typeof node.setAttribute === "function" && String(node.tagName || "").toUpperCase() === "IMG") {
+          node.setAttribute("alt", patch.alt);
+        }
+      });
+    }
+
+    function conversationTimelineBubbleExpansionSignature(keys) {
+      return (Array.isArray(keys) ? keys : []).map((item) => String(item || "").trim()).filter(Boolean).sort().join("|");
+    }
+
+    function conversationTimelineStableRowSignature(payload = {}) {
+      const src = (payload && typeof payload === "object") ? payload : {};
+      return JSON.stringify({
+        kind: String(src.kind || "").trim(),
+        runId: String(src.runId || "").trim(),
+        status: String(src.status || (src.run && src.run.status) || "").trim(),
+        text: compactConversationTimelineSignatureText(src.text || ""),
+        attachments: conversationStableAttachmentSignature(src.attachments),
+        bubbleKeys: conversationTimelineBubbleExpansionSignature(src.bubbleKeys),
+        meta: src.meta && typeof src.meta === "object" ? src.meta : null,
+      });
+    }
+
+    function isConversationTimelineTerminalStatus(raw) {
+      const status = String(raw || "").trim().toLowerCase();
+      return status !== "running" && status !== "queued" && status !== "retry_waiting" && status !== "external_busy";
+    }
+
+    function canReuseConversationStableTimelineRow(run, detail, status, opts = {}) {
+      if (!isConversationTimelineTerminalStatus(status || (run && run.status) || "")) return false;
+      if (detail && detail.loading) return false;
+      if (opts && opts.forceRefresh) return false;
+      return true;
+    }
+
+    function buildConversationStableTimelineRowKey(kind, runId) {
+      const family = String(kind || "").trim();
+      const id = String(runId || "").trim();
+      if (!family || !id) return "";
+      return family + ":" + id;
+    }
+
+    function markConversationStableTimelineRow(row, key, signature) {
+      const node = (row && typeof row === "object") ? row : null;
+      const stableKey = String(key || "").trim();
+      const stableSignature = String(signature || "").trim();
+      if (!node || !stableKey || !stableSignature) return node;
+      if (!node.dataset || typeof node.dataset !== "object") node.dataset = {};
+      node.dataset.conversationStableRowKey = stableKey;
+      node.dataset.conversationStableRowSignature = stableSignature;
+      return node;
+    }
+
+    function buildConversationStableTimelineRowReuseMap(timeline) {
+      const node = (timeline && typeof timeline === "object") ? timeline : null;
+      const map = new Map();
+      if (!node || typeof node.querySelectorAll !== "function") return map;
+      const rows = node.querySelectorAll(".msgrow[data-conversation-stable-row-key]");
+      Array.from(rows || []).forEach((row) => {
+        const key = String((row && row.dataset && row.dataset.conversationStableRowKey) || "").trim();
+        const signature = String((row && row.dataset && row.dataset.conversationStableRowSignature) || "").trim();
+        if (!key || !signature || map.has(key)) return;
+        map.set(key, { row, signature });
+      });
+      return map;
+    }
+
+    function reuseConversationStableTimelineRow(reuseMap, key, signature, attachments = null) {
+      const map = reuseMap instanceof Map ? reuseMap : null;
+      const stableKey = String(key || "").trim();
+      const stableSignature = String(signature || "").trim();
+      if (!map || !stableKey || !stableSignature) return null;
+      const record = map.get(stableKey);
+      if (!record || record.signature !== stableSignature) return null;
+      map.delete(stableKey);
+      const row = record.row || null;
+      if (!row) return null;
+      if (Array.isArray(attachments) && attachments.length) {
+        syncConversationStableTimelineRowAttachments(row, attachments);
+      }
+      return markConversationStableTimelineRow(row, stableKey, stableSignature);
+    }
+
+    function buildConversationUserStableRowMeta(payload = {}) {
+      const src = (payload && typeof payload === "object") ? payload : {};
+      const run = (src.run && typeof src.run === "object") ? src.run : null;
+      const detail = (src.detail && typeof src.detail === "object") ? src.detail : null;
+      const status = String(src.status || (run && run.status) || "").trim();
+      const attachments = Array.isArray(src.attachments) ? src.attachments : [];
+      const runId = String(src.runId || (run && run.id) || "").trim();
+      if (!runId || attachments.length <= 0) return null;
+      if (!canReuseConversationStableTimelineRow(run, detail, status, src.opts || {})) return null;
+      if (src.systemLike || src.queuedCompactMode || src.agentInbound || src.receiptInbound) return null;
+      const mentionTargets = (Array.isArray(src.mentionTargets) ? src.mentionTargets : []).map((item) => ({
+        channel_name: String((item && item.channel_name) || "").trim(),
+        session_id: String((item && item.session_id) || "").trim(),
+        display_name: String((item && item.display_name) || "").trim(),
+      }));
+      const visualMode = src.userVisualMode && typeof src.userVisualMode === "object"
+        ? src.userVisualMode
+        : {};
+      const bubbleKey = String(src.bubbleKey || "").trim();
+      const signature = conversationTimelineStableRowSignature({
+        kind: "user",
+        runId,
+        run,
+        status,
+        text: String(src.text || "").trim(),
+        attachments,
+        bubbleKeys: bubbleKey ? [bubbleKey] : [],
+        meta: {
+          visualKind: String(visualMode.kind || "").trim(),
+          displayMode: String(visualMode.displayMode || "").trim(),
+          currentConclusion: compactConversationTimelineSignatureText(visualMode.currentConclusion || "", 96),
+          nextAction: compactConversationTimelineSignatureText(visualMode.nextAction || "", 96),
+          replyRunId: String((src.replyContext && src.replyContext.runId) || "").trim(),
+          replyText: compactConversationTimelineSignatureText((src.replyContext && src.replyContext.text) || "", 96),
+          mentions: mentionTargets,
+        },
+      });
+      return {
+        key: buildConversationStableTimelineRowKey("user", runId),
+        signature,
+      };
+    }
+
+    function syncConversationTimelineChildren(timeline, nextChildren) {
+      const host = (timeline && typeof timeline === "object") ? timeline : null;
+      const desired = Array.isArray(nextChildren) ? nextChildren.filter(Boolean) : [];
+      if (!host) return;
+      let cursor = host.firstChild;
+      desired.forEach((node) => {
+        if (!node) return;
+        if (node === cursor) {
+          cursor = cursor && cursor.nextSibling;
+          return;
+        }
+        host.insertBefore(node, cursor || null);
+      });
+      while (cursor) {
+        const next = cursor.nextSibling;
+        host.removeChild(cursor);
+        cursor = next;
+      }
+    }
+
+    function resolveConversationRestartRecoveryAnchorRunId(payload = {}) {
+      const runs = Array.isArray(payload.runs) ? payload.runs : [];
+      const targetRun = (payload.run && typeof payload.run === "object") ? payload.run : null;
+      const target = targetRun || null;
+      const meta = typeof readRunRestartRecoveryMeta === "function" ? readRunRestartRecoveryMeta(target) : null;
+      if (!target || !meta || !Array.isArray(meta.sourceRunIds) || !meta.sourceRunIds.length) return "";
+      const visibleRunIds = new Set(runs.map((item) => String((item && item.id) || "").trim()).filter(Boolean));
+      for (const runId of meta.sourceRunIds) {
+        const id = String(runId || "").trim();
+        if (id && visibleRunIds.has(id)) return id;
+      }
+      return "";
+    }
+
+    function reorderConversationDisplayRunsForTimeline(runs, detailMap = {}, ctx = {}) {
+      const list = (Array.isArray(runs) ? runs : []).slice().sort((a, b) => {
+        const ta = Date.parse(String((a && a.createdAt) || "")) || 0;
+        const tb = Date.parse(String((b && b.createdAt) || "")) || 0;
+        if (ta !== tb) return ta - tb;
+        return String((a && a.id) || "").localeCompare(String((b && b.id) || ""));
+      });
+      for (let idx = 0; idx < list.length; idx += 1) {
+        const run = mergeRunForDisplay((detailMap && detailMap[String((list[idx] && list[idx].id) || "")]) || null, list[idx]);
+        const anchorRunId = resolveConversationRestartRecoveryAnchorRunId({ run, runs: list, detailMap, ctx });
+        if (!anchorRunId) continue;
+        const currentIndex = idx;
+        const anchorIndex = list.findIndex((item) => String((item && item.id) || "").trim() === anchorRunId);
+        if (anchorIndex < 0 || anchorIndex + 1 === currentIndex) continue;
+        const [row] = list.splice(currentIndex, 1);
+        const insertAt = anchorIndex < currentIndex ? anchorIndex + 1 : anchorIndex;
+        list.splice(insertAt, 0, row);
+      }
+      return list;
+    }
+
+    function warmConversationTimelineWorkingRunDetails(projectId, sessionId, runs) {
+      // assistant-body-prefetch-disabled: 时间线运行态正文默认依赖 light payload，
+      // 不再为了 working run 额外触发 detail 预热。
+      return [];
+    }
+
+    function renderConversationTaskSummaryAndTracking(summaryEl, trackingEl, payload = {}) {
+      const summaryBox = summaryEl || null;
+      const trackingBox = trackingEl || null;
+      if (summaryBox) {
+        summaryBox.innerHTML = "";
+        summaryBox.hidden = true;
+      }
+      if (trackingBox) {
+        trackingBox.innerHTML = "";
+        trackingBox.hidden = true;
+      }
+      if (!summaryBox && !trackingBox) return;
+
+      const view = resolveConversationTaskTrackingPayload(payload);
+      const tracking = view.tracking;
+      const loading = view.loading;
+      const errorText = view.errorText;
+      const currentRef = view.currentRef;
+      const relatedRows = view.relatedRows;
+
+      if (summaryBox) {
+        summaryBox.hidden = false;
+        summaryBox.appendChild(buildConversationTaskSummaryCard(view));
+      }
+
+      if (trackingBox) {
+        trackingBox.hidden = false;
+        const head = el("div", { class: "convtasktracking-head" });
+        head.appendChild(el("div", { class: "convtasktracking-title", text: "相关任务" }));
+        head.appendChild(el("div", {
+          class: "convtasktracking-sub",
+          text: tracking && tracking.updated_at
+            ? ("更新于 " + (compactDateTime(tracking.updated_at) || shortDateTime(tracking.updated_at)))
+            : (loading ? "同步中…" : "等待首轮任务真源"),
+        }));
+        trackingBox.appendChild(head);
+        if (errorText && !tracking) {
+          trackingBox.appendChild(el("div", { class: "convtaskerror", text: "任务跟踪读取失败：" + errorText }));
+        }
+        const groups = el("div", { class: "convtaskgroups" });
+        groups.appendChild(renderConversationTaskGroup(
+          "相关任务",
+          relatedRows,
+          (row) => buildConversationTaskRefCard(row),
+          {
+            limit: 4,
+            emptyText: loading && !relatedRows.length ? "相关任务同步中…" : "当前没有其他相关任务。",
+            loading: loading && !relatedRows.length,
+          }
+        ));
+        trackingBox.appendChild(groups);
+      }
+    }
 
     function currentConversationTaskPayload() {
       const ctx = currentConversationCtx();
       const sessionId = String((ctx && ctx.sessionId) || "").trim();
       const currentSession = sessionId ? findConversationSessionById(sessionId) : null;
+      const currentTaskSummary = currentSession && typeof getConversationListCurrentTaskSummary === "function"
+        ? getConversationListCurrentTaskSummary(currentSession)
+        : null;
       return {
         ctx,
         taskTracking: currentSession && currentSession.task_tracking,
+        currentTaskSummary,
+        currentTaskUpdatedAt: String(firstNonEmptyText([
+          currentTaskSummary && currentTaskSummary.latest_action_at,
+          currentSession && currentSession.task_tracking && currentSession.task_tracking.updated_at,
+        ]) || "").trim(),
         loading: sessionId
           ? (typeof isConversationSessionDetailLoading === "function"
             ? isConversationSessionDetailLoading(sessionId)
@@ -1917,180 +2468,6 @@
           ? getConversationSessionDetailError(sessionId)
           : "",
       };
-    }
-
-    function normalizeConversationTaskIdentityText(value) {
-      return String(value || "").trim().toLowerCase();
-    }
-
-    function appendConversationTaskIdentityKey(set, prefix, value) {
-      if (!(set instanceof Set)) return false;
-      const text = normalizeConversationTaskIdentityText(value);
-      if (!text) return false;
-      set.add(prefix + ":" + text);
-      return true;
-    }
-
-    function collectConversationTaskAgentIdentityKeys(raw) {
-      const item = (raw && typeof raw === "object") ? raw : {};
-      const keys = new Set();
-      appendConversationTaskIdentityKey(keys, "sid", firstNonEmptyText([
-        item.session_id,
-        item.sessionId,
-      ], ""));
-      appendConversationTaskIdentityKey(keys, "aid", firstNonEmptyText([
-        item.agent_id,
-        item.agentId,
-      ], ""));
-      const nameCount = [
-        item.display_name,
-        item.displayName,
-        item.agent_alias,
-        item.alias,
-        item.agent_name,
-        item.agentName,
-        item.name,
-        item.label,
-      ].reduce((count, value) => count + (appendConversationTaskIdentityKey(keys, "name", value) ? 1 : 0), 0);
-      if (!nameCount) {
-        appendConversationTaskIdentityKey(keys, "channel", firstNonEmptyText([
-          item.channel_name,
-          item.channelName,
-          item.primaryChannel,
-          item.displayChannel,
-        ], ""));
-      }
-      return keys;
-    }
-
-    function currentConversationTaskAgentIdentityKeys(ctx) {
-      const keys = collectConversationTaskAgentIdentityKeys(ctx);
-      const sessionId = String((ctx && ctx.sessionId) || "").trim();
-      const session = sessionId ? findConversationSessionById(sessionId) : null;
-      if (session && typeof session === "object") {
-        collectConversationTaskAgentIdentityKeys(session).forEach((key) => keys.add(key));
-      }
-      return keys;
-    }
-
-    function conversationTaskMainOwnerIdentityKeys(row) {
-      const item = (row && typeof row === "object") ? row : {};
-      const owner = (item.main_owner && typeof item.main_owner === "object")
-        ? item.main_owner
-        : ((item.next_owner && typeof item.next_owner === "object") ? item.next_owner : null);
-      return collectConversationTaskAgentIdentityKeys(owner);
-    }
-
-    function conversationTaskKeyForCount(row) {
-      return conversationTaskStableKey(row)
-        || String(firstNonEmptyText([
-          row && row.task_path,
-          row && row.task_title,
-          row && row.task_id,
-          row && row.id,
-        ], "") || "").trim();
-    }
-
-    function countConversationMainOwnerTasks(ctx, payload = {}) {
-      const actorKeys = currentConversationTaskAgentIdentityKeys(ctx);
-      const counts = { todo: 0, in_progress: 0 };
-      if (!actorKeys.size) return counts;
-      const view = resolveConversationTaskTrackingPayload(payload);
-      const seen = new Set();
-      const rows = [];
-      if (view.currentRef) rows.push(view.currentRef);
-      if (Array.isArray(view.createdRows)) rows.push(...view.createdRows);
-      if (Array.isArray(view.trackingRows)) rows.push(...view.trackingRows);
-      rows.forEach((row) => {
-        const rowKey = conversationTaskKeyForCount(row);
-        if (rowKey && seen.has(rowKey)) return;
-        if (rowKey) seen.add(rowKey);
-        const ownerKeys = conversationTaskMainOwnerIdentityKeys(row);
-        if (!ownerKeys.size) return;
-        let matched = false;
-        ownerKeys.forEach((key) => {
-          if (matched) return;
-          if (actorKeys.has(key)) matched = true;
-        });
-        if (!matched) return;
-        const statusKey = taskDisplayStatusMeta((row && row.task_primary_status) || row, "待办").key;
-        if (statusKey === "todo") counts.todo += 1;
-        if (statusKey === "in_progress") counts.in_progress += 1;
-      });
-      return counts;
-    }
-
-    function conversationTaskDrawerStatusRank(row) {
-      const statusKey = taskDisplayStatusMeta((row && row.task_primary_status) || row, "待办").key;
-      if (statusKey === "in_progress") return 0;
-      if (statusKey === "todo") return 1;
-      if (statusKey === "review") return 2;
-      if (statusKey === "done") return 3;
-      if (statusKey === "paused") return 4;
-      return 9;
-    }
-
-    function conversationTaskRowMatchesCurrentMainOwner(ctx, row) {
-      const actorKeys = currentConversationTaskAgentIdentityKeys(ctx);
-      if (!actorKeys.size) return false;
-      const ownerKeys = conversationTaskMainOwnerIdentityKeys(row);
-      if (!ownerKeys.size) return false;
-      let matched = false;
-      ownerKeys.forEach((key) => {
-        if (matched) return;
-        if (actorKeys.has(key)) matched = true;
-      });
-      return matched;
-    }
-
-    function sortConversationTaskDrawerRelatedRows(ctx, rows) {
-      const list = Array.isArray(rows) ? rows.slice() : [];
-      list.sort((a, b) => {
-        const aRank = conversationTaskDrawerStatusRank(a);
-        const bRank = conversationTaskDrawerStatusRank(b);
-        if (aRank !== bRank) return aRank - bRank;
-        const aOwner = conversationTaskRowMatchesCurrentMainOwner(ctx, a) ? 0 : 1;
-        const bOwner = conversationTaskRowMatchesCurrentMainOwner(ctx, b) ? 0 : 1;
-        if (aOwner !== bOwner) return aOwner - bOwner;
-        const aTime = toTimeNum(firstNonEmptyText([
-          a && a.latest_action_at,
-          a && a.last_seen_at,
-          a && a.created_at,
-        ], ""));
-        const bTime = toTimeNum(firstNonEmptyText([
-          b && b.latest_action_at,
-          b && b.last_seen_at,
-          b && b.created_at,
-        ], ""));
-        if (aTime !== bTime) return bTime - aTime;
-        return conversationTaskTitleText(a).localeCompare(conversationTaskTitleText(b), "zh-CN");
-      });
-      return list;
-    }
-
-    function filterConversationTaskDrawerRelatedRows(ctx, rows) {
-      const list = Array.isArray(rows) ? rows : [];
-      return list.filter((row) => conversationTaskRowMatchesCurrentMainOwner(ctx, row));
-    }
-
-    function applyConversationTaskEntryCounts(btn, counts = {}) {
-      const todo = Math.max(0, Number(counts.todo || 0) || 0);
-      const inProgress = Math.max(0, Number(counts.in_progress || 0) || 0);
-      const todoNode = btn ? btn.querySelector("#detailTaskTrackingTodo") : null;
-      const progressNode = btn ? btn.querySelector("#detailTaskTrackingProgress") : null;
-      if (todoNode) todoNode.textContent = String(todo);
-      if (progressNode) progressNode.textContent = String(inProgress);
-      if (btn) {
-        const title = `查看当前会话任务（主负责 待开始 ${todo} / 进行中 ${inProgress}）`;
-        btn.title = title;
-        btn.setAttribute("aria-label", title);
-      }
-    }
-
-    function currentConversationTaskDetailViewerPayload(viewerState = null) {
-      const viewer = viewerState || ensureConversationTaskDetailViewerState();
-      if (viewer.sourceMode === "standalone") return cloneConversationTaskDetailPayload(viewer.payload) || {};
-      return currentConversationTaskPayload();
     }
 
     function buildConversationTaskDrawerRenderSignature(view, sessionKey = "") {
@@ -2116,23 +2493,19 @@
 
     function renderConversationTaskDetailViewer(payload = null) {
       const viewer = ensureConversationTaskDetailViewerState();
-      const standalone = viewer.sourceMode === "standalone";
-      const currentKey = standalone
-        ? String(viewer.sessionKey || "").trim()
-        : String(firstNonEmptyText([
-          PCONV.taskDrawerSessionKey,
-          currentConvComposerDraftKey(),
-        ]) || "").trim();
-      if ((!standalone && !PCONV.taskDrawerOpen) || !viewer.open || !currentKey || viewer.sessionKey !== currentKey) {
+      const currentKey = String(firstNonEmptyText([
+        PCONV.taskDrawerSessionKey,
+        currentConvComposerDraftKey(),
+      ]) || "").trim();
+      if (!PCONV.taskDrawerOpen || !viewer.open || !currentKey || viewer.sessionKey !== currentKey) {
         removeConversationTaskDetailViewerMask();
-        if ((!standalone && !PCONV.taskDrawerOpen) || !currentKey || viewer.sessionKey !== currentKey) {
+        if (!PCONV.taskDrawerOpen || !currentKey || viewer.sessionKey !== currentKey) {
           resetConversationTaskDetailViewer();
         }
         return;
       }
-      const activePayload = payload || currentConversationTaskDetailViewerPayload(viewer);
       const detail = resolveConversationTaskDetailView(
-        resolveConversationTaskTrackingPayload(activePayload),
+        resolveConversationTaskTrackingPayload(payload || currentConversationTaskPayload()),
         viewer
       );
       if (!detail) {
@@ -2214,11 +2587,6 @@
         renderConversationTaskDetailInfoRow("所在分组", detail.groupTitle),
         renderConversationTaskDetailInfoRow("关联关系", detail.relationLabel),
         renderConversationTaskDetailInfoRow("来源标记", detail.sourceText),
-        renderConversationTaskDetailInfoRow(
-          "创建时间",
-          compactDateTime(detail.createdAt) || shortDateTime(detail.createdAt) || detail.createdAt
-        ),
-        renderConversationTaskDetailInfoRow("截止时间", compactDateTime(detail.dueAt) || shortDateTime(detail.dueAt) || detail.dueAt),
         renderConversationTaskDetailInfoRow("首次纳入", compactDateTime(detail.firstSeenAt) || shortDateTime(detail.firstSeenAt)),
         renderConversationTaskDetailInfoRow("最近观察", compactDateTime(detail.lastSeenAt) || shortDateTime(detail.lastSeenAt)),
         renderConversationTaskDetailInfoRow("任务路径", detail.taskPath, { mono: true, stack: true }),
@@ -2323,10 +2691,7 @@
         errorText: displayErrorText,
       };
       const renderSignature = buildConversationTaskDrawerRenderSignature(renderView, sessionKey);
-      const relatedRows = sortConversationTaskDrawerRelatedRows(
-        renderView.ctx,
-        filterConversationTaskDrawerRelatedRows(renderView.ctx, renderView.relatedRows)
-      );
+      const relatedRows = renderView.relatedRows;
       sub.textContent = tracking && tracking.updated_at
         ? ("更新于 " + (compactDateTime(tracking.updated_at) || shortDateTime(tracking.updated_at)))
         : (displayLoading ? "同步中…" : "当前会话暂无任务跟踪");
@@ -2362,7 +2727,7 @@
         }),
         {
           limit: 4,
-          emptyText: displayLoading && !relatedRows.length ? "相关任务同步中…" : "当前没有其他由你主负责的任务。",
+          emptyText: displayLoading && !relatedRows.length ? "相关任务同步中…" : "当前没有其他相关任务。",
           loading: displayLoading && !relatedRows.length,
         }
       ));
@@ -2387,7 +2752,6 @@
         btn.style.display = "none";
         btn.onclick = null;
         btn.classList.remove("active");
-        applyConversationTaskEntryCounts(btn, { todo: 0, in_progress: 0 });
       }
       if (PCONV.taskDrawerOpen) {
         PCONV.taskDrawerOpen = false;
@@ -2397,105 +2761,6 @@
       }
       resetConversationTaskDetailViewer();
       renderConversationTaskDetailViewer();
-      hideConversationCurrentTaskStrip();
-    }
-
-    function conversationCurrentTaskStripSessionKey(ctx) {
-      if (!ctx || !ctx.projectId || !ctx.sessionId) return "";
-      return String(convComposerDraftKey(ctx.projectId, ctx.sessionId) || "").trim();
-    }
-
-    function setConversationCurrentTaskStripCollapsed(sessionKey, collapsed) {
-      const key = String(sessionKey || "").trim();
-      if (!key) return;
-      if (collapsed) PCONV.currentTaskStripCollapsedBySessionKey[key] = true;
-      else delete PCONV.currentTaskStripCollapsedBySessionKey[key];
-    }
-
-    function hideConversationCurrentTaskStrip() {
-      const dock = document.getElementById("convCurrentTaskDock");
-      const row = document.getElementById("convCurrentTaskRow");
-      const strip = document.getElementById("convCurrentTaskStrip");
-      const title = document.getElementById("convCurrentTaskStripTitle");
-      const summary = document.getElementById("convCurrentTaskStripSummary");
-      const status = document.getElementById("convCurrentTaskStripStatus");
-      const updated = document.getElementById("convCurrentTaskStripUpdated");
-      const closeBtn = document.getElementById("convCurrentTaskStripClose");
-      const peekBtn = document.getElementById("convCurrentTaskPeek");
-      if (dock) {
-        dock.style.display = "none";
-        dock.classList.remove("is-collapsed");
-      }
-      if (row) row.style.display = "none";
-      if (peekBtn) {
-        peekBtn.style.display = "none";
-        peekBtn.onclick = null;
-      }
-      if (strip) {
-        strip.className = "convcurrenttaskstrip";
-        strip.onclick = null;
-      }
-      if (closeBtn) closeBtn.onclick = null;
-      if (title) title.textContent = "";
-      if (summary) summary.textContent = "";
-      if (status) status.replaceChildren();
-      if (updated) updated.textContent = "";
-    }
-
-    function renderConversationCurrentTaskStrip(ctx, payload = {}) {
-      const dock = document.getElementById("convCurrentTaskDock");
-      const row = document.getElementById("convCurrentTaskRow");
-      const strip = document.getElementById("convCurrentTaskStrip");
-      const title = document.getElementById("convCurrentTaskStripTitle");
-      const summary = document.getElementById("convCurrentTaskStripSummary");
-      const status = document.getElementById("convCurrentTaskStripStatus");
-      const updated = document.getElementById("convCurrentTaskStripUpdated");
-      const closeBtn = document.getElementById("convCurrentTaskStripClose");
-      const peekBtn = document.getElementById("convCurrentTaskPeek");
-      if (!dock || !row || !strip || !title || !summary || !status || !updated || !closeBtn || !peekBtn) return;
-      if (!ctx || !ctx.projectId || !ctx.sessionId) {
-        hideConversationCurrentTaskStrip();
-        return;
-      }
-      const view = resolveConversationTaskTrackingPayload(payload);
-      const currentRef = view.currentRef || null;
-      if (!currentRef) {
-        hideConversationCurrentTaskStrip();
-        return;
-      }
-      const sessionKey = conversationCurrentTaskStripSessionKey(ctx);
-      const collapsed = !!(sessionKey && PCONV.currentTaskStripCollapsedBySessionKey[sessionKey]);
-      const statusMeta = taskDisplayStatusMeta(currentRef.task_primary_status || currentRef, "待办");
-      const updatedText = compactDateTime(currentRef.latest_action_at) || shortDateTime(currentRef.latest_action_at);
-      const groupTitle = "当前任务";
-      dock.style.display = "block";
-      dock.classList.toggle("is-collapsed", collapsed);
-      row.style.display = collapsed ? "none" : "flex";
-      peekBtn.style.display = collapsed ? "inline-flex" : "none";
-      strip.className = "convcurrenttaskstrip status-" + statusMeta.key;
-      title.textContent = conversationTaskTitleText(currentRef);
-      title.title = String(currentRef.task_title || currentRef.task_path || "").trim();
-      summary.textContent = taskSummaryText(currentRef, "当前任务已建立，最近活动待补充。");
-      summary.title = summary.textContent;
-      status.replaceChildren();
-      status.appendChild(buildTaskStatusChip(currentRef.task_primary_status || currentRef, "待办"));
-      updated.textContent = updatedText ? ("更新 " + updatedText) : "";
-      strip.onclick = () => openConversationTaskDetailViewerStandalone(currentRef, payload, {
-        sessionKey: sessionKey || "conversation-current-task-strip",
-        groupTitle,
-      });
-      closeBtn.onclick = (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        setConversationCurrentTaskStripCollapsed(sessionKey, true);
-        renderConversationCurrentTaskStrip(ctx, payload);
-      };
-      peekBtn.onclick = (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        setConversationCurrentTaskStripCollapsed(sessionKey, false);
-        renderConversationCurrentTaskStrip(ctx, payload);
-      };
     }
 
     function renderConversationTaskEntry(ctx, payload = {}) {
@@ -2506,7 +2771,6 @@
         return;
       }
       const key = convComposerDraftKey(ctx.projectId, ctx.sessionId);
-      applyConversationTaskEntryCounts(btn, countConversationMainOwnerTasks(ctx, payload));
       btn.style.display = "";
       btn.classList.toggle("active", !!(PCONV.taskDrawerOpen && String(PCONV.taskDrawerSessionKey || "") === key));
       btn.onclick = () => {
@@ -2553,19 +2817,24 @@
     }
 
     function renderConversationDetail(forceScroll = false) {
-      if (STATE.panelMode === "channel") return;
       const titleEl = document.getElementById("detailTitle");
       const subEl = document.getElementById("detailSub");
       const hintEl = document.getElementById("convHint");
       const senderHintEl = document.getElementById("convSenderHint");
+      const taskSummaryEl = document.getElementById("convTaskSummary");
+      const taskTrackingEl = document.getElementById("convTaskTracking");
       const timeline = document.getElementById("convTimeline");
       const input = document.getElementById("convMsg");
       const sendBtn = document.getElementById("convSendBtn");
       const memoSaveBtn = document.getElementById("convMemoSaveBtn");
       const pathBar = document.getElementById("detailPathBar");
+      const convWrap = document.getElementById("convWrap");
       const basePlaceholder = conversationComposerPlaceholder("Codex");
       if (pathBar) pathBar.style.display = "none";
       if (!titleEl || !timeline || !input || !sendBtn || !hintEl || !subEl) return;
+      if (convWrap && (STATE.panelMode === "conv" || STATE.selectedSessionId)) {
+        convWrap.classList.add("show");
+      }
       bindConvComposerToSelectedSession();
 
       captureDebugLogScrollPositions(timeline);
@@ -2573,8 +2842,7 @@
       const scrollAnchor = {
         scrollTop: Number(timeline.scrollTop || 0),
       };
-
-      timeline.innerHTML = "";
+      renderConversationTaskSummaryAndTracking(taskSummaryEl, taskTrackingEl, null);
       if (STATE.project === "overview") {
         titleEl.textContent = "项目对话";
         subEl.textContent = "";
@@ -2583,7 +2851,6 @@
         renderConversationEnterSendToggle(false);
         renderConversationQuickTips(null, []);
         renderConversationTrainingPrompt(null, []);
-        renderConversationTeamExpansionHint(null, null);
         renderConvComposerRunActions(null, []);
         input.placeholder = "请先选择具体项目，再发送会话消息";
         input.disabled = true;
@@ -2596,12 +2863,14 @@
         renderConversationRecentAgentsByKey("");
         hideConversationMemoEntry();
         hideConversationTaskEntry();
-        hideConversationCurrentTaskStrip();
         PCONV.fileDrawerOpen = false;
         hideConversationFileEntry();
         renderConversationFileDrawer();
         renderConversationTaskDrawer();
-        timeline.appendChild(el("div", { class: "hint", text: "总揽模式不展示会话详情。" }));
+        syncConversationTimelineChildren(timeline, [
+          el("div", { class: "hint", text: "总揽模式不展示会话详情。" }),
+        ]);
+        markConversationTimelineRenderSignature(timeline, "");
         return;
       }
 
@@ -2614,7 +2883,6 @@
         renderConversationEnterSendToggle(false);
         renderConversationQuickTips(null, []);
         renderConversationTrainingPrompt(null, []);
-        renderConversationTeamExpansionHint(null, null);
         renderConvComposerRunActions(null, []);
         input.placeholder = "当前项目没有可用会话，请先维护 session_id";
         input.disabled = true;
@@ -2627,12 +2895,14 @@
         renderConversationRecentAgentsByKey("");
         hideConversationMemoEntry();
         hideConversationTaskEntry();
-        hideConversationCurrentTaskStrip();
         PCONV.fileDrawerOpen = false;
         hideConversationFileEntry();
         renderConversationFileDrawer();
         renderConversationTaskDrawer();
-        timeline.appendChild(el("div", { class: "hint", text: "无可用会话。" }));
+        syncConversationTimelineChildren(timeline, [
+          el("div", { class: "hint", text: "无可用会话。" }),
+        ]);
+        markConversationTimelineRenderSignature(timeline, "");
         return;
       }
 
@@ -2683,7 +2953,6 @@
       renderConversationFileEntry(ctx);
       const taskPayload = currentConversationTaskPayload();
       renderConversationTaskEntry(ctx, taskPayload);
-      renderConversationCurrentTaskStrip(ctx, taskPayload);
       const consumedUnread = consumeConversationUnreadByCtx(ctx);
       if (consumedUnread) refreshConversationCountDots();
       ensureConversationMemosLoaded(ctx.projectId, ctx.sessionId, { maxAgeMs: 10_000 });
@@ -2699,6 +2968,11 @@
         PCONV.taskDrawerSessionKey = memoKey;
       }
       renderConversationTaskDrawer(taskPayload);
+      const stableRowReuseMap = buildConversationStableTimelineRowReuseMap(timeline);
+      const nextTimelineNodes = [];
+      const appendTimelineNode = (node) => {
+        if (node) nextTimelineNodes.push(node);
+      };
 
       const timelineKey = String(STATE.project || "") + "::" + String(ctx.sessionId || "");
       if (PCONV.autoExpandTimelineKey !== timelineKey) {
@@ -2722,19 +2996,14 @@
         if (ta >= 0 && tb >= 0 && ta !== tb) return ta - tb; // oldest first (newest at bottom)
         return String(a.createdAt || "").localeCompare(String(b.createdAt || ""));
       });
-      const optimisticForSession = (PCONV.optimistic && PCONV.optimistic.sessionId === ctx.sessionId)
-        ? PCONV.optimistic
-        : null;
-      if (optimisticForSession) {
-        const materialized = runs.some((run) => isConversationRunMaterializedForOptimistic(run, optimisticForSession));
-        if (materialized) {
-          PCONV.optimistic = null;
-        }
-      }
-      const effectiveOptimistic = (PCONV.optimistic && PCONV.optimistic.sessionId === ctx.sessionId)
-        ? PCONV.optimistic
-        : null;
       const currentRuntimeState = getSessionRuntimeState(currentSession);
+      const timelineRenderSignature = buildConversationTimelineRenderSignature(ctx, {
+        displayRuns: runs,
+        runtimeState: currentRuntimeState,
+      });
+      if (shouldReuseConversationTimelineDom(timeline, timelineRenderSignature, { forceScroll })) {
+        markConversationTimelineRenderSignature(timeline, timelineRenderSignature);
+      }
       const currentQueueDepth = (() => {
         const runtimeDepth = Math.max(0, Number((currentRuntimeState && currentRuntimeState.queue_depth) || 0));
         const fallbackDepth = runs.reduce((count, item) => {
@@ -2766,7 +3035,6 @@
         : (hasSessionTimelineCache ? runs.length >= CONV_PAGE.timelineInitial : runs.length > 0);
       renderConversationQuickTips(ctx, runs);
       renderConversationTrainingPrompt(ctx, runs, { timelineReady: hasSessionTimelineCache });
-      renderConversationTeamExpansionHint(ctx, currentSession || ctx);
       refreshConversationRecentAgentsFromRuns(ctx, runs);
       renderConvComposerRunActions(ctx, runs);
       // 找到“最新可展开”的 AI 正文：
@@ -2810,7 +3078,7 @@
       }
 
       if (!runs.length && !(PCONV.optimistic && PCONV.optimistic.sessionId === ctx.sessionId)) {
-        timeline.appendChild(el("div", { class: "hint", text: timelineLoading ? "加载会话记录中..." : "该会话暂无消息记录，可直接在下方发送消息。" }));
+        appendTimelineNode(el("div", { class: "hint", text: timelineLoading ? "加载会话记录中..." : "该会话暂无消息记录，可直接在下方发送消息。" }));
       }
 
       if (runs.length || timelineLoadingBefore || timelineBeforeError) {
@@ -2832,7 +3100,7 @@
         } else if (!timelineHasMoreBefore && runs.length > 0) {
           historyBar.appendChild(el("span", { class: "conv-history-done", text: "历史消息已全部加载" }));
         }
-        timeline.appendChild(historyBar);
+        appendTimelineNode(historyBar);
       }
 
       const seenCallbackEventKeys = new Set();
@@ -2954,6 +3222,8 @@
             d && d.full && d.full.message,
           ]),
         });
+        const userSenderType = String(firstNonEmptyText([userSender && userSender.type, runSpec && runSpec.senderType]) || "").trim().toLowerCase();
+        const isAgentInbound = userVisualMode.kind === "agent-inbound" || (userSenderType === "agent" && userVisualMode.displayMode !== "receipt" && userVisualMode.kind === "collab-inbound");
         if (systemFamilyMode) {
           if ((callbackProjectedToVisibleHost || callbackLocallyAnchored) && !restartRecoveryMeta) continue;
           const systemRow = renderConversationSystemFamily({
@@ -2978,11 +3248,31 @@
             actionBusy,
             mentionTargets,
           });
-          timeline.appendChild(systemRow);
+          appendTimelineNode(systemRow);
           continue;
         }
 
-        const userRow = renderConversationUserFamily({
+        const stableUserRowMeta = buildConversationUserStableRowMeta({
+          run: r,
+          detail: d,
+          runId: rid,
+          status: st,
+          attachments,
+          text: displayUserText || userText || String(r.messagePreview || ""),
+          bubbleKey: rid + ":user",
+          userVisualMode,
+          replyContext,
+          mentionTargets,
+          queuedCompactMode,
+          systemLike: !!callbackEventMeta || !!restartRecoveryMeta,
+          agentInbound: isAgentInbound,
+          receiptInbound: userVisualMode.kind === "receipt-inbound",
+          opts: { forceRefresh: forceScroll },
+        });
+        const reusedUserRow = stableUserRowMeta
+          ? reuseConversationStableTimelineRow(stableRowReuseMap, stableUserRowMeta.key, stableUserRowMeta.signature, attachments)
+          : null;
+        const userRow = reusedUserRow || renderConversationUserFamily({
           rid,
           r,
           d,
@@ -3000,14 +3290,17 @@
           callbackEventDuplicate,
           restartRecoveryMeta,
           restartRecoveryDuplicate,
-          receiptProjection,
           currentQueueDepth,
           aggregateCount,
           aggregateLastMergedAt,
           actionBusy,
           mentionTargets,
+          userVisualMode,
         });
-        timeline.appendChild(userRow);
+        if (!reusedUserRow && stableUserRowMeta) {
+          markConversationStableTimelineRow(userRow, stableUserRowMeta.key, stableUserRowMeta.signature);
+        }
+        appendTimelineNode(userRow);
         if (queuedCompactMode) continue;
         const aiRow = renderConversationAssistantFamily({
           rid,
@@ -3030,12 +3323,11 @@
           queueReasonText,
           blockedByText,
           receiptProjection: isRunWorking(stNorm) ? null : receiptProjection,
-          receiptCardVisible: userVisualMode.kind === "receipt-inbound",
           mentionTargets,
           currentActiveRunId,
           currentQueuedRunId,
         });
-        timeline.appendChild(aiRow);
+        appendTimelineNode(aiRow);
       }
 
       if (runtimeShadowRuns.activeRun) {
@@ -3072,62 +3364,62 @@
           mentionTargets: [],
         });
         shadowAiRow.classList.add("runtime-shadow");
-        timeline.appendChild(shadowAiRow);
+        appendTimelineNode(shadowAiRow);
       }
 
       if (runtimeShadowRuns.queuedRun) {
-        const suppressQueuedShadow = shouldSuppressConversationQueuedShadow(runtimeShadowRuns.queuedRun, effectiveOptimistic);
-        if (!suppressQueuedShadow) {
-          const shadowRun = runtimeShadowRuns.queuedRun;
-          const shadowSender = resolveMessageSender(shadowRun, {
-            role: "user",
-            cliType: firstNonEmptyText([shadowRun.cliType, ctx && ctx.cliType]),
-            channelName: firstNonEmptyText([shadowRun.channelName, ctx && ctx.channelName]),
-            displayChannel: firstNonEmptyText([ctx && ctx.displayChannel, ctx && ctx.alias]),
-            textCandidates: [shadowRun.messagePreview],
-          });
-          const shadowUserRow = renderConversationUserFamily({
-            rid: String(shadowRun.id || ""),
-            r: shadowRun,
-            d: null,
-            senderRun: shadowRun,
-            ctx,
-            runSpec: readConversationSpecFields(shadowRun),
-            userSender: shadowSender,
-            userMessageKind: resolveConversationMessageKind(shadowRun, "user"),
-            displayUserText: String(shadowRun.messagePreview || ""),
-            userText: String(shadowRun.messagePreview || ""),
-            attachments: [],
-            replyContext: null,
-            queuedCompactMode: true,
-            callbackEventMeta: null,
-            callbackEventDuplicate: false,
-            restartRecoveryMeta: null,
-            restartRecoveryDuplicate: false,
-            currentQueueDepth,
-            aggregateCount: 0,
-            aggregateLastMergedAt: "",
-            actionBusy: "",
-            mentionTargets: [],
-          });
-          shadowUserRow.classList.add("runtime-shadow");
-          timeline.appendChild(shadowUserRow);
-        }
+        const shadowRun = runtimeShadowRuns.queuedRun;
+        const shadowSender = resolveMessageSender(shadowRun, {
+          role: "user",
+          cliType: firstNonEmptyText([shadowRun.cliType, ctx && ctx.cliType]),
+          channelName: firstNonEmptyText([shadowRun.channelName, ctx && ctx.channelName]),
+          displayChannel: firstNonEmptyText([ctx && ctx.displayChannel, ctx && ctx.alias]),
+          textCandidates: [shadowRun.messagePreview],
+        });
+        const shadowUserRow = renderConversationUserFamily({
+          rid: String(shadowRun.id || ""),
+          r: shadowRun,
+          d: null,
+          senderRun: shadowRun,
+          ctx,
+          runSpec: readConversationSpecFields(shadowRun),
+          userSender: shadowSender,
+          userMessageKind: resolveConversationMessageKind(shadowRun, "user"),
+          displayUserText: String(shadowRun.messagePreview || ""),
+          userText: String(shadowRun.messagePreview || ""),
+          attachments: [],
+          replyContext: null,
+          queuedCompactMode: true,
+          callbackEventMeta: null,
+          callbackEventDuplicate: false,
+          restartRecoveryMeta: null,
+          restartRecoveryDuplicate: false,
+          currentQueueDepth,
+          aggregateCount: 0,
+          aggregateLastMergedAt: "",
+          actionBusy: "",
+          mentionTargets: [],
+        });
+        shadowUserRow.classList.add("runtime-shadow");
+        appendTimelineNode(shadowUserRow);
       }
 
-      if (effectiveOptimistic) {
-        const m = effectiveOptimistic;
+      if (PCONV.optimistic && PCONV.optimistic.sessionId === ctx.sessionId) {
+        const m = PCONV.optimistic;
         const userRow = renderConversationOptimisticUserFamily({
           ctx,
           message: m,
         });
-        timeline.appendChild(userRow);
+        appendTimelineNode(userRow);
       }
+
+      syncConversationTimelineChildren(timeline, nextTimelineNodes);
 
       syncConversationReceiptViewerMount();
 
       refreshConversationFilesFromTimeline(ctx, timeline);
       renderConversationFileUi();
+      markConversationTimelineRenderSignature(timeline, timelineRenderSignature);
 
       if (forceScroll || wasNearBottom) {
         maybeStickConversationBottom(true);
@@ -3138,6 +3430,14 @@
     }
 
     async function refreshConversationTimeline(projectId, sessionId, forceScroll = false) {
+      if (typeof isTaskShareModeActive === "function" && isTaskShareModeActive()) {
+        const pid = String(projectId || STATE.project || "").trim();
+        const sid = String(sessionId || STATE.selectedSessionId || "").trim();
+        if (!pid || !sid) return;
+        await loadTaskShareModeSession(sid, { force: true });
+        renderConversationDetail(forceScroll);
+        return;
+      }
       const pid = String(projectId || "").trim();
       const sid = String(sessionId || "").trim();
       if (!pid || !sid || pid === "overview") return;
@@ -3364,6 +3664,10 @@
     }
 
     async function refreshConversationPanel() {
+      if (typeof isTaskShareModeActive === "function" && isTaskShareModeActive()) {
+        await refreshTaskShareModeConversationPanel();
+        return;
+      }
       if (PCONV.busy) return;
       const projectId = String(STATE.project || "");
       if (!projectId || projectId === "overview") {
@@ -3509,26 +3813,16 @@
         });
         PCONV.sessions = sessions;
         PCONV.lastRefreshAt = new Date().toLocaleTimeString("zh-CN", { hour12: false });
-        if (baseSessions.length) {
+        if (sessions.length) {
           const selectedSid = String(STATE.selectedSessionId || "");
-          const ok = baseSessions.some((x) => String(x.sessionId || x.id || "") === selectedSid);
-          const rememberedSid = readRememberedConversationSelection(projectId, STATE.channel);
-          const rememberedOk = rememberedSid
-            ? baseSessions.some((x) => String(x.sessionId || x.id || "") === rememberedSid)
-            : false;
-          const defaultSid = pickDefaultConversationSessionId(sessions.length ? sessions : baseSessions, STATE.channel);
-          const preferredSid = rememberedOk ? rememberedSid : defaultSid;
+          const ok = sessions.some((x) => String(x.sessionId || x.id || "") === selectedSid);
           if (STATE.panelMode === "conv") {
             if (!ok) {
-              STATE.selectedSessionId = preferredSid;
-              STATE.selectedSessionExplicit = rememberedOk;
+              STATE.selectedSessionId = pickDefaultConversationSessionId(sessions, STATE.channel);
+              STATE.selectedSessionExplicit = false;
             } else if (!selectedSid) {
               // 仅在未选中会话时回退默认会话；若已存在选中（含刷新恢复），保持当前选中不被轮询覆盖。
-              STATE.selectedSessionId = preferredSid;
-              STATE.selectedSessionExplicit = rememberedOk;
-            }
-            if (String(STATE.selectedSessionId || "").trim()) {
-              rememberConversationSelection(projectId, STATE.channel, String(STATE.selectedSessionId || ""));
+              STATE.selectedSessionId = pickDefaultConversationSessionId(sessions, STATE.channel);
             }
           } else if (!ok && selectedSid) {
             // 任务模式下不自动抢占右侧详情，仅在原会话已失效时清掉失效选中。
@@ -3556,10 +3850,10 @@
           }
         } else {
           buildChannelConversationList();
-          // 通道模式不再承载会话详情；其它非对话模式保留旧会话刷新兼容。
-          if (STATE.panelMode !== "channel" && STATE.selectedSessionId) renderDetail(selectedItem());
+          // 任务模式下如果正在查看会话详情，需要刷新右侧消息区域。
+          if (STATE.selectedSessionId) renderDetail(selectedItem());
         }
-        if (STATE.panelMode !== "channel" && STATE.selectedSessionId) {
+        if (STATE.selectedSessionId) {
           if (deferConvRender) {
             queueDeferredConversationRender({
               panelRender: true,

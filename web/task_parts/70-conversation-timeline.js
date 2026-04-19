@@ -1,4 +1,77 @@
 /* 第七刀：会话时间线与消息气泡渲染 */
+    // assistant-body-prefetch-disabled
+    // auto-process-drawer-uses-light-payload
+    function resolveConversationAssistantBodyMeta(payload = {}) {
+      const src = (payload && typeof payload === "object") ? payload : {};
+      const status = String(src.status || "").trim().toLowerCase();
+      const displayAssistantText = String(src.displayAssistantText || "").trim();
+      const processInfo = (src.processInfo && typeof src.processInfo === "object") ? src.processInfo : {};
+      const latestProgress = String(processInfo.latest || "").trim();
+      const processCount = Math.max(0, Number(processInfo.count || 0) || 0);
+      const reportedCount = Math.max(0, Number(processInfo.reportedCount || 0) || 0);
+      if (isRunWorking(status)) {
+        if (latestProgress) {
+          return {
+            bodyTitle: "最新进展",
+            inlineText: latestProgress,
+            showBody: true,
+            placeholder: "",
+            needsDetailPrefetch: false,
+          };
+        }
+        return {
+          bodyTitle: "最新进展",
+          inlineText: "",
+          showBody: false,
+          placeholder: "",
+          needsDetailPrefetch: reportedCount > processCount && !src.detailLoading,
+        };
+      }
+      if (displayAssistantText) {
+        return {
+          bodyTitle: "正文",
+          inlineText: displayAssistantText,
+          showBody: true,
+          placeholder: "",
+          needsDetailPrefetch: false,
+        };
+      }
+      return {
+        bodyTitle: "正文",
+        inlineText: "",
+        showBody: true,
+        placeholder: "未生成可展示正文",
+        needsDetailPrefetch: false,
+      };
+    }
+
+    function conversationReceiptProjectionPendingCount(projection) {
+      const src = (projection && typeof projection === "object") ? projection : {};
+      const pendingActions = Array.isArray(src.pendingActions) ? src.pendingActions : [];
+      const rollup = (src.rollup && typeof src.rollup === "object") ? src.rollup : {};
+      return Math.max(pendingActions.length, Number(rollup.pendingActionCount || 0) || 0);
+    }
+
+    function resolveConversationReceiptProjectionPresentation(payload = {}) {
+      const src = (payload && typeof payload === "object") ? payload : {};
+      const projection = (src.projection && typeof src.projection === "object") ? src.projection : null;
+      const hasProjection = !!projection;
+      const pendingCount = hasProjection ? conversationReceiptProjectionPendingCount(projection) : 0;
+      const totalCount = hasProjection
+        ? Math.max(
+          Array.isArray(projection.items) ? projection.items.length : 0,
+          Number(((projection.rollup || {}).totalCallbacks) || 0) || 0
+        )
+        : 0;
+      return {
+        hasProjection,
+        pendingCount,
+        totalCount,
+        sourceCompact: !!(hasProjection && !src.receiptCardVisible && !src.callbackEventMeta && !src.restartRecoveryMeta),
+        assistantStack: false,
+      };
+    }
+
     function renderConversationReplyQuote(replyContext) {
       const ctx = normalizeConvReplyContext(replyContext);
       if (!ctx) return null;
@@ -31,43 +104,12 @@
       return matched ? String(matched[1] || "").trim() : "";
     }
 
-    function normalizeConversationInboundSubject(text) {
-      const value = String(text || "").trim();
-      if (!value) return "";
-      if (/^(?:未关联任务|无|none|n\/a|未知任务)$/i.test(value)) return "";
-      return value;
-    }
-
-    function extractConversationInboundLeadLine(text) {
-      const lines = String(text || "")
-        .replace(/\r\n?/g, "\n")
-        .split("\n")
-        .map((line) => String(line || "").trim())
-        .filter(Boolean);
-      for (const line of lines) {
-        const subjectMatch = line.match(/^(?:本次目标|通知事项|主题|标题|回执任务|任务|关联任务)\s*[:：]\s*(.+)$/i);
-        if (subjectMatch && subjectMatch[1]) {
-          const subject = normalizeConversationInboundSubject(subjectMatch[1]);
-          if (subject) return subject;
-        }
-        if (/^\[[^\]]+[:：][^\]]*\]$/.test(line)) continue;
-        if (/^[【（(].+[:：].+[】)）]$/.test(line)) continue;
-        if (/^(?:当前项目|来源通道|目标通道|当前发信Agent|当前会话|source_ref|callback_to|联系类型|交互模式|展示分类|执行阶段|当前结论|当前状态|主状态|状态|是否通过或放行|是否通过|唯一阻塞|关键路径或 run_id|关键路径|run_id|下一步动作|下一步|需要对方|预期结果|系统已处理|需确认|说明|补充|当前进展|目标进展)\s*[:：]/i.test(line)) {
-          continue;
-        }
-        return line;
-      }
-      return "";
-    }
-
     function readConversationInboundSummary(text) {
       const src = String(text || "").trim();
       if (!src) {
         return {
           sourceChannel: "",
-          subjectText: "",
           currentConclusion: "",
-          currentStatus: "",
           nextAction: "",
           systemHandled: "",
           expectedResult: "",
@@ -80,21 +122,15 @@
       const kv = parseCallbackMessageKv(src);
       const read = (aliases) => firstNonEmptyText([pickCallbackKvValue(kv, aliases)]);
       const currentConclusion = read(["当前结论", "执行结论", "结论"]);
-      const currentStatus = read(["当前状态", "主状态", "状态", "是否通过或放行", "是否通过"]);
-      const nextAction = read(["下一步动作", "需要对方", "建议动作", "下一步", "预期结果", "目标进展"]);
+      const nextAction = read(["需要对方", "建议动作", "下一步", "预期结果", "目标进展"]);
       const systemHandled = read(["系统已处理", "已完成事项", "执行结果"]);
       const expectedResult = read(["预期结果", "结果预期", "目标进展"]);
-      const receiptTask = normalizeConversationInboundSubject(read(["回执任务", "任务", "关联任务"]));
-      const subjectText = firstNonEmptyText([
-        normalizeConversationInboundSubject(read(["本次目标", "通知事项", "主题", "标题"])),
-        receiptTask,
-      ]);
+      const receiptTask = read(["回执任务", "任务", "关联任务"]);
       const stage = normalizeCallbackStage(read(["执行阶段", "阶段"]), "");
       const needConfirm = read(["需确认", "需总控确认", "需要确认"]) || "无";
       const structuredFieldCount = [
-        subjectText,
         currentConclusion,
-        currentStatus,
+        read(["是否通过或放行", "是否通过"]),
         read(["唯一阻塞"]),
         read(["关键路径或 run_id", "关键路径", "run_id"]),
         read(["下一步动作", "下一步", "需要对方"]),
@@ -104,9 +140,7 @@
           read(["来源通道", "source channel", "来源channel"]),
           extractSourceChannelName(src),
         ]),
-        subjectText,
         currentConclusion,
-        currentStatus,
         nextAction,
         systemHandled,
         expectedResult,
@@ -244,9 +278,7 @@
         displayMode,
         isCollabInbound,
         sourceChannel,
-        subjectText: String(summary.subjectText || "").trim(),
         currentConclusion: String(summary.currentConclusion || "").trim(),
-        currentStatus: String(summary.currentStatus || "").trim(),
         nextAction: String(summary.nextAction || "").trim(),
         systemHandled: String(summary.systemHandled || "").trim(),
         expectedResult: String(summary.expectedResult || "").trim(),
@@ -284,9 +316,7 @@
         kind,
         displayMode: displayMeta.displayMode,
         sourceChannel: displayMeta.sourceChannel,
-        subjectText: displayMeta.subjectText,
         currentConclusion: displayMeta.currentConclusion,
-        currentStatus: displayMeta.currentStatus,
         nextAction: displayMeta.nextAction,
         systemHandled: displayMeta.systemHandled,
         expectedResult: displayMeta.expectedResult,
@@ -405,39 +435,18 @@
       return box;
     }
 
-    function buildConversationInboundFactRows(summary, opts = {}) {
-      const s = (summary && typeof summary === "object") ? summary : {};
-      const title = String(opts.title || "").trim();
-      const root = el("div", { class: "msg-inbound-card-facts" });
-      const usedValues = new Set();
-      const addRow = (label, value, extraClass = "") => {
-        const text = String(value || "").trim();
-        if (!text) return;
-        const normalized = text.replace(/\s+/g, " ").trim();
-        if (!normalized) return;
-        if (title && normalized === title) return;
-        if (usedValues.has(normalized)) return;
-        usedValues.add(normalized);
-        const row = el("div", { class: "msg-inbound-card-fact" + (extraClass ? (" " + extraClass) : "") });
-        row.appendChild(el("div", { class: "msg-inbound-card-fact-k", text: label }));
-        row.appendChild(el("div", { class: "msg-inbound-card-fact-v", text }));
-        root.appendChild(row);
-      };
-      addRow("当前结论", s.currentConclusion, "is-emphasis");
-      addRow("当前状态", s.currentStatus);
-      addRow("下一动作", s.nextAction);
-      if (!String(s.nextAction || "").trim()) addRow("已处理", s.systemHandled);
-      if (!String(s.nextAction || "").trim()) addRow("预期结果", s.expectedResult);
-      return root.childNodes.length ? root : null;
-    }
-
     function resolveConversationInboundCardTitle(summary, rawText, fallback = "Agent 消息") {
       const s = (summary && typeof summary === "object") ? summary : {};
       const rawSummary = readConversationInboundSummary(rawText);
-      const normalizedFirstLine = extractConversationInboundLeadLine(rawText);
+      const raw = String(rawText || "").replace(/\r\n?/g, "\n");
+      const firstLine = raw
+        .split("\n")
+        .map((line) => String(line || "").trim())
+        .find(Boolean) || "";
+      const normalizedFirstLine = firstLine.replace(/^(?:当前结论|结论|标题|主题)\s*[:：]\s*/i, "").trim();
       return firstNonEmptyText([
-        normalizeConversationInboundSubject(s.subjectText),
-        normalizeConversationInboundSubject(rawSummary.subjectText),
+        s.currentConclusion,
+        rawSummary.currentConclusion,
         s.receiptTask,
         rawSummary.receiptTask,
         normalizedFirstLine,
@@ -448,7 +457,6 @@
     function renderConversationInboundAgentCard(summary, opts = {}) {
       const s = (summary && typeof summary === "object") ? summary : {};
       const rawText = String(opts.rawText || "").trim();
-      const rawSummary = readConversationInboundSummary(rawText);
       const title = resolveConversationInboundCardTitle(s, rawText, "Agent 消息");
       const sourceAgentName = String(firstNonEmptyText([opts.sourceAgentName]) || "").trim();
       const sourceChannel = String(firstNonEmptyText([opts.sourceChannel, s.sourceChannel]) || "").trim();
@@ -468,14 +476,17 @@
       else if (s.stage) head.appendChild(chip(String(s.stage), "muted"));
       root.appendChild(head);
 
-      const factRows = buildConversationInboundFactRows({
-        currentConclusion: firstNonEmptyText([s.currentConclusion, rawSummary.currentConclusion]),
-        currentStatus: firstNonEmptyText([s.currentStatus, rawSummary.currentStatus]),
-        nextAction: firstNonEmptyText([s.nextAction, rawSummary.nextAction]),
-        systemHandled: firstNonEmptyText([s.systemHandled, rawSummary.systemHandled]),
-        expectedResult: firstNonEmptyText([s.expectedResult, rawSummary.expectedResult]),
-      }, { title });
-      if (factRows) root.appendChild(factRows);
+      const brief = firstNonEmptyText([
+        s.nextAction,
+        s.expectedResult,
+        s.systemHandled,
+      ]);
+      if (brief && brief !== title) {
+        root.appendChild(el("div", {
+          class: "msg-inbound-card-brief",
+          text: brief,
+        }));
+      }
 
       const raw = renderConversationInlineSnippet(rawText, {
         runId: opts.runId,
@@ -503,13 +514,13 @@
       const rawSummary = readConversationInboundSummary(opts.rawText || "");
       const sourceAgentName = String(firstNonEmptyText([opts.sourceAgentName, s.sourceAgentName]) || "").trim();
       const sourceChannel = String(firstNonEmptyText([opts.sourceChannel, s.sourceChannel]) || "").trim();
-      const pendingCount = Math.max(0, Number(opts.pendingCount || 0));
-      const isProcessing = pendingCount > 0;
-      const root = el("div", { class: "callback-event collab-receipt compact-receipt" + (isProcessing ? " is-processing" : "") });
-      const leadText = resolveConversationInboundCardTitle({
-        subjectText: firstNonEmptyText([s.subjectText, rawSummary.subjectText]),
-        receiptTask: firstNonEmptyText([s.receiptTask, rawSummary.receiptTask]),
-      }, opts.rawText || "", isProcessing ? "处理中" : "已回执");
+      const root = el("div", { class: "callback-event collab-receipt compact-receipt" });
+      const leadText = firstNonEmptyText([s.currentConclusion, rawSummary.currentConclusion, "已回执"]);
+      const briefText = firstNonEmptyText([
+        s.systemHandled,
+        s.expectedResult,
+        "当前 Agent 无需继续处理",
+      ]);
       root.appendChild(el("div", { class: "callback-event-lead", text: leadText }));
       const metaBits = [sourceAgentName, sourceChannel].filter((part, idx, arr) => {
         const text = String(part || "").trim();
@@ -518,20 +529,11 @@
       if (metaBits.length) {
         root.appendChild(el("div", { class: "callback-event-brief compact-meta", text: metaBits.join(" · ") }));
       }
-      const factRows = buildConversationInboundFactRows({
-        currentConclusion: firstNonEmptyText([s.currentConclusion, rawSummary.currentConclusion]),
-        currentStatus: firstNonEmptyText([s.currentStatus, rawSummary.currentStatus]),
-        nextAction: firstNonEmptyText([s.nextAction, rawSummary.nextAction]),
-        systemHandled: firstNonEmptyText([s.systemHandled, rawSummary.systemHandled]),
-        expectedResult: firstNonEmptyText([s.expectedResult, rawSummary.expectedResult]) || "当前 Agent 无需继续处理",
-      }, { title: leadText });
-      if (factRows) root.appendChild(factRows);
+      if (briefText && briefText !== leadText) {
+        root.appendChild(el("div", { class: "callback-event-brief", text: briefText }));
+      }
       const head = el("div", { class: "callback-event-head" });
       head.appendChild(chip("回执收纳", "muted"));
-      if (isProcessing) {
-        head.appendChild(statusChip("running"));
-        head.appendChild(chip("待办 " + String(pendingCount), "warn"));
-      }
       if (s.stage) head.appendChild(chip(String(s.stage), "muted"));
       if (s.needConfirm && s.needConfirm !== "无") head.appendChild(chip("需确认", "warn"));
       root.appendChild(head);
@@ -1325,15 +1327,13 @@
           const card = el("button", {
             class: "conv-receipt-card"
               + (pendingCount > 0 ? " has-pending" : "")
-              + (pendingCount > 0 ? " is-processing" : "")
               + (isConversationReceiptSelected(viewer, item) ? " selected" : ""),
             type: "button",
             title: [conversationReceiptPrimaryTitle(item), item.currentConclusion || "", item.callbackAt ? zhDateTime(item.callbackAt) : ""].filter(Boolean).join("\n"),
           });
           const headRow = el("div", { class: "conv-receipt-card-head" });
           headRow.appendChild(el("div", { class: "conv-receipt-card-title", text: conversationReceiptPrimaryTitle(item) }));
-          if (pendingCount > 0) headRow.appendChild(statusChip("running"));
-          if (status && !(pendingCount > 0 && status.tone === "good")) headRow.appendChild(chip(status.text, status.tone));
+          if (status) headRow.appendChild(chip(status.text, status.tone));
           card.appendChild(headRow);
           if (metaLine) card.appendChild(el("div", { class: "conv-receipt-card-meta", text: metaLine }));
           card.appendChild(el("div", {
@@ -2075,40 +2075,33 @@
       const callbackEventDuplicate = !!payload.callbackEventDuplicate;
       const restartRecoveryMeta = payload.restartRecoveryMeta || null;
       const restartRecoveryDuplicate = !!payload.restartRecoveryDuplicate;
-      const receiptProjection = payload.receiptProjection || null;
       const currentQueueDepth = Math.max(0, Number(payload.currentQueueDepth || 0));
       const aggregateCount = Math.max(0, Number(payload.aggregateCount || 0));
       const aggregateLastMergedAt = String(payload.aggregateLastMergedAt || "").trim();
       const actionBusy = String(payload.actionBusy || "");
-      const userVisualMode = resolveConversationUserVisualMode({
-        senderRun,
-        runSpec,
-        userSender,
-        userMessageKind,
-        displayUserText,
-        userText,
-        sourceText: firstNonEmptyText([
-          userText,
+      const userVisualMode = (payload.userVisualMode && typeof payload.userVisualMode === "object")
+        ? payload.userVisualMode
+        : resolveConversationUserVisualMode({
+          senderRun,
+          runSpec,
+          userSender,
+          userMessageKind,
           displayUserText,
-          r.messagePreview,
-          d && d.full && d.full.lastMessage,
-          d && d.full && d.full.message,
-        ]),
-      });
+          userText,
+          sourceText: firstNonEmptyText([
+            userText,
+            displayUserText,
+            r.messagePreview,
+            d && d.full && d.full.lastMessage,
+            d && d.full && d.full.message,
+          ]),
+        });
       const userSenderType = String(firstNonEmptyText([userSender && userSender.type, runSpec && runSpec.senderType]) || "").trim().toLowerCase();
       const isAgentInbound = userVisualMode.kind === "agent-inbound" || (userSenderType === "agent" && userVisualMode.displayMode !== "receipt" && userVisualMode.kind === "collab-inbound");
-      const receiptCardVisible = userVisualMode.kind === "receipt-inbound";
-      const renderCompactReceipt = !!(callbackEventMeta && userVisualMode.displayMode === "receipt");
-      const receiptPendingCount = Math.max(
-        0,
-        Number((receiptProjection && receiptProjection.rollup && receiptProjection.rollup.pendingActionCount) || 0),
-        Array.isArray(receiptProjection && receiptProjection.pendingActions) ? receiptProjection.pendingActions.length : 0
-      );
 
       const userRow = el("div", { class: "msgrow user" });
       userRow.classList.add(userVisualMode.kind);
       if (isAgentInbound) userRow.classList.add("agent-inbound");
-      if (renderCompactReceipt) userRow.classList.add("receipt-inbound");
       userRow.__conversationFileMeta = {
         runId: rid,
         createdAt: String(r.createdAt || ""),
@@ -2121,10 +2114,10 @@
 
       const userMeta = el("div", { class: "msgmeta" });
       userMeta.appendChild(buildSenderChip(userSender));
-      if (((userVisualMode.kind === "collab-inbound" || receiptCardVisible) && !isAgentInbound) || renderCompactReceipt) {
+      if ((userVisualMode.kind === "collab-inbound" || userVisualMode.kind === "receipt-inbound") && !isAgentInbound) {
         userMeta.appendChild(el("span", {
-          class: "msg-collab-badge" + ((receiptCardVisible || renderCompactReceipt) ? " receipt" : ""),
-          text: renderCompactReceipt || receiptCardVisible ? "收到回执" : "协作来信",
+          class: "msg-collab-badge" + (userVisualMode.kind === "receipt-inbound" ? " receipt" : ""),
+          text: userVisualMode.kind === "receipt-inbound" ? "收到回执" : "协作来信",
         }));
         const sourceLabel = String(userVisualMode.sourceChannel || "").trim();
         const senderLabel = String((userSender && userSender.label) || "").trim();
@@ -2159,43 +2152,21 @@
       }
 
       if (callbackEventMeta) {
-        if (renderCompactReceipt) {
-          userRow.appendChild(renderConversationInboundReceiptCard(userVisualMode, {
-            rawText: displayUserText || userText || String(r.messagePreview || ""),
-            replyContext,
-            runId: rid,
-            expandKey: String(rid + ":user-receipt"),
-            sourceAgentName: String(firstNonEmptyText([userSender && userSender.label, userVisualMode.sourceChannel]) || "").trim(),
-            sourceChannel: String(userVisualMode.sourceChannel || "").trim(),
-            pendingCount: receiptPendingCount,
-            onReply: ({ text }) => {
-              queueConversationReply({
-                runId: rid,
-                bubbleKey: String(rid + ":user"),
-                text: String(text || displayUserText || r.messagePreview || ""),
-                senderLabel: String(firstNonEmptyText([userSender && userSender.label, "我"]) || "我"),
-                timeLabel: compactDateTime(r.createdAt) || imTime(r.createdAt) || "",
-                createdAt: String(r.createdAt || ""),
-              });
-            },
-          }));
-        } else {
-          userRow.appendChild(renderCallbackEventCard(callbackEventMeta, {
-            duplicate: callbackEventDuplicate,
-            rawText: displayUserText || userText || String(r.messagePreview || ""),
-            replyContext,
-            onReply: ({ text }) => {
-              queueConversationReply({
-                runId: rid,
-                bubbleKey: String(rid + ":user"),
-                text: String(text || displayUserText || r.messagePreview || ""),
-                senderLabel: String(firstNonEmptyText([userSender && userSender.label, "我"]) || "我"),
-                timeLabel: compactDateTime(r.createdAt) || imTime(r.createdAt) || "",
-                createdAt: String(r.createdAt || ""),
-              });
-            },
-          }));
-        }
+        userRow.appendChild(renderCallbackEventCard(callbackEventMeta, {
+          duplicate: callbackEventDuplicate,
+          rawText: displayUserText || userText || String(r.messagePreview || ""),
+          replyContext,
+          onReply: ({ text }) => {
+            queueConversationReply({
+              runId: rid,
+              bubbleKey: String(rid + ":user"),
+              text: String(text || displayUserText || r.messagePreview || ""),
+              senderLabel: String(firstNonEmptyText([userSender && userSender.label, "我"]) || "我"),
+              timeLabel: compactDateTime(r.createdAt) || imTime(r.createdAt) || "",
+              createdAt: String(r.createdAt || ""),
+            });
+          },
+        }));
         if (queuedCompactMode && queuedInlineActions) {
           const replyText = String(displayUserText || r.messagePreview || "").trim();
           if (replyText) {
@@ -2233,14 +2204,13 @@
           },
         }));
       } else if (!callbackEventMeta) {
-        if (receiptCardVisible) {
+        if (userVisualMode.kind === "receipt-inbound") {
           userRow.appendChild(renderConversationInboundReceiptCard(userVisualMode, {
             runId: rid,
             rawTextComplete: !!(d && d.full && typeof d.full.message === "string"),
-            sourceAgentName: String(firstNonEmptyText([runSpec && runSpec.senderName, userSender && userSender.label]) || ""),
+            sourceAgentName: String(firstNonEmptyText([userSender && userSender.label, runSpec && runSpec.senderName]) || ""),
             sourceChannel: String(userVisualMode.sourceChannel || ""),
             rawText: displayUserText || userText || String(r.messagePreview || ""),
-            pendingCount: receiptPendingCount,
             onReply: ({ text }) => {
               queueConversationReply({
                 runId: rid,
@@ -2257,7 +2227,7 @@
             runId: rid,
             rawText: displayUserText || userText || String(r.messagePreview || ""),
             rawTextComplete: !!(d && d.full && typeof d.full.message === "string"),
-            sourceAgentName: String(firstNonEmptyText([runSpec && runSpec.senderName, userSender && userSender.label]) || ""),
+            sourceAgentName: String(firstNonEmptyText([userSender && userSender.label, runSpec && runSpec.senderName]) || ""),
             sourceChannel: String(userVisualMode.sourceChannel || ""),
             onReply: ({ text }) => {
               queueConversationReply({
@@ -2272,29 +2242,16 @@
           }));
         } else if (userVisualMode.kind === "collab-inbound" && (userVisualMode.currentConclusion || userVisualMode.nextAction)) {
           const summaryCard = el("div", { class: "msg-collab-summary" });
-          const collabTitle = firstNonEmptyText([userVisualMode.subjectText, userVisualMode.receiptTask]);
-          if (collabTitle) {
-            summaryCard.appendChild(el("div", {
-              class: "msg-collab-summary-title",
-              text: collabTitle,
-            }));
-          }
           if (userVisualMode.currentConclusion) {
             summaryCard.appendChild(el("div", {
               class: "msg-collab-summary-main",
               text: userVisualMode.currentConclusion,
             }));
           }
-          if (userVisualMode.currentStatus) {
-            summaryCard.appendChild(el("div", {
-              class: "msg-collab-summary-state",
-              text: "当前状态：" + userVisualMode.currentStatus,
-            }));
-          }
           if (userVisualMode.nextAction) {
             summaryCard.appendChild(el("div", {
               class: "msg-collab-summary-sub",
-              text: "下一动作：" + userVisualMode.nextAction,
+              text: userVisualMode.nextAction,
             }));
           }
           userRow.appendChild(summaryCard);
@@ -2359,43 +2316,6 @@
       return userRow;
     }
 
-    function resolveConversationAssistantBodyMeta(payload = {}) {
-      const st = String(payload.status || "idle").trim().toLowerCase();
-      const processInfo = (payload.processInfo && typeof payload.processInfo === "object")
-        ? payload.processInfo
-        : {};
-      const displayAssistantText = String(payload.displayAssistantText || "").trim();
-      const err = String(payload.error || "").trim();
-      const latestProcessText = String(processInfo.latest || "").trim();
-      const processCount = Math.max(
-        0,
-        Number(processInfo.count || 0),
-        Array.isArray(processInfo.items) ? processInfo.items.length : 0
-      );
-      const reportedCount = Math.max(0, Number(processInfo.reportedCount || 0));
-      const inlineText = String(firstNonEmptyText([
-        displayAssistantText,
-        isRunWorking(st) ? latestProcessText : "",
-      ]) || "").trim();
-      const noVisibleAssistantOutput = !inlineText && processCount <= 0 && !err;
-      const placeholder = (st === "done" && noVisibleAssistantOutput)
-        ? "本轮执行已完成，但未生成可展示正文。"
-        : "";
-      return {
-        inlineText,
-        placeholder,
-        bodyTitle: isRunWorking(st) ? "最新进展" : "正文",
-        showBody: !!inlineText || !!placeholder,
-        noVisibleAssistantOutput,
-        needsDetailPrefetch: !!(
-          isRunWorking(st)
-          && !inlineText
-          && reportedCount > processCount
-          && !payload.detailLoading
-        ),
-      };
-    }
-
     function renderConversationAssistantFamily(payload = {}) {
       const rid = String(payload.rid || "");
       const r = payload.r || {};
@@ -2415,7 +2335,6 @@
       const callbackEventMeta = payload.callbackEventMeta || null;
       const restartRecoveryMeta = payload.restartRecoveryMeta || null;
       const receiptProjection = payload.receiptProjection || null;
-      const receiptCardVisible = !!payload.receiptCardVisible;
       const currentActiveRunId = String(payload.currentActiveRunId || "").trim();
       const currentQueuedRunId = String(payload.currentQueuedRunId || "").trim();
       const staleErrorWithActiveRun = st === "error" && currentActiveRunId && currentActiveRunId !== rid;
@@ -2461,22 +2380,11 @@
         });
       }
 
-      const assistantBodyMeta = resolveConversationAssistantBodyMeta({
-        status: st,
-        displayAssistantText,
-        processInfo,
-        error: err,
-        detailLoading: !!(d && d.loading),
-      });
-      if (assistantBodyMeta.needsDetailPrefetch && !d) {
-        ensureConversationRunDetail(rid, {
-          maxAgeMs: 1200,
-          terminalSyncStatus: "",
-        });
-      }
-      const assistantBubbleText = String(assistantBodyMeta.inlineText || "").trim();
-      const noVisibleAssistantOutput = !!assistantBodyMeta.noVisibleAssistantOutput;
-      const assistantBodyPlaceholder = String(assistantBodyMeta.placeholder || "").trim();
+      const assistantBubbleText = String(displayAssistantText || "").trim();
+      const noVisibleAssistantOutput = !assistantBubbleText && Number(processInfo.count || 0) <= 0 && !err;
+      const assistantBodyPlaceholder = (st === "done" && noVisibleAssistantOutput)
+        ? "本轮执行已完成，但未生成可展示正文。"
+        : "";
       const assistantDetailFull = d && d.full ? d.full : null;
       const assistantDetailState = assistantDetailFull ? deriveRunStateFromSource(assistantDetailFull.run, "") : "";
       const assistantDetailWorking = !!assistantDetailState && isWorkingLikeState(assistantDetailState);
@@ -2490,16 +2398,13 @@
           || (isRunWorking(st)
             ? !assistantHasProgressDetailText && !assistantHasTerminalDetailText
             : assistantDetailWorking || (!assistantHasTerminalDetailText && !assistantHasProgressDetailText)));
-      const showAssistantBodyCard = !!assistantBodyMeta.showBody;
+      const showAssistantBodyCard = (!!assistantBubbleText && !isRunWorking(st)) || !!assistantBodyPlaceholder;
       let bodyCard = null;
       if (showAssistantBodyCard) {
         const isPlaceholderOnly = !assistantBubbleText && !!assistantBodyPlaceholder;
         bodyCard = el("div", { class: "msg-body-card assistant" + (isPlaceholderOnly ? " is-placeholder" : "") });
         const bodyHead = el("div", { class: "msg-body-head" });
-        bodyHead.appendChild(el("div", {
-          class: "msg-body-title",
-          text: String(assistantBodyMeta.bodyTitle || "正文"),
-        }));
+        bodyHead.appendChild(el("div", { class: "msg-body-title", text: "正文" }));
         const bodyOps = el("div", { class: "bubbleops assistant msg-body-ops" });
         bodyHead.appendChild(bodyOps);
         bodyCard.appendChild(bodyHead);
@@ -2781,12 +2686,11 @@
       }
 
       if (bodyCard) aiRow.appendChild(bodyCard);
-
       const receiptStack = renderConversationReceiptStack({
         runId: rid,
         projection: receiptProjection,
       });
-      if (receiptStack && !receiptCardVisible) aiRow.appendChild(receiptStack);
+      if (receiptStack) aiRow.appendChild(receiptStack);
       if (st === "error" || (st === "interrupted" && outcomeMeta && outcomeMeta.outcomeState === "interrupted_infra")) {
         aiRow.appendChild(el("div", {
           class: "merr",

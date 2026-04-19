@@ -2,14 +2,11 @@
 
 from __future__ import annotations
 
-import os
 from typing import Any, Callable
 
+from task_dashboard.runtime.agent_display_name import attach_agent_display_fields
 from task_dashboard.runtime.session_display_state import build_session_display_fields
-from task_dashboard.runtime.session_task_tracking import (
-    build_prefetched_session_run_map,
-    build_session_task_tracking,
-)
+from task_dashboard.runtime.session_task_tracking import build_session_task_tracking
 
 
 def _safe_heartbeat_task_id(item: dict[str, Any], index: int) -> str:
@@ -191,68 +188,6 @@ def apply_session_heartbeat_summary_rows(
     return rows
 
 
-def apply_session_task_tracking_rows(
-    sessions: list[dict[str, Any]],
-    *,
-    project_id: str,
-    store: Any,
-) -> list[dict[str, Any]]:
-    pid = str(project_id or "").strip()
-    if not pid:
-        return sessions
-    tracking_run_limit = _session_list_task_tracking_run_limit()
-    session_ids = [
-        str(
-            row.get("id")
-            or row.get("session_id")
-            or row.get("sessionId")
-            or ""
-        ).strip()
-        for row in sessions
-        if isinstance(row, dict)
-    ]
-    prefetched_runs_by_session = build_prefetched_session_run_map(
-        store=store,
-        project_id=pid,
-        session_ids=session_ids,
-        per_session_limit=tracking_run_limit,
-    )
-    rows: list[dict[str, Any]] = []
-    for row in sessions:
-        if not isinstance(row, dict):
-            continue
-        item = dict(row)
-        session_id = str(
-            item.get("id")
-            or item.get("session_id")
-            or item.get("sessionId")
-            or ""
-        ).strip()
-        runtime_state = dict(item.get("runtime_state") or {}) if isinstance(item.get("runtime_state"), dict) else {}
-        item["task_tracking"] = build_session_task_tracking(
-            session=item,
-            store=store,
-            project_id=pid,
-            session_id=session_id,
-            runtime_state=runtime_state,
-            run_limit=tracking_run_limit,
-            runs=prefetched_runs_by_session.get(session_id),
-        )
-        rows.append(item)
-    return rows
-
-
-def _session_list_task_tracking_run_limit() -> int:
-    raw = str(os.environ.get("CCB_SESSION_LIST_TASK_TRACKING_RUN_LIMIT") or "").strip()
-    if raw:
-        try:
-            value = int(raw)
-            return max(6, min(value, 80))
-        except Exception:
-            pass
-    return 24
-
-
 def build_session_detail_payload(
     session: dict[str, Any],
     *,
@@ -303,4 +238,4 @@ def build_session_detail_payload(
         heartbeat_payload = heartbeat_runtime.list_session_tasks(project_id, session_id)
     enriched["heartbeat"] = heartbeat_payload
     enriched["heartbeat_summary"] = heartbeat_summary_payload(heartbeat_payload)
-    return enriched
+    return attach_agent_display_fields(enriched)

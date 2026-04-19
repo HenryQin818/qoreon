@@ -120,6 +120,14 @@
       const alias = String((raw && raw.alias) || "").trim();
       const channel = String(channelName || "").trim();
       const sid = String(sessionId || "").trim();
+      const contract = readAgentDisplayContract(raw);
+      const agentDisplayName = String(resolveAgentDisplayName(raw) || "").trim();
+      const agentNameState = normalizeAgentNameState(
+        contract.state || (agentDisplayName ? "resolved" : ""),
+        ""
+      );
+      const agentDisplayIssue = String(contract.issue || "").trim();
+      const agentStateLabel = String(agentNameStateLabel(agentNameState, agentDisplayIssue) || "").trim();
       const explicitDisplayChannel = String(
         (raw && (
           raw.displayChannel ||
@@ -142,17 +150,155 @@
         )) || ""
       ).trim();
       const displayChannel = alias || explicitDisplayChannel || channel || sid;
-      const displayName = alias || explicitDisplayName || displayChannel || channel || sid;
-      if (alias) displayNameSource = "alias";
-      else if (!displayNameSource && explicitDisplayName) displayNameSource = "display_name";
-      else if (!displayNameSource && channel) displayNameSource = "channel_name";
-      else if (!displayNameSource && sid) displayNameSource = "session_id";
+      const displayName = agentDisplayName || agentStateLabel || "";
+      if (agentDisplayName && !displayNameSource) {
+        displayNameSource = String(contract.source || "").trim() || "agent_display_name";
+      }
+      if (!agentDisplayName) {
+        displayNameSource = "";
+      }
       return {
         alias,
         displayChannel,
         displayName,
         displayNameSource,
+        agentDisplayName,
+        agentNameState,
+        agentDisplayIssue,
       };
+    }
+
+    function normalizeConversationListMetricsClient(raw) {
+      const src = (raw && typeof raw === "object") ? raw : null;
+      if (!src) return null;
+      return {
+        task_counts: (src.task_counts && typeof src.task_counts === "object") ? { ...src.task_counts } : {},
+        current_task_summary: (src.current_task_summary && typeof src.current_task_summary === "object")
+          ? { ...src.current_task_summary }
+          : null,
+        memo_summary: (src.memo_summary && typeof src.memo_summary === "object")
+          ? { ...src.memo_summary }
+          : ((src.memoSummary && typeof src.memoSummary === "object") ? { ...src.memoSummary } : null),
+        status_badges: Array.isArray(src.status_badges) ? src.status_badges.map((item) => ({ ...(item || {}) })) : [],
+        detail_hydration: (src.detail_hydration && typeof src.detail_hydration === "object")
+          ? { ...src.detail_hydration }
+          : {},
+      };
+    }
+
+    function hasConversationListMetricsClientData(raw) {
+      const metrics = normalizeConversationListMetricsClient(raw);
+      return !!(metrics && (
+        Object.keys(metrics.task_counts || {}).length
+        || (metrics.current_task_summary && Object.keys(metrics.current_task_summary).length)
+        || (metrics.memo_summary && Object.keys(metrics.memo_summary).length)
+        || (Array.isArray(metrics.status_badges) && metrics.status_badges.length)
+      ));
+    }
+
+    function mergeConversationListMetricsClient(prevRaw, nextRaw) {
+      const prev = normalizeConversationListMetricsClient(prevRaw);
+      const next = normalizeConversationListMetricsClient(nextRaw);
+      if (!prev && !next) return null;
+      if (!prev) return next;
+      if (!next) return prev;
+      return {
+        task_counts: { ...(prev.task_counts || {}), ...(next.task_counts || {}) },
+        current_task_summary: next.current_task_summary || prev.current_task_summary || null,
+        memo_summary: next.memo_summary || prev.memo_summary || null,
+        status_badges: (Array.isArray(next.status_badges) && next.status_badges.length)
+          ? next.status_badges
+          : (prev.status_badges || []),
+        detail_hydration: { ...(prev.detail_hydration || {}), ...(next.detail_hydration || {}) },
+      };
+    }
+
+    function conversationSessionStateSources(session) {
+      const s = (session && typeof session === "object") ? session : {};
+      const raw = (s._state_sources && typeof s._state_sources === "object") ? s._state_sources : {};
+      return {
+        runtime_state: !!raw.runtime_state,
+        session_display_state: !!raw.session_display_state,
+        latest_run_summary: !!raw.latest_run_summary,
+        latest_effective_run_summary: !!raw.latest_effective_run_summary,
+      };
+    }
+
+    function conversationSessionHasRuntimeStateSource(session) {
+      const sources = conversationSessionStateSources(session);
+      if (sources.runtime_state) return true;
+      const runtimeState = getSessionRuntimeState(session);
+      return !!(
+        runtimeState.active_run_id
+        || runtimeState.queued_run_id
+        || String(runtimeState.updated_at || "").trim()
+        || (runtimeState.display_state && runtimeState.display_state !== "idle")
+      );
+    }
+
+    function conversationSessionHasDisplayStateSource(session) {
+      const sources = conversationSessionStateSources(session);
+      if (sources.session_display_state) return true;
+      const s = (session && typeof session === "object") ? session : {};
+      return !!String(firstNonEmptyText([s.session_display_state, s.sessionDisplayState]) || "").trim();
+    }
+
+    function isConversationActiveDisplayState(raw) {
+      const state = normalizeDisplayState(raw, "idle");
+      return state === "running" || state === "queued" || state === "retry_waiting" || state === "external_busy";
+    }
+
+    function conversationSessionLatestRunSummaryForActivePreserve(session) {
+      const s = (session && typeof session === "object") ? session : {};
+      return s.latest_run_summary || s.latestRunSummary || null;
+    }
+
+    function conversationSessionHasTerminalSummaryForPreviousActive(session, previousSession) {
+      const summary = conversationSessionLatestRunSummaryForActivePreserve(session) || {};
+      const runId = String(firstNonEmptyText([summary.run_id, summary.runId]) || "").trim();
+      const status = normalizeDisplayState(firstNonEmptyText([summary.status, summary.display_state, summary.displayState]) || "", "");
+      const previousRuntime = getSessionRuntimeState(previousSession);
+      const previousRunIds = new Set([
+        String(previousRuntime.active_run_id || "").trim(),
+        String(previousRuntime.queued_run_id || "").trim(),
+      ].filter(Boolean));
+      return !!(runId && previousRunIds.has(runId) && (status === "done" || status === "error" || status === "interrupted"));
+    }
+
+    function conversationShouldPreserveActiveSessionState(nextSession, previousSession) {
+      const previousDisplayState = normalizeDisplayState(
+        firstNonEmptyText([
+          previousSession && previousSession.session_display_state,
+          previousSession && previousSession.sessionDisplayState,
+          previousSession && previousSession.runtime_state && previousSession.runtime_state.display_state,
+          previousSession && previousSession.runtimeState && previousSession.runtimeState.display_state,
+        ]) || "idle",
+        "idle"
+      );
+      const nextDisplayState = normalizeDisplayState(
+        firstNonEmptyText([
+          nextSession && nextSession.session_display_state,
+          nextSession && nextSession.sessionDisplayState,
+          nextSession && nextSession.runtime_state && nextSession.runtime_state.display_state,
+          nextSession && nextSession.runtimeState && nextSession.runtimeState.display_state,
+        ]) || "idle",
+        "idle"
+      );
+      if (!isConversationActiveDisplayState(previousDisplayState)) return false;
+      if (isConversationActiveDisplayState(nextDisplayState)) return false;
+      if (conversationSessionHasTerminalSummaryForPreviousActive(nextSession, previousSession)) return false;
+      if (!conversationSessionHasRuntimeStateSource(nextSession) && !conversationSessionHasDisplayStateSource(nextSession)) {
+        return true;
+      }
+      const runtimeState = getSessionRuntimeState(nextSession);
+      return (
+        normalizeDisplayState(runtimeState.display_state, "idle") === "idle"
+        && normalizeDisplayState(runtimeState.internal_state, "idle") === "idle"
+        && !runtimeState.external_busy
+        && !String(runtimeState.active_run_id || "").trim()
+        && !String(runtimeState.queued_run_id || "").trim()
+        && Math.max(0, Number(runtimeState.queue_depth || 0) || 0) <= 0
+      );
     }
 
     function normalizeConversationTaskOwner(raw) {
@@ -267,8 +413,6 @@
         task_path: taskPath,
         task_title: taskTitle || taskPath || taskId,
         task_primary_status: String(firstNonEmptyText([src.task_primary_status, src.taskPrimaryStatus]) || "").trim(),
-        created_at: String(firstNonEmptyText([src.created_at, src.createdAt]) || "").trim(),
-        due: String(firstNonEmptyText([src.due, src.due_at, src.dueAt]) || "").trim(),
         relation: String(firstNonEmptyText([src.relation, fallbackRelation]) || "tracking").trim().toLowerCase() || "tracking",
         source: String(src.source || "system_merge").trim() || "system_merge",
         first_seen_at: String(firstNonEmptyText([src.first_seen_at, src.firstSeenAt]) || "").trim(),
@@ -362,6 +506,141 @@
       if (!PCONV.sessionFetchCacheByKey || typeof PCONV.sessionFetchCacheByKey !== "object") {
         PCONV.sessionFetchCacheByKey = Object.create(null);
       }
+      if (!PCONV.pollingMetaByProject || typeof PCONV.pollingMetaByProject !== "object") {
+        PCONV.pollingMetaByProject = Object.create(null);
+      }
+    }
+
+    function normalizeConversationPollingNumber(raw, fallback = 0) {
+      const num = Number(raw);
+      if (!Number.isFinite(num)) return Math.max(0, Number(fallback) || 0);
+      return Math.max(0, Math.round(num));
+    }
+
+    function normalizeConversationSessionsPollingHints(raw) {
+      const src = (raw && typeof raw === "object") ? raw : {};
+      return {
+        enabled: Object.prototype.hasOwnProperty.call(src, "enabled") ? !!src.enabled : true,
+        cache_ttl_ms: normalizeConversationPollingNumber(src.cache_ttl_ms ?? src.cacheTtlMs, 2500),
+        inflight_wait_ms: normalizeConversationPollingNumber(src.inflight_wait_ms ?? src.inflightWaitMs, 7000),
+        poll_interval_ms: normalizeConversationPollingNumber(src.poll_interval_ms ?? src.pollIntervalMs, 45000),
+        hidden_poll_interval_ms: normalizeConversationPollingNumber(src.hidden_poll_interval_ms ?? src.hiddenPollIntervalMs, 90000),
+        backoff_step_ms: normalizeConversationPollingNumber(src.backoff_step_ms ?? src.backoffStepMs, 2000),
+        backoff_max_ms: normalizeConversationPollingNumber(src.backoff_max_ms ?? src.backoffMaxMs, 15000),
+        pause_when_hidden: !!(src.pause_when_hidden ?? src.pauseWhenHidden),
+        cross_tab_dedupe_enabled: !!(src.cross_tab_dedupe_enabled ?? src.crossTabDedupeEnabled),
+      };
+    }
+
+    function updateConversationProjectPollingMeta(projectId, payload = {}) {
+      const pid = String(projectId || "").trim();
+      if (!pid) return null;
+      ensureConversationSessionDirectoryStateMaps();
+      const src = (payload && typeof payload === "object") ? payload : {};
+      const perfGovernance = (src.perf_governance && typeof src.perf_governance === "object")
+        ? src.perf_governance
+        : ((src.perfGovernance && typeof src.perfGovernance === "object") ? src.perfGovernance : {});
+      const pollingHints = (src.polling_hints && typeof src.polling_hints === "object")
+        ? src.polling_hints
+        : ((src.pollingHints && typeof src.pollingHints === "object") ? src.pollingHints : {});
+      const sessionsRaw = (pollingHints.sessions && typeof pollingHints.sessions === "object")
+        ? pollingHints.sessions
+        : ((pollingHints.session_directory && typeof pollingHints.session_directory === "object")
+          ? pollingHints.session_directory
+          : null);
+      const current = (PCONV.pollingMetaByProject && PCONV.pollingMetaByProject[pid]) || {};
+      const nextSessions = sessionsRaw ? normalizeConversationSessionsPollingHints(sessionsRaw) : (current.sessions || null);
+      if (nextSessions && Object.prototype.hasOwnProperty.call(perfGovernance, "enabled") && !perfGovernance.enabled) {
+        nextSessions.enabled = false;
+      }
+      const next = {
+        ...current,
+        project_id: pid,
+        updated_at: new Date().toISOString(),
+        perf_governance: {
+          ...(current.perf_governance || {}),
+          ...(perfGovernance || {}),
+        },
+        sessions: nextSessions,
+      };
+      PCONV.pollingMetaByProject[pid] = next;
+      return next;
+    }
+
+    function conversationProjectPollingHints(projectId) {
+      const pid = String(projectId || "").trim();
+      if (!pid) return null;
+      ensureConversationSessionDirectoryStateMaps();
+      const meta = PCONV.pollingMetaByProject && PCONV.pollingMetaByProject[pid];
+      return meta && meta.sessions ? meta.sessions : null;
+    }
+
+    function shouldForceConversationSessionDirectoryLiveFetch(projectId, channelName = "", opts = {}) {
+      const pid = String(projectId || "").trim();
+      if (!pid || pid === "overview") return false;
+      if (opts && opts.force) return true;
+      const channel = String(channelName || "").trim();
+      if (channel) return false;
+      const source = String((opts && opts.source) || "").trim().toLowerCase();
+      if (source === "poll") return true;
+      return false;
+    }
+
+    function conversationProjectPollingCadenceMs(projectId, channelName = "", opts = {}) {
+      const pid = String(projectId || "").trim();
+      if (!pid || pid === "overview") return 0;
+      const policy = typeof conversationProjectPollingHints === "function"
+        ? conversationProjectPollingHints(pid)
+        : null;
+      const source = String((opts && opts.source) || "").trim().toLowerCase();
+      if (policy && policy.enabled) {
+        if (source === "poll" || !String(channelName || "").trim()) {
+          return normalizeConversationPollingNumber(policy.poll_interval_ms, 3000);
+        }
+      }
+      return normalizeConversationPollingNumber((opts && opts.freshnessMs) || 0, 0);
+    }
+
+    function resolveConversationSessionsFreshnessMs(projectId, channelName = "", opts = {}) {
+      const freshnessMs = normalizeConversationPollingNumber((opts && opts.freshnessMs) || 0, 0);
+      const source = String((opts && opts.source) || "").trim().toLowerCase();
+      if (source === "poll" && !String(channelName || "").trim()) {
+        return Math.max(freshnessMs, 18000);
+      }
+      const cadenceMs = conversationProjectPollingCadenceMs(projectId, channelName, opts);
+      return Math.max(freshnessMs, cadenceMs);
+    }
+
+    function shouldDeferConversationSessionDirectoryLiveLoad(opts = {}) {
+      const src = (opts && typeof opts === "object") ? opts : {};
+      const canSeedSelectedSession = !!src.canSeedSelectedSession;
+      const hasSelectedTimelineCache = !!src.hasSelectedTimelineCache;
+      const hasServerDirectorySessions = !!src.hasServerDirectorySessions;
+      return !!(canSeedSelectedSession && !hasSelectedTimelineCache && !hasServerDirectorySessions);
+    }
+
+    function resolveConversationSessionDirectoryLiveMeta(opts = {}) {
+      const src = (opts && typeof opts === "object") ? opts : {};
+      const existingMeta = (src.existingMeta && typeof src.existingMeta === "object") ? src.existingMeta : {};
+      if (shouldDeferConversationSessionDirectoryLiveLoad(src)) {
+        return {
+          ...existingMeta,
+          liveLoaded: false,
+          source: "explicit-sid-deferred",
+        };
+      }
+      if (src.hasServerDirectorySessions) {
+        return {
+          ...existingMeta,
+          liveLoaded: true,
+          source: "api",
+        };
+      }
+      return {
+        ...existingMeta,
+        liveLoaded: !!existingMeta.liveLoaded,
+        source: String(existingMeta.source || "").trim() || "config",
+      };
     }
 
     function ensureConversationSessionDetailStateMaps() {
@@ -627,6 +906,7 @@
           throw new Error("loadChannelSessions failed: " + String(r.status || "unknown"));
         }
         const j = await r.json();
+        updateConversationProjectPollingMeta(pid, j);
         const sessions = formatConversationSessionsFromApi(
           pid,
           Array.isArray(j && j.sessions) ? j.sessions : []
@@ -664,8 +944,12 @@
           const merged = mergeConversationSessions(configuredProjectConversations(pid), serverSessions);
           PCONV.sessionDirectoryByProject[pid] = merged.slice();
           markConversationSessionDirectoryMeta(pid, {
-            liveLoaded: true,
-            source: "api",
+            ...resolveConversationSessionDirectoryLiveMeta({
+              canSeedSelectedSession: !!opts.canSeedSelectedSession,
+              hasSelectedTimelineCache: !!opts.hasSelectedTimelineCache,
+              hasServerDirectorySessions: !!serverSessions.length,
+              existingMeta: meta,
+            }),
             loadedAt: new Date().toISOString(),
             error: "",
           });
@@ -766,22 +1050,6 @@
       const workdir = String((workdirInput && workdirInput.value) || "").trim();
       const branch = String((branchInput && branchInput.value) || "").trim();
       const initMessage = String((initMessageInput && initMessageInput.value) || "").trim();
-      const pendingDraft = mode === "create" ? {
-        mode: "create",
-        projectId: pid,
-        channelName: ch,
-        cliType: cli,
-        model,
-        alias,
-        purpose,
-        sessionRole,
-        reuseStrategy,
-        environment,
-        worktreeRoot,
-        workdir,
-        branch,
-        initMessage,
-      } : null;
 
       if (!pid || pid === "overview") {
         newConvModalError("请选择项目");
@@ -798,7 +1066,6 @@
         createBtn.textContent = mode === "attach" ? "绑定中..." : "创建中...";
       }
       newConvModalError("");
-      let pendingBlockId = "";
 
       try {
         let sid = "";
@@ -812,83 +1079,6 @@
           if (!meta.available) return String(baseTip || "");
           return String(baseTip || "") + " 上下文来源：" + String((meta.sourceMeta && meta.sourceMeta.text) || "待返回") + "。";
         };
-        const reportCreateFailure = (message) => {
-          const detailText = String(message || "创建失败").trim() || "创建失败";
-          if (mode === "create" && pendingBlockId) {
-            markConversationPendingCreateBlockFailed(pid, pendingBlockId, detailText, pendingDraft);
-            setHintText(STATE.panelMode, "创建失败，可在失败块中重试。");
-            render();
-            return true;
-          }
-          newConvModalError("创建失败：" + detailText);
-          return false;
-        };
-        const injectCreatedConversationSession = () => {
-          if (!sid) return;
-          const nowIso = new Date().toISOString();
-          const baseSessions = Array.isArray(PCONV.sessionDirectoryByProject && PCONV.sessionDirectoryByProject[pid])
-            ? PCONV.sessionDirectoryByProject[pid].slice()
-            : (
-              pid === String(PCONV.lastProjectId || "")
-              && Array.isArray(PCONV.sessions)
-                ? PCONV.sessions.filter((session) => !isConversationPendingCreateSession(session))
-                : configuredProjectConversations(pid)
-            );
-          const merged = mergeConversationSessions(baseSessions, [{
-            id: sid,
-            session_id: sid,
-            sessionId: sid,
-            project_id: pid,
-            projectId: pid,
-            channel_name: ch,
-            channelName: ch,
-            primaryChannel: ch,
-            channels: ch ? [ch] : [],
-            cli_type: effectiveCli,
-            cliType: effectiveCli,
-            model,
-            alias,
-            purpose,
-            session_role: sessionRole,
-            sessionRole,
-            is_primary: sessionRole === "primary",
-            isPrimary: sessionRole === "primary",
-            environment,
-            worktree_root: worktreeRoot,
-            workdir,
-            branch,
-            source: "ui-create-pending",
-            lastActiveAt: nowIso,
-            created_at: nowIso,
-          }]);
-          if (Array.isArray(merged) && merged.length) {
-            if (!PCONV.sessionDirectoryByProject || typeof PCONV.sessionDirectoryByProject !== "object") {
-              PCONV.sessionDirectoryByProject = Object.create(null);
-            }
-            PCONV.sessionDirectoryByProject[pid] = merged;
-            if (pid === String(PCONV.lastProjectId || "")) {
-              PCONV.sessions = merged.slice();
-            }
-          }
-        };
-
-        if (mode === "create") {
-          pendingBlockId = String(NEW_CONV_UI.retryPendingBlockId || "").trim()
-            || ("pending-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8));
-          upsertConversationPendingCreateBlock({
-            id: pendingBlockId,
-            projectId: pid,
-            channelName: ch,
-            state: "creating",
-            error: "",
-            submittedAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-            formDraft: pendingDraft,
-          });
-          closeNewConvModal();
-          setHintText(STATE.panelMode, "已提交创建，正在接入通道对话…");
-          render();
-        }
 
         if (mode === "attach") {
           if (!looksLikeSessionId(sidFromInput)) {
@@ -983,14 +1173,14 @@
               detailStr = String(detail || "unknown");
             }
             if (!sid) {
-              reportCreateFailure(detailStr);
+              newConvModalError("创建失败：" + detailStr);
               return;
             }
           }
           const session = j && j.session;
           if (!sid) sid = session && session.id ? String(session.id).trim() : "";
           if (!sid) {
-            reportCreateFailure("未获取到 session_id");
+            newConvModalError("创建失败：未获取到 session_id");
             return;
           }
           let recoveredSessionPayload = session || j || null;
@@ -1011,7 +1201,7 @@
               branch,
             });
             if (!recovered.ok) {
-              reportCreateFailure("创建超时后补登记失败：" + String(recovered.error || "unknown"));
+              newConvModalError("创建超时后补登记失败：" + String(recovered.error || "unknown"));
               return;
             }
             sid = String(recovered.sid || sid).trim();
@@ -1024,7 +1214,7 @@
           if (effectiveSession && effectiveSession.cli_type) effectiveCli = String(effectiveSession.cli_type);
           const ok = await setBinding(pid, ch, sid, effectiveCli);
           if (!ok) {
-            reportCreateFailure("创建成功但绑定失败：请检查 Token 或服务状态后重试绑定。");
+            newConvModalError("创建成功但绑定失败：请检查 Token 或服务状态后重试绑定。");
             return;
           }
           tip = timeoutRecovered
@@ -1062,30 +1252,13 @@
           tip += " 已自动重建看板；请按 Cmd+Shift+R 强刷后确认可见性。";
         }
 
-        if (mode === "create" && pendingBlockId) {
-          injectCreatedConversationSession();
-          removeConversationPendingCreateBlock(pid, pendingBlockId);
-          setSelectedSessionId(sid, true, { explicit: true });
-          render();
-        } else {
-          closeNewConvModal();
-        }
+        closeNewConvModal();
         await refreshConversationPanel();
         setSelectedSessionId(sid, true, { explicit: true });
         setHintText(STATE.panelMode, tip);
         render();
       } catch (err) {
-        if (mode === "create") {
-          if (pendingBlockId) {
-            markConversationPendingCreateBlockFailed(pid, pendingBlockId, "网络或服务异常", pendingDraft);
-            setHintText(STATE.panelMode, "创建失败，可在失败块中重试。");
-            render();
-          } else {
-            newConvModalError("创建失败：网络或服务异常");
-          }
-        } else {
-          newConvModalError("绑定失败：网络或服务异常");
-        }
+        newConvModalError((mode === "attach" ? "绑定失败：" : "创建失败：") + "网络或服务异常");
       } finally {
         if (createBtn) {
           createBtn.disabled = false;
@@ -1141,100 +1314,11 @@
       }
     }
 
-    function normalizeTeamExpansionHintState(raw) {
-      const text = String(raw || "").trim().toLowerCase();
-      if (text === "hidden") return "hidden";
-      if (text === "first_agent_ready_pending_team_setup") return "first_agent_ready_pending_team_setup";
-      if (text === "team_setup_in_progress") return "team_setup_in_progress";
-      if (text === "team_setup_done") return "team_setup_done";
-      if (text === "blocked") return "blocked";
-      return "";
-    }
-
-    function normalizeConversationTeamExpansionHint(raw) {
-      const src = (raw && typeof raw === "object") ? raw : {};
-      const directHint = (src.team_expansion_hint && typeof src.team_expansion_hint === "object")
-        ? src.team_expansion_hint
-        : ((src.teamExpansionHint && typeof src.teamExpansionHint === "object") ? src.teamExpansionHint : {});
-      const execContext = (src.project_execution_context && typeof src.project_execution_context === "object")
-        ? src.project_execution_context
-        : (((src.projectExecutionContext && typeof src.projectExecutionContext === "object")
-          ? src.projectExecutionContext
-          : {}));
-      const execHint = (execContext.team_expansion_hint && typeof execContext.team_expansion_hint === "object")
-        ? execContext.team_expansion_hint
-        : ((execContext.teamExpansionHint && typeof execContext.teamExpansionHint === "object") ? execContext.teamExpansionHint : {});
-      const stateCandidates = [
-        src.team_expansion_hint_state,
-        src.teamExpansionHintState,
-        directHint.state,
-        directHint.hint_state,
-        directHint.hintState,
-        execContext.team_expansion_hint_state,
-        execContext.teamExpansionHintState,
-        execHint.state,
-        execHint.hint_state,
-        execHint.hintState,
-      ];
-      const prompt = String(firstNonEmptyText([
-        src.team_expansion_hint_prompt,
-        src.teamExpansionHintPrompt,
-        directHint.prompt,
-        directHint.prompt_text,
-        directHint.promptText,
-        execContext.team_expansion_hint_prompt,
-        execContext.teamExpansionHintPrompt,
-        execHint.prompt,
-        execHint.prompt_text,
-        execHint.promptText,
-      ]) || "").trim();
-      const summary = String(firstNonEmptyText([
-        src.team_expansion_hint_summary,
-        src.teamExpansionHintSummary,
-        directHint.summary,
-        directHint.description,
-        directHint.desc,
-        execContext.team_expansion_hint_summary,
-        execContext.teamExpansionHintSummary,
-        execHint.summary,
-        execHint.description,
-        execHint.desc,
-      ]) || "").trim();
-      const blockedSummary = String(firstNonEmptyText([
-        src.team_expansion_hint_blocked_summary,
-        src.teamExpansionHintBlockedSummary,
-        directHint.blocked_summary,
-        directHint.blockedSummary,
-        directHint.block_reason,
-        directHint.blockReason,
-        execContext.team_expansion_hint_blocked_summary,
-        execContext.teamExpansionHintBlockedSummary,
-        execHint.blocked_summary,
-        execHint.blockedSummary,
-        execHint.block_reason,
-        execHint.blockReason,
-      ]) || "").trim();
-      const explicit = stateCandidates.some((value) => String(value || "").trim() !== "");
-      const state = normalizeTeamExpansionHintState(firstNonEmptyText(stateCandidates));
-      if (!explicit && !prompt && !summary && !blockedSummary) return null;
-      return {
-        explicit: explicit || !!state,
-        state: state || "",
-        prompt,
-        summary,
-        blocked_summary: blockedSummary,
-      };
-    }
-
-    function hasConversationTeamExpansionHintData(rawHint) {
-      const hint = (rawHint && typeof rawHint === "object") ? rawHint : null;
-      return !!(hint && hint.explicit);
-    }
-
     function normalizeConversationSession(raw) {
       if (!raw) return null;
       const sid = String(raw.sessionId || raw.id || raw.session_id || "").trim();
       if (!looksLikeSessionId(sid)) return null;
+      const projectId = String(raw.project_id || raw.projectId || STATE.project || "").trim();
       const channelName = String(
         raw.channel_name || raw.primaryChannel || raw.name ||
         (Array.isArray(raw.channels) && raw.channels.length ? raw.channels[0] : "")
@@ -1252,11 +1336,24 @@
         raw.heartbeat_summary || raw.heartbeatSummary || rawHeartbeat.summary || {},
         heartbeatItems
       );
-      const teamExpansionHint = normalizeConversationTeamExpansionHint(raw);
+      const normalizedConversationListMetrics = typeof normalizeConversationListMetricsClient === "function"
+        ? normalizeConversationListMetricsClient(raw.conversation_list_metrics || raw.conversationListMetrics || null)
+        : (((raw.conversation_list_metrics || raw.conversationListMetrics) && typeof (raw.conversation_list_metrics || raw.conversationListMetrics) === "object")
+          ? { ...(raw.conversation_list_metrics || raw.conversationListMetrics) }
+          : null);
+      const memoSummary = (raw.memo_summary && typeof raw.memo_summary === "object")
+        ? { ...raw.memo_summary }
+        : ((raw.memoSummary && typeof raw.memoSummary === "object")
+          ? { ...raw.memoSummary }
+          : ((normalizedConversationListMetrics && normalizedConversationListMetrics.memo_summary && typeof normalizedConversationListMetrics.memo_summary === "object")
+            ? { ...normalizedConversationListMetrics.memo_summary }
+            : null));
 
       return {
         sessionId: sid,
         id: sid,
+        project_id: projectId,
+        projectId,
         channel_name: channelName,
         primaryChannel: channelName || "",
         channels,
@@ -1318,8 +1415,10 @@
         project_execution_context: normalizeProjectExecutionContext(
           raw.project_execution_context || raw.projectExecutionContext || null
         ),
-        team_expansion_hint: teamExpansionHint,
         task_tracking: normalizeTaskTrackingClient(raw.task_tracking || raw.taskTracking || null),
+        conversation_list_metrics: normalizedConversationListMetrics,
+        memo_summary: memoSummary,
+        memoSummary: memoSummary,
       };
     }
 
@@ -1335,12 +1434,14 @@
         project_execution_context: nextExecContext.available
           ? next.project_execution_context
           : (prevExecContext.available ? prev.project_execution_context : next.project_execution_context),
-        team_expansion_hint: hasConversationTeamExpansionHintData(next.team_expansion_hint)
-          ? next.team_expansion_hint
-          : (hasConversationTeamExpansionHintData(prev.team_expansion_hint) ? prev.team_expansion_hint : null),
         task_tracking: hasConversationTaskTrackingData(next.task_tracking)
           ? next.task_tracking
           : (hasConversationTaskTrackingData(prev.task_tracking) ? prev.task_tracking : null),
+        conversation_list_metrics: hasConversationListMetricsClientData(next.conversation_list_metrics)
+          ? next.conversation_list_metrics
+          : (hasConversationListMetricsClientData(prev.conversation_list_metrics) ? prev.conversation_list_metrics : next.conversation_list_metrics),
+        memo_summary: next.memo_summary || next.memoSummary || prev.memo_summary || prev.memoSummary || null,
+        memoSummary: next.memoSummary || next.memo_summary || prev.memoSummary || prev.memo_summary || null,
       };
     }
 
@@ -1382,9 +1483,6 @@
         const nextRuntime = normalizeRuntimeState(n.runtime_state || n.runtimeState || null);
         const nextExecContext = buildProjectExecutionContextMeta(n.project_execution_context || null);
         const prevExecContext = buildProjectExecutionContextMeta(prev.project_execution_context || null);
-        const nextTeamExpansionHint = hasConversationTeamExpansionHintData(n.team_expansion_hint)
-          ? n.team_expansion_hint
-          : (hasConversationTeamExpansionHintData(prev.team_expansion_hint) ? prev.team_expansion_hint : null);
         const nextTaskTracking = hasConversationTaskTrackingData(n.task_tracking)
           ? n.task_tracking
           : (hasConversationTaskTrackingData(prev.task_tracking) ? prev.task_tracking : null);
@@ -1392,7 +1490,8 @@
           firstNonEmptyText([n.session_display_state, n.sessionDisplayState, nextRuntime.display_state]) || "idle",
           "idle"
         );
-        const mergedAlias = String(n.alias || prev.alias || "").trim();
+        const prevIsExplicitSidFallback = String(prev.displayNameSource || "").trim().toLowerCase() === "explicit_sid_fallback";
+        const mergedAlias = String(n.alias || (prevIsExplicitSidFallback ? "" : prev.alias) || "").trim();
         const mergedChannelName = String(n.channel_name || prev.channel_name || "").trim();
         const mergedPresentation = resolveConversationSessionPresentation({
           alias: mergedAlias,
@@ -1441,10 +1540,13 @@
             n.heartbeat_summary || prev.heartbeat_summary || {},
             []
           ),
+          conversation_list_metrics: mergeConversationListMetricsClient(
+            prev.conversation_list_metrics || null,
+            n.conversation_list_metrics || null
+          ),
           project_execution_context: nextExecContext.available
             ? n.project_execution_context
             : (prevExecContext.available ? prev.project_execution_context : n.project_execution_context),
-          team_expansion_hint: nextTeamExpansionHint,
           task_tracking: nextTaskTracking,
         });
       }

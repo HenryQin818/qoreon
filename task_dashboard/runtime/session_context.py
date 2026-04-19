@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import threading
 import time
@@ -94,13 +95,57 @@ def detect_git_branch(root: Path | str) -> str:
     if not raw_target:
         return ""
     target = Path(raw_target).expanduser()
+    if not target.exists():
+        return ""
+
+    def _resolve_head_path(start: Path) -> Path | None:
+        for base in (start, *start.parents):
+            git_marker = base / ".git"
+            if git_marker.is_dir():
+                head_path = git_marker / "HEAD"
+                return head_path if head_path.exists() else None
+            if git_marker.is_file():
+                try:
+                    raw = git_marker.read_text(encoding="utf-8").strip()
+                except Exception:
+                    return None
+                prefix = "gitdir:"
+                if not raw.lower().startswith(prefix):
+                    return None
+                gitdir_raw = raw[len(prefix):].strip()
+                if not gitdir_raw:
+                    return None
+                gitdir = Path(gitdir_raw)
+                if not gitdir.is_absolute():
+                    gitdir = (git_marker.parent / gitdir).resolve()
+                head_path = gitdir / "HEAD"
+                return head_path if head_path.exists() else None
+        return None
+
+    head_path = _resolve_head_path(target.resolve())
+    if head_path is not None:
+        try:
+            head_value = head_path.read_text(encoding="utf-8").strip()
+        except Exception:
+            head_value = ""
+        if head_value.startswith("ref:"):
+            ref = head_value.split(":", 1)[1].strip()
+            if ref:
+                return ref.rsplit("/", 1)[-1]
+        if head_value:
+            return head_value[:12]
     try:
         proc = subprocess.run(
             ["git", "-C", str(target), "rev-parse", "--abbrev-ref", "HEAD"],
             capture_output=True,
             text=True,
-            timeout=3,
+            timeout=0.6,
             check=False,
+            env={
+                **os.environ,
+                "GIT_OPTIONAL_LOCKS": "0",
+                "GIT_TERMINAL_PROMPT": "0",
+            },
         )
     except Exception:
         return ""

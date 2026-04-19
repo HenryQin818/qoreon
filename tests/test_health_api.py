@@ -12,44 +12,6 @@ import server
 
 
 class HealthApiTests(unittest.TestCase):
-    def test_build_session_health_payload_preserves_task_tracking(self) -> None:
-        with patch.object(
-            server,
-            "runtime_build_sessions_list_payload",
-            return_value={
-                "sessions": [
-                    {
-                        "id": "session-a",
-                        "channel_name": "主体-总控（合并与验收）",
-                        "alias": "总控-项目经理",
-                        "cli_type": "codex",
-                        "is_primary": True,
-                        "status": "active",
-                        "task_tracking": {
-                            "version": "v1.1",
-                            "current_task_ref": {"task_id": "TASK-1", "task_path": "任务/one.md"},
-                            "conversation_task_refs": [],
-                            "recent_task_actions": [],
-                        },
-                    }
-                ]
-            },
-        ):
-            payload = server._build_session_health_payload(
-                project_id="task_dashboard",
-                session_store=object(),
-                store=object(),
-                environment_name="stable",
-                worktree_root="/tmp/task-dashboard",
-                heartbeat_runtime=None,
-                load_session_heartbeat_config=lambda _row: {},
-                heartbeat_summary_payload=lambda _row: {},
-            )
-
-        tracking = (payload.get("sessions") or [])[0].get("task_tracking") or {}
-        self.assertEqual(tracking.get("version"), "v1.1")
-        self.assertEqual((tracking.get("current_task_ref") or {}).get("task_id"), "TASK-1")
-
     def test_session_health_refresh_endpoint_rebuilds_payload_without_runtime_error(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)

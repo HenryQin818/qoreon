@@ -57,19 +57,6 @@
       };
     }
 
-    function ensureConversationGlobalMentionRefreshState() {
-      const current = (PCONV && PCONV.globalMentionRefresh && typeof PCONV.globalMentionRefresh === "object")
-        ? PCONV.globalMentionRefresh
-        : {};
-      const next = {
-        busy: !!current.busy,
-        error: String(current.error || "").trim(),
-        refreshedAt: String(current.refreshedAt || "").trim(),
-      };
-      if (PCONV) PCONV.globalMentionRefresh = next;
-      return next;
-    }
-
     function mentionProjectLabel(projectId, fallbackName = "") {
       const pid = String(projectId || "").trim();
       const project = pid ? projectById(pid) : null;
@@ -265,102 +252,6 @@
         return String(a && a.display_name || "").localeCompare(String(b && b.display_name || ""), "zh-Hans-CN");
       });
       return out;
-    }
-
-    function normalizeConversationProjectCatalogItem(raw) {
-      if (!raw || typeof raw !== "object") return null;
-      const pid = String(raw.id || raw.project_id || "").trim();
-      if (!pid || pid === "overview") return null;
-      const name = String(raw.name || raw.project_name || pid).trim() || pid;
-      const color = String(raw.color || "").trim();
-      const description = String(raw.description || "").trim();
-      const channelsRaw = Array.isArray(raw.channels) ? raw.channels : [];
-      const channels = channelsRaw
-        .map((channel) => {
-          if (!channel || typeof channel !== "object") return null;
-          const channelName = String(channel.name || "").trim();
-          if (!channelName) return null;
-          return {
-            name: channelName,
-            desc: String(channel.desc || "").trim(),
-          };
-        })
-        .filter(Boolean);
-      return {
-        id: pid,
-        name,
-        color,
-        description,
-        channels,
-      };
-    }
-
-    function mergeConversationProjectCatalog(projects) {
-      const existing = Array.isArray(DATA.projects) ? DATA.projects.slice() : [];
-      const existingById = new Map();
-      existing.forEach((project) => {
-        const pid = String((project && project.id) || "").trim();
-        if (pid) existingById.set(pid, project);
-      });
-      const next = [];
-      (Array.isArray(projects) ? projects : []).forEach((project) => {
-        const normalized = normalizeConversationProjectCatalogItem(project);
-        if (!normalized) return;
-        const prev = existingById.get(normalized.id);
-        const merged = Object.assign({}, prev || {}, normalized);
-        merged.channels = Array.isArray(normalized.channels)
-          ? normalized.channels.slice()
-          : (Array.isArray(prev && prev.channels) ? prev.channels.slice() : []);
-        next.push(merged);
-        existingById.delete(normalized.id);
-      });
-      existingById.forEach((project) => {
-        if (project && typeof project === "object") next.push(project);
-      });
-      DATA.projects = next;
-      return next.slice();
-    }
-
-    async function fetchConversationProjectCatalog() {
-      const resp = await fetch("/api/projects/catalog", { cache: "no-store" });
-      if (!resp.ok) {
-        if (resp.status === 404) throw new Error("项目目录接口不可用");
-        throw new Error("刷新清单失败（" + String(resp.status || "unknown") + "）");
-      }
-      const json = await resp.json();
-      return Array.isArray(json && json.projects) ? json.projects : [];
-    }
-
-    async function refreshConversationGlobalMentionDirectory(projectId) {
-      const currentPid = String(projectId || STATE.project || "").trim();
-      const refreshState = ensureConversationGlobalMentionRefreshState();
-      if (refreshState.busy) return;
-      refreshState.busy = true;
-      refreshState.error = "";
-      renderConvMentionSuggest();
-      try {
-        const projects = await fetchConversationProjectCatalog();
-        const catalog = mergeConversationProjectCatalog(projects);
-        const projectIds = catalog
-          .map((project) => String((project && project.id) || "").trim())
-          .filter((pid) => pid && pid !== "overview");
-        await Promise.all(projectIds.map((pid) => ensureConversationProjectSessionDirectory(pid, { force: true }).catch(() => [])));
-        refreshState.refreshedAt = new Date().toISOString();
-      } catch (err) {
-        refreshState.error = String((err && err.message) || err || "刷新清单失败");
-      } finally {
-        refreshState.busy = false;
-        const st = PCONV.mentionSuggest || {};
-        if (
-          st.open
-          && String(st.mode || "") === globalProjectMentionSuggestMode()
-          && String(STATE.project || "") === currentPid
-        ) {
-          updateConvMentionSuggestByInput();
-        } else {
-          renderConvMentionSuggest();
-        }
-      }
     }
 
     function hydrateConversationGlobalMentionDirectory(projectId) {
@@ -898,8 +789,6 @@
     const CONVERSATION_AGENT_TRAINING_PREFIX = "[Agent培训]";
     const LEGACY_CONVERSATION_AGENT_INIT_PREFIX = "[Qoreon]";
     const CONVERSATION_AGENT_INIT_LEAD = "在开始当前协作前，你必须先完成以下初始化训练。未完成前，不要回复“已完成初始化”，也不要直接开始正式任务。";
-    const CONVERSATION_TEAM_EXPANSION_HINT_PROMPT = "请按当前项目的标准启动批次继续扩建团队并完成初始化：先读取当前项目的 AI bootstrap 指引和启动批次模板，创建或复用剩余团队会话，补齐初始化培训、通讯录生成与启动回执；完成后只按“当前结论 / 是否通过或放行 / 唯一阻塞 / 关键路径或 run_id / 下一步动作”回复。";
-    const CONVERSATION_TEAM_EXPANSION_HINT_STORAGE_KEY = "taskDashboard.mockTeamExpansionHintState";
 
     function normalizeConversationInitChannelLabel(channelName) {
       const label = String(channelName || "").trim();
@@ -931,7 +820,7 @@
         "- 至少重点学习：agent-init-training-playbook、collab-message-send（或当前项目等效的正式消息技能）、当前通道自己的专项 skill。",
         "",
         "4. 学会怎么发正式消息",
-        "- 跨 Agent / 跨通道协作只能走系统正式 announce 接口（announce_to_channel），不能把内部草稿、内部 spawn、非正式 resume 当成“已通知通道”。",
+        "- 跨 Agent / 跨通道协作只能走 http://127.0.0.1:18765/api/codex/announce（announce_to_channel），不能把内部草稿、内部 spawn、非正式 resume 当成“已通知通道”。",
         "- 正式消息默认用你当前执行 Agent 自己的身份发送，不借用项目主会话、总控或其他通道 Agent 身份。",
         "- 没有 announce_run_id 时，不得写已发出 / 已送达 / 已通知通道。",
         "- 正式通知成功至少分三层判断：已生成待发送正文 / 已提交发送，待验证 / 已完成证据闭环。",
@@ -993,69 +882,6 @@
       else delete PCONV.trainingDismissedBySessionKey[draftKey];
     }
 
-    function isConversationTrainingManualOpenByKey(key) {
-      const draftKey = String(key || "").trim();
-      if (!draftKey) return false;
-      return !!PCONV.trainingManualOpenBySessionKey[draftKey];
-    }
-
-    function setConversationTrainingManualOpenByKey(key, open) {
-      const draftKey = String(key || "").trim();
-      if (!draftKey) return;
-      if (open) PCONV.trainingManualOpenBySessionKey[draftKey] = true;
-      else delete PCONV.trainingManualOpenBySessionKey[draftKey];
-    }
-
-    function isConversationStartupHintDismissedByKey(key) {
-      const draftKey = String(key || "").trim();
-      if (!draftKey) return false;
-      return !!PCONV.startupHintDismissedBySessionKey[draftKey];
-    }
-
-    function setConversationStartupHintDismissedByKey(key, dismissed) {
-      const draftKey = String(key || "").trim();
-      if (!draftKey) return;
-      if (dismissed) PCONV.startupHintDismissedBySessionKey[draftKey] = true;
-      else delete PCONV.startupHintDismissedBySessionKey[draftKey];
-    }
-
-    function isConversationStartupHintManualOpenByKey(key) {
-      const draftKey = String(key || "").trim();
-      if (!draftKey) return false;
-      return !!PCONV.startupHintManualOpenBySessionKey[draftKey];
-    }
-
-    function setConversationStartupHintManualOpenByKey(key, open) {
-      const draftKey = String(key || "").trim();
-      if (!draftKey) return;
-      if (open) PCONV.startupHintManualOpenBySessionKey[draftKey] = true;
-      else delete PCONV.startupHintManualOpenBySessionKey[draftKey];
-    }
-
-    function renderConversationInitReminderToggles(ctx) {
-      const {
-        trainingReopenBtn,
-        startupHintReopenBtn,
-        trainingContainer,
-        startupHintContainer,
-      } = convComposerUiElements();
-      const current = (ctx && typeof ctx === "object") ? ctx : currentConversationCtx();
-      const draftKey = current ? convComposerDraftKey(current.projectId, current.sessionId) : "";
-      const enabled = !!draftKey;
-      const trainingVisible = !!(trainingContainer && trainingContainer.style.display !== "none");
-      const startupVisible = !!(startupHintContainer && startupHintContainer.style.display !== "none");
-      if (trainingReopenBtn) {
-        trainingReopenBtn.disabled = !enabled;
-        trainingReopenBtn.classList.toggle("active", trainingVisible);
-        trainingReopenBtn.setAttribute("aria-pressed", trainingVisible ? "true" : "false");
-      }
-      if (startupHintReopenBtn) {
-        startupHintReopenBtn.disabled = !enabled;
-        startupHintReopenBtn.classList.toggle("active", startupVisible);
-        startupHintReopenBtn.setAttribute("aria-pressed", startupVisible ? "true" : "false");
-      }
-    }
-
     function conversationTrainingVisibleMessageCount(runs) {
       return (Array.isArray(runs) ? runs : [])
         .filter((run) => !!String((run && run.id) || "").trim())
@@ -1096,251 +922,6 @@
       return buildUnifiedAgentInitMessage(channelName);
     }
 
-    function resolveConversationTeamExpansionHintMockOverride() {
-      let hashParams = null;
-      let searchParams = null;
-      try {
-        hashParams = new URLSearchParams(String(location.hash || "").replace(/^#/, ""));
-      } catch (_) {}
-      try {
-        searchParams = new URLSearchParams(String(location.search || "").replace(/^\?/, ""));
-      } catch (_) {}
-      const hashState = normalizeTeamExpansionHintState(firstNonEmptyText([
-        hashParams && hashParams.get("team_hint_state"),
-        hashParams && hashParams.get("team_expansion_hint_state"),
-      ]));
-      if (hashState) return { state: hashState, source: "hash" };
-      const searchState = normalizeTeamExpansionHintState(firstNonEmptyText([
-        searchParams && searchParams.get("team_hint_state"),
-        searchParams && searchParams.get("team_expansion_hint_state"),
-      ]));
-      if (searchState) return { state: searchState, source: "search" };
-      let storedState = "";
-      try {
-        storedState = normalizeTeamExpansionHintState(localStorage.getItem(CONVERSATION_TEAM_EXPANSION_HINT_STORAGE_KEY));
-      } catch (_) {
-        storedState = "";
-      }
-      return storedState ? { state: storedState, source: "storage" } : { state: "", source: "" };
-    }
-
-    function setConversationTeamExpansionHintMockState(state) {
-      const normalized = normalizeTeamExpansionHintState(state);
-      try {
-        if (!normalized || normalized === "hidden" || normalized === "team_setup_done") {
-          localStorage.removeItem(CONVERSATION_TEAM_EXPANSION_HINT_STORAGE_KEY);
-        } else {
-          localStorage.setItem(CONVERSATION_TEAM_EXPANSION_HINT_STORAGE_KEY, normalized);
-        }
-      } catch (_) {}
-    }
-
-    function normalizeProjectTeamExpansionHint(raw) {
-      return normalizeConversationTeamExpansionHint(raw);
-    }
-
-    function buildManualConversationTeamExpansionHint(ctx, baseHint) {
-      const row = (baseHint && typeof baseHint === "object") ? baseHint : {};
-      const channelName = String((ctx && ctx.channelName) || "").trim();
-      return {
-        state: "manual",
-        prompt: String(firstNonEmptyText([
-          row.prompt,
-          CONVERSATION_TEAM_EXPANSION_HINT_PROMPT,
-        ]) || CONVERSATION_TEAM_EXPANSION_HINT_PROMPT).trim(),
-        summary: String(firstNonEmptyText([
-          row.summary,
-          channelName ? ("如需继续在“" + channelName + "”下补发项目初始化提示，可按需重新发送下方提示词。") : "",
-          "如需再次补发项目初始化提示，可按需重新发送下方提示词。",
-        ]) || "").trim(),
-        blocked_summary: "",
-        isManual: true,
-        isMock: false,
-        mockSource: "",
-      };
-    }
-
-    function resolveConversationTeamExpansionHint(ctx, sessionLike, opts = {}) {
-      const session = (sessionLike && typeof sessionLike === "object") ? sessionLike : null;
-      const forceShow = !!(opts && opts.forceShow);
-      const runtimeHint = hasConversationTeamExpansionHintData(session && session.team_expansion_hint)
-        ? session.team_expansion_hint
-        : null;
-      const project = ctx && ctx.projectId ? projectById(ctx.projectId) : null;
-      const projectHint = normalizeProjectTeamExpansionHint(project);
-      const resolvedRuntimeHint = runtimeHint || (hasConversationTeamExpansionHintData(projectHint) ? projectHint : null);
-      let state = normalizeTeamExpansionHintState(resolvedRuntimeHint && resolvedRuntimeHint.state);
-      const prompt = String(firstNonEmptyText([
-        resolvedRuntimeHint && resolvedRuntimeHint.prompt,
-        CONVERSATION_TEAM_EXPANSION_HINT_PROMPT,
-      ]) || CONVERSATION_TEAM_EXPANSION_HINT_PROMPT).trim();
-      const summary = String(firstNonEmptyText([
-        resolvedRuntimeHint && resolvedRuntimeHint.summary,
-      ]) || "").trim();
-      const blockedSummary = String(firstNonEmptyText([
-        resolvedRuntimeHint && resolvedRuntimeHint.blocked_summary,
-      ]) || "").trim();
-      if (forceShow) {
-        return buildManualConversationTeamExpansionHint(ctx, {
-          prompt,
-          summary,
-          blocked_summary: blockedSummary,
-        });
-      }
-      let mockSource = "";
-      if (!state) {
-        const mock = resolveConversationTeamExpansionHintMockOverride();
-        state = normalizeTeamExpansionHintState(mock.state);
-        mockSource = String(mock.source || "").trim();
-      }
-      if (!state) return null;
-      return {
-        state,
-        prompt,
-        summary,
-        blocked_summary: blockedSummary,
-        isMock: !resolvedRuntimeHint && !!mockSource,
-        mockSource,
-      };
-    }
-
-    function conversationTeamExpansionHintMeta(state, hint) {
-      const normalized = normalizeTeamExpansionHintState(state);
-      const row = (hint && typeof hint === "object") ? hint : {};
-      if (normalized === "team_setup_in_progress") {
-        return {
-          className: "is-progress",
-          title: "扩建团队与初始化进行中",
-          stateText: "进行中",
-          desc: row.summary || "当前 Agent 已接手团队扩建与初始化，等待启动回执闭环后自动退场。",
-          actionsVisible: false,
-          promptVisible: false,
-        };
-      }
-      if (normalized === "blocked") {
-        return {
-          className: "is-blocked",
-          title: "项目启动建议当前受阻",
-          stateText: "受阻",
-          desc: row.blocked_summary || row.summary || "运行时已标记当前项目启动建议受阻，请先处理阻塞后再继续扩建团队。",
-          actionsVisible: false,
-          promptVisible: false,
-        };
-      }
-      return {
-        className: "is-pending",
-        title: "继续扩建团队并完成初始化",
-        stateText: "建议动作",
-        desc: row.summary || "当前项目已完成基础安装，发送下方提示词后，当前 Agent 会按标准模板继续扩团队、补培训并生成启动回执。",
-        actionsVisible: true,
-        promptVisible: true,
-      };
-    }
-
-    function hideConversationTeamExpansionHint() {
-      const { startupHintContainer } = convComposerUiElements();
-      if (!startupHintContainer) {
-        renderConversationInitReminderToggles(null);
-        return;
-      }
-      startupHintContainer.style.display = "none";
-      startupHintContainer.className = "convstartuphint";
-      renderConversationInitReminderToggles(null);
-    }
-
-    async function copyConversationTeamExpansionPrompt(promptText) {
-      const text = String(promptText || "").trim();
-      if (!text) return false;
-      try {
-        await navigator.clipboard.writeText(text);
-        setHintText("conv", "已复制项目启动提示词。");
-        if (typeof toast === "function") toast("已复制项目启动提示词。", { tone: "success", duration: 1800 });
-        return true;
-      } catch (_) {
-        setHintText("conv", "复制失败：请检查浏览器剪贴板权限。");
-        if (typeof toast === "function") toast("复制失败：请检查浏览器剪贴板权限。", { tone: "error", duration: 2200 });
-        return false;
-      }
-    }
-
-    function renderConversationTeamExpansionHint(ctx, sessionLike, opts = {}) {
-      const {
-        startupHintContainer,
-        startupHintTitle,
-        startupHintState,
-        startupHintDesc,
-        startupHintPrompt,
-        startupHintActions,
-        startupHintCopyBtn,
-        startupHintSendBtn,
-        startupHintCloseBtn,
-      } = convComposerUiElements();
-      if (!startupHintContainer || !startupHintTitle || !startupHintState || !startupHintDesc || !startupHintPrompt || !startupHintActions || !startupHintCopyBtn || !startupHintSendBtn) {
-        renderConversationInitReminderToggles(ctx);
-        return;
-      }
-      const draftKey = ctx ? convComposerDraftKey(ctx.projectId, ctx.sessionId) : "";
-      const forceShow = !!(opts && opts.forceShow) || !!(draftKey && isConversationStartupHintManualOpenByKey(draftKey));
-      const dismissed = draftKey ? isConversationStartupHintDismissedByKey(draftKey) : false;
-      if (!ctx || (!forceShow && dismissed)) {
-        hideConversationTeamExpansionHint();
-        return;
-      }
-      const hint = resolveConversationTeamExpansionHint(ctx, sessionLike, { forceShow });
-      const state = forceShow ? "manual" : normalizeTeamExpansionHintState(hint && hint.state);
-      if (!ctx || !hint || !state || state === "hidden" || state === "team_setup_done") {
-        hideConversationTeamExpansionHint();
-        return;
-      }
-      const meta = conversationTeamExpansionHintMeta(state, hint);
-      const promptText = String(hint.prompt || CONVERSATION_TEAM_EXPANSION_HINT_PROMPT).trim();
-      startupHintContainer.style.display = "flex";
-      startupHintContainer.className = "convstartuphint " + String(meta.className || "is-pending");
-      startupHintTitle.textContent = String(meta.title || "继续扩建团队并完成初始化");
-      startupHintState.textContent = String(meta.stateText || "建议动作");
-      startupHintDesc.textContent = String(meta.desc || "");
-      startupHintPrompt.textContent = promptText;
-      startupHintPrompt.style.display = meta.promptVisible ? "block" : "none";
-      startupHintActions.style.display = meta.actionsVisible ? "flex" : "none";
-      if (startupHintCloseBtn) {
-        startupHintCloseBtn.disabled = !!PCONV.sending;
-      }
-      startupHintCopyBtn.disabled = !meta.actionsVisible || !promptText;
-      startupHintCopyBtn.textContent = "复制提示词";
-      startupHintCopyBtn.onclick = async (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        if (startupHintCopyBtn.disabled) return;
-        await copyConversationTeamExpansionPrompt(promptText);
-      };
-      startupHintSendBtn.disabled = !meta.actionsVisible || !promptText || !!PCONV.sending;
-      startupHintSendBtn.textContent = PCONV.sending ? "发送中..." : "发送给当前 Agent";
-      startupHintSendBtn.onclick = async (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        if (startupHintSendBtn.disabled) return;
-        const sentOk = await sendConversationQuickMessage(promptText, {
-          pendingHint: "发送中（项目启动建议）…",
-          successHint: "已发送项目启动建议，等待当前 Agent 继续扩建团队并完成初始化…",
-          onSuccess: () => {
-            if (draftKey) {
-              setConversationStartupHintDismissedByKey(draftKey, false);
-              setConversationStartupHintManualOpenByKey(draftKey, false);
-            }
-            if (hint.isMock && hint.mockSource === "storage") {
-              setConversationTeamExpansionHintMockState("team_setup_in_progress");
-            }
-          },
-        });
-        if (sentOk) {
-          const latestCtx = currentConversationCtx();
-          const latestSession = latestCtx ? findConversationSessionById(String(latestCtx.sessionId || "")) : null;
-          renderConversationTeamExpansionHint(latestCtx, latestSession);
-        }
-      };
-      renderConversationInitReminderToggles(ctx);
-    }
-
     function renderConversationTrainingPrompt(ctx, runs, opts = {}) {
       const { trainingContainer, trainingCount, trainingDesc, trainingSendBtn, trainingCloseBtn } = convComposerUiElements();
       const timeline = document.getElementById("convTimeline");
@@ -1357,16 +938,13 @@
         if (trainingDock) trainingDock.classList.remove("show");
         if (convWrap) convWrap.style.removeProperty("--conv-training-offset");
         if (timeline) timeline.classList.remove("has-training-banner");
-        renderConversationInitReminderToggles(null);
         return;
       }
-      const manualOpen = !!(opts && opts.forceShow) || isConversationTrainingManualOpenByKey(draftKey);
-      if (!timelineReady && !manualOpen) {
+      if (!timelineReady) {
         trainingContainer.style.display = "none";
         if (trainingDock) trainingDock.classList.remove("show");
         if (convWrap) convWrap.style.removeProperty("--conv-training-offset");
         if (timeline) timeline.classList.remove("has-training-banner");
-        renderConversationInitReminderToggles(ctx);
         return;
       }
       const historySentAt = findConversationTrainingMessageSentAt(runs);
@@ -1377,7 +955,7 @@
       const remaining = conversationTrainingRemainingCount(runs);
       if (alreadySent || remaining <= 0) setConversationTrainingDismissedByKey(draftKey, false);
       const dismissed = isConversationTrainingDismissedByKey(draftKey);
-      const shouldShow = manualOpen || (!alreadySent && !dismissed && remaining > 0);
+      const shouldShow = !alreadySent && !dismissed && remaining > 0;
       trainingContainer.style.display = shouldShow ? "flex" : "none";
       if (trainingDock) trainingDock.classList.toggle("show", shouldShow);
       if (convWrap) {
@@ -1389,30 +967,22 @@
         }
       }
       if (timeline) timeline.classList.toggle("has-training-banner", shouldShow);
-      if (!shouldShow) {
-        renderConversationInitReminderToggles(ctx);
-        return;
-      }
+      if (!shouldShow) return;
       if (trainingCount) {
-        if (manualOpen && alreadySent) trainingCount.textContent = "已发过，可按需再次补发";
-        else if (manualOpen) trainingCount.textContent = "手动唤出，可按需发送";
-        else {
-          trainingCount.textContent = remaining > 0
-            ? ("再 " + remaining + " 条消息后自动消失")
-            : "本轮将自动收起";
-        }
+        trainingCount.textContent = remaining > 0
+          ? ("再 " + remaining + " 条消息后自动消失")
+          : "本轮将自动收起";
       }
       if (trainingDesc) {
         trainingDesc.textContent = "新 Agent 开始协作前，先完成初始化：对齐项目真源、阅读入口、确认正式消息门禁与回执口径。";
       }
       if (trainingSendBtn) {
         trainingSendBtn.disabled = !!PCONV.sending;
-        trainingSendBtn.textContent = PCONV.sending ? "发送中..." : (alreadySent ? "再次发送培训" : "发送培训");
+        trainingSendBtn.textContent = PCONV.sending ? "发送中..." : "发送培训";
       }
       if (trainingCloseBtn) {
         trainingCloseBtn.disabled = !!PCONV.sending;
       }
-      renderConversationInitReminderToggles(ctx);
     }
 
     function dismissConversationTrainingPrompt() {
@@ -1420,64 +990,23 @@
       const draftKey = ctx ? convComposerDraftKey(ctx.projectId, ctx.sessionId) : "";
       if (!ctx || !draftKey) return;
       setConversationTrainingDismissedByKey(draftKey, true);
-      setConversationTrainingManualOpenByKey(draftKey, false);
-      renderConversationTrainingPrompt(ctx, resolveConversationRunsBySessionKey(draftKey, ctx.sessionId), { timelineReady: true });
-    }
-
-    function reopenConversationTrainingPrompt() {
-      const ctx = currentConversationCtx();
-      const draftKey = ctx ? convComposerDraftKey(ctx.projectId, ctx.sessionId) : "";
-      if (!ctx || !draftKey) {
-        renderConversationInitReminderToggles(null);
-        return;
-      }
-      setConversationTrainingDismissedByKey(draftKey, false);
-      setConversationTrainingManualOpenByKey(draftKey, true);
-      renderConversationTrainingPrompt(ctx, resolveConversationRunsBySessionKey(draftKey, ctx.sessionId), {
-        timelineReady: true,
-        forceShow: true,
-      });
-    }
-
-    function dismissConversationTeamExpansionHint() {
-      const ctx = currentConversationCtx();
-      const draftKey = ctx ? convComposerDraftKey(ctx.projectId, ctx.sessionId) : "";
-      if (!ctx || !draftKey) {
-        hideConversationTeamExpansionHint();
-        return;
-      }
-      setConversationStartupHintDismissedByKey(draftKey, true);
-      setConversationStartupHintManualOpenByKey(draftKey, false);
-      renderConversationTeamExpansionHint(ctx, findConversationSessionById(ctx.sessionId));
-    }
-
-    function reopenConversationTeamExpansionHint() {
-      const ctx = currentConversationCtx();
-      const draftKey = ctx ? convComposerDraftKey(ctx.projectId, ctx.sessionId) : "";
-      if (!ctx || !draftKey) {
-        renderConversationInitReminderToggles(null);
-        return;
-      }
-      setConversationStartupHintDismissedByKey(draftKey, false);
-      setConversationStartupHintManualOpenByKey(draftKey, true);
-      renderConversationTeamExpansionHint(ctx, findConversationSessionById(ctx.sessionId), { forceShow: true });
+      renderConversationTrainingPrompt(ctx, [], { timelineReady: true });
     }
 
     async function sendConversationTrainingMessage() {
       const ctx = currentConversationCtx();
       const draftKey = ctx ? convComposerDraftKey(ctx.projectId, ctx.sessionId) : "";
       if (!ctx || !draftKey || PCONV.sending) return false;
-      if (getConversationTrainingSentAtByKey(draftKey) && !isConversationTrainingManualOpenByKey(draftKey)) return false;
+      if (getConversationTrainingSentAtByKey(draftKey)) return false;
       const sentOk = await sendConversationQuickMessage(buildConversationTrainingMessage(ctx.channelName), {
         pendingHint: "发送中（Agent培训）…",
         successHint: "已发送 Agent 培训，等待执行回溯刷新…",
         onSuccess: () => {
           setConversationTrainingDismissedByKey(draftKey, false);
-          setConversationTrainingManualOpenByKey(draftKey, false);
           setConversationTrainingSentByKey(draftKey, true);
         },
       });
-      if (sentOk) renderConversationTrainingPrompt(ctx, resolveConversationRunsBySessionKey(draftKey, ctx.sessionId));
+      if (sentOk) renderConversationTrainingPrompt(ctx, []);
       return sentOk;
     }
 
@@ -1768,55 +1297,25 @@
       const st = PCONV.mentionSuggest || {};
       const { mentionSuggest } = convComposerUiElements();
       if (!mentionSuggest) return;
-      const isGlobal = String(st.mode || "") === globalProjectMentionSuggestMode();
-      const hasCandidates = Array.isArray(st.candidates) && st.candidates.length > 0;
-      if (!st.open || (!hasCandidates && !isGlobal)) {
+      if (!st.open || !Array.isArray(st.candidates) || st.candidates.length === 0) {
         mentionSuggest.innerHTML = "";
         mentionSuggest.style.display = "none";
         return;
       }
       mentionSuggest.innerHTML = "";
-      if (isGlobal) {
-        const refreshState = ensureConversationGlobalMentionRefreshState();
+      if (String(st.mode || "") === globalProjectMentionSuggestMode()) {
         const head = el("div", { class: "convmention-head" });
-        const headRow = el("div", { class: "convmention-headrow" });
-        const headMeta = el("div", { class: "convmention-headmeta" });
-        headMeta.appendChild(el("div", { class: "convmention-kicker", text: "@@ 全局 Agent" }));
+        head.appendChild(el("div", { class: "convmention-kicker", text: "@@ 全局 Agent" }));
         const resultCount = Array.isArray(st.candidates) ? st.candidates.length : 0;
         const summary = (Array.isArray(st.groups) && st.groups.length)
           ? ("按项目分组 · " + st.groups.length + " 个项目 · " + resultCount + " 条候选")
           : ("全局搜索 · " + resultCount + " 条候选");
-        headMeta.appendChild(el("div", {
-          class: "convmention-summary",
-          text: refreshState.busy
-            ? (summary + " · 刷新中…")
-            : (refreshState.error ? (summary + " · " + refreshState.error) : summary),
-        }));
-        headRow.appendChild(headMeta);
-        const refreshBtn = el("button", {
-          class: "convmention-refresh",
-          type: "button",
-          text: refreshState.busy ? "刷新中…" : "刷新清单",
-        });
-        if (refreshState.busy) refreshBtn.setAttribute("disabled", "disabled");
-        refreshBtn.addEventListener("mousedown", (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-        });
-        refreshBtn.addEventListener("click", (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          refreshConversationGlobalMentionDirectory(STATE.project);
-        });
-        headRow.appendChild(refreshBtn);
-        head.appendChild(headRow);
+        head.appendChild(el("div", { class: "convmention-summary", text: summary }));
         mentionSuggest.appendChild(head);
       }
       const list = el("div", { class: "convmention-list" });
-      const activeIndex = hasCandidates
-        ? Math.max(0, Math.min(Number(st.activeIndex || 0), st.candidates.length - 1))
-        : 0;
-      if (isGlobal && Array.isArray(st.groups) && st.groups.length) {
+      const activeIndex = Math.max(0, Math.min(Number(st.activeIndex || 0), st.candidates.length - 1));
+      if (String(st.mode || "") === globalProjectMentionSuggestMode() && Array.isArray(st.groups) && st.groups.length) {
         let renderIndex = 0;
         st.groups.forEach((group) => {
           const section = el("div", { class: "convmention-group" });
@@ -1830,11 +1329,6 @@
           });
           list.appendChild(section);
         });
-      } else if (!hasCandidates && isGlobal) {
-        list.appendChild(el("div", {
-          class: "convmention-empty",
-          text: "暂无候选，可点击“刷新清单”同步最新项目与 Agent。",
-        }));
       } else {
         st.candidates.forEach((it, idx) => {
           list.appendChild(buildConvMentionSuggestItem(it, st.mode, idx, activeIndex));
@@ -1877,7 +1371,7 @@
         if (!query) return true;
         return mentionSearchHaystack(it).includes(query);
       });
-      if (!list.length && mode !== globalProjectMentionSuggestMode()) {
+      if (!list.length) {
         hideConvMentionSuggest();
         return;
       }
@@ -2057,7 +1551,9 @@
       if (String(PCONV.composerBoundDraftKey || "") === String(key)) {
         renderConvComposerMentionsByKey(key);
         renderConvComposerReplyContextByKey(key);
-        renderAttachments();
+        if (typeof syncConversationComposerSendButtonByDraft === "function") {
+          syncConversationComposerSendButtonByDraft(key);
+        }
       }
     }
 
@@ -2115,8 +1611,7 @@
       main.appendChild(preview);
       const cancelBtn = el("button", { class: "btn textbtn convreply-cancel", type: "button", text: "取消回复" });
       cancelBtn.addEventListener("click", () => {
-        const liveKey = String(PCONV.composerBoundDraftKey || currentConvComposerDraftKey() || key || "").trim();
-        clearConvComposerReplyContextByKey(liveKey || String(key || ""), { removeInjectedText: true, focus: true });
+        clearConvComposerReplyContextByKey(String(key || ""), { removeInjectedText: true, focus: true });
       });
       replyContainer.appendChild(main);
       replyContainer.appendChild(cancelBtn);
@@ -2124,34 +1619,23 @@
     }
 
     function clearConvComposerReplyContextByKey(key, opts = {}) {
-      const primaryKey = String(key || "").trim();
-      const boundKey = String(PCONV.composerBoundDraftKey || "").trim();
-      const currentKey = String(currentConvComposerDraftKey() || "").trim();
-      const draftKeys = [];
-      [primaryKey, boundKey, currentKey].forEach((rawKey) => {
-        const draftKey = String(rawKey || "").trim();
-        if (!draftKey || draftKeys.includes(draftKey)) return;
-        draftKeys.push(draftKey);
-      });
-      if (!draftKeys.length) return;
+      const draftKey = String(key || "").trim();
+      if (!draftKey) return;
       const removeInjectedText = Object.prototype.hasOwnProperty.call(opts, "removeInjectedText")
         ? !!opts.removeInjectedText
         : true;
-      draftKeys.forEach((draftKey) => {
-        updateConvComposerDraftByKey(draftKey, (d) => {
-          const prev = normalizeConvReplyContext(d.replyContext);
-          if (prev && removeInjectedText) {
-            const injectedText = String(prev.injectedText || "");
-            if (injectedText && String(d.text || "").startsWith(injectedText)) {
-              d.text = String(d.text || "").slice(injectedText.length).replace(/^\n+/, "");
-            }
+      updateConvComposerDraftByKey(draftKey, (d) => {
+        const prev = normalizeConvReplyContext(d.replyContext);
+        if (prev && removeInjectedText) {
+          const injectedText = String(prev.injectedText || "");
+          if (injectedText && String(d.text || "").startsWith(injectedText)) {
+            d.text = String(d.text || "").slice(injectedText.length).replace(/^\n+/, "");
           }
-          d.replyContext = null;
-        });
+        }
+        d.replyContext = null;
       });
-      const activeDraftKey = boundKey || currentKey || primaryKey;
-      if (activeDraftKey) {
-        applyConvComposerDraftToUiByKey(activeDraftKey, { focus: !!opts.focus });
+      if (String(PCONV.composerBoundDraftKey || "") === draftKey) {
+        applyConvComposerDraftToUiByKey(draftKey, { focus: !!opts.focus });
       }
     }
 
@@ -2237,6 +1721,48 @@
     function memoCountText(n) {
       const count = Math.max(0, Number(n || 0));
       return count > 99 ? "99+" : String(count);
+    }
+
+    function conversationMemoSummary(session) {
+      const current = (session && typeof session === "object") ? session : null;
+      if (!current) return null;
+      const topLevel = (current.memo_summary && typeof current.memo_summary === "object")
+        ? current.memo_summary
+        : ((current.memoSummary && typeof current.memoSummary === "object") ? current.memoSummary : null);
+      if (topLevel) return topLevel;
+      const metrics = (current.conversation_list_metrics && typeof current.conversation_list_metrics === "object")
+        ? current.conversation_list_metrics
+        : ((current.conversationListMetrics && typeof current.conversationListMetrics === "object")
+          ? current.conversationListMetrics
+          : null);
+      if (!metrics) return null;
+      return (metrics.memo_summary && typeof metrics.memo_summary === "object")
+        ? metrics.memo_summary
+        : ((metrics.memoSummary && typeof metrics.memoSummary === "object") ? metrics.memoSummary : null);
+    }
+
+    function conversationMemoSummaryCount(session) {
+      const summary = conversationMemoSummary(session);
+      if (!summary) return 0;
+      const raw = Number(summary.memo_count || summary.memoCount || summary.count || 0);
+      return Math.max(0, raw);
+    }
+
+    function resolveConversationMemoDisplayCount(session, key, state) {
+      const totalCount = conversationMemoSummaryCount(session);
+      if (totalCount > 0) return totalCount;
+      return Math.max(0, countUnreadConversationMemosByKey(key, state));
+    }
+
+    function conversationMemoCountTitle(session, key, state) {
+      const unreadCount = Math.max(0, countUnreadConversationMemosByKey(key, state));
+      const totalCount = conversationMemoSummaryCount(session);
+      if (totalCount > 0) {
+        return unreadCount > 0
+          ? ("备忘共 " + totalCount + " 条，未消费 " + unreadCount + " 条")
+          : ("备忘共 " + totalCount + " 条");
+      }
+      return unreadCount > 0 ? ("备忘未消费：" + unreadCount) : "";
     }
 
     function getConversationUnreadCursorByKey(key) {
@@ -2329,24 +1855,66 @@
       return [];
     }
 
-    function hasConversationMaterializedOptimisticRun(sessionKey, sessionId, optimisticMessage, runId) {
-      const runs = resolveConversationRunsBySessionKey(sessionKey, sessionId);
-      if (!runs.length) return false;
-      const wantedRunId = String(runId || "").trim();
-      if (wantedRunId) {
-        return runs.some((run) => String((run && run.id) || "").trim() === wantedRunId);
+    function injectConversationAckRunToTimeline(ctx = {}, optimistic = {}, response = {}, opts = {}) {
+      const context = (ctx && typeof ctx === "object") ? ctx : {};
+      const projectId = String(context.projectId || context.project_id || STATE.project || "").trim();
+      const sessionId = String(context.sessionId || context.session_id || "").trim();
+      const run = (response && response.run && typeof response.run === "object") ? response.run : {};
+      const runId = String(run.id || run.run_id || run.runId || "").trim();
+      if (!projectId || !sessionId || !runId) return null;
+      if (!PCONV.runsBySession || typeof PCONV.runsBySession !== "object") {
+        PCONV.runsBySession = Object.create(null);
       }
-      const optimistic = optimisticMessage && typeof optimisticMessage === "object" ? optimisticMessage : null;
-      return runs.some((run) => isConversationRunMaterializedForOptimistic(run, optimistic));
-    }
-
-    function clearConversationOptimisticWhenMaterialized(sessionKey, sessionId, runId) {
-      const optimistic = PCONV.optimistic && typeof PCONV.optimistic === "object" ? PCONV.optimistic : null;
-      if (!optimistic) return false;
-      if (String((optimistic && optimistic.sessionId) || "").trim() !== String(sessionId || "").trim()) return false;
-      if (!hasConversationMaterializedOptimisticRun(sessionKey, sessionId, optimistic, runId)) return false;
-      PCONV.optimistic = null;
-      return true;
+      if (!PCONV.sessionTimelineMap || typeof PCONV.sessionTimelineMap !== "object") {
+        PCONV.sessionTimelineMap = Object.create(null);
+      }
+      const optimisticPayload = (optimistic && typeof optimistic === "object") ? optimistic : {};
+      const createdAt = String(
+        run.createdAt
+        || run.created_at
+        || optimisticPayload.createdAt
+        || optimisticPayload.created_at
+        || (typeof conversationStoreNowIso === "function" ? conversationStoreNowIso() : new Date().toISOString())
+      ).trim();
+      const messagePreview = String(firstNonEmptyText([
+        run.messagePreview,
+        run.preview,
+        optimisticPayload.message,
+        optimisticPayload.text,
+      ]) || "").trim();
+      const normalizedRun = {
+        ...run,
+        id: runId,
+        project_id: projectId,
+        session_id: sessionId,
+        channel_name: String(context.channelName || context.channel_name || "").trim(),
+        cli_type: String(context.cliType || context.cli_type || "codex").trim() || "codex",
+        status: normalizeDisplayState(run.status || run.display_state || run.displayState || "queued", "queued"),
+        createdAt,
+        created_at: createdAt,
+        updatedAt: String(run.updatedAt || run.updated_at || createdAt).trim(),
+        updated_at: String(run.updatedAt || run.updated_at || createdAt).trim(),
+        messagePreview,
+        preview: String(run.preview || messagePreview).trim(),
+        client_message_id: String(run.client_message_id || run.clientMessageId || optimisticPayload.clientMessageId || optimisticPayload.client_message_id || "").trim(),
+        attachments: Array.isArray(optimisticPayload.attachments) ? optimisticPayload.attachments.map((item) => ({ ...(item || {}) })) : [],
+      };
+      const timelineKey = projectId + "::" + sessionId;
+      const existingRuns = Array.isArray(PCONV.sessionTimelineMap[timelineKey])
+        ? PCONV.sessionTimelineMap[timelineKey]
+        : (Array.isArray(PCONV.runsBySession[sessionId]) ? PCONV.runsBySession[sessionId] : []);
+      const mergedRuns = typeof mergeRunsById === "function"
+        ? mergeRunsById(existingRuns, [normalizedRun])
+        : [normalizedRun].concat((Array.isArray(existingRuns) ? existingRuns : []).filter((item) => String((item && item.id) || "").trim() !== runId));
+      PCONV.sessionTimelineMap[timelineKey] = mergedRuns;
+      PCONV.runsBySession[sessionId] = mergedRuns;
+      if (typeof conversationStoreUpsertRun === "function") {
+        conversationStoreUpsertRun(projectId, sessionId, normalizedRun, {
+          ...(opts && typeof opts === "object" ? opts : {}),
+          source: String(((opts && opts.source) || "announce-ack")).trim() || "announce-ack",
+        });
+      }
+      return normalizedRun;
     }
 
     function isUnreadTerminalRun(run) {
@@ -2546,18 +2114,25 @@
     async function ensureConversationMemosLoaded(projectId, sessionId, opts = {}) {
       const key = convComposerDraftKey(projectId, sessionId);
       if (!key) return;
+      if (!PCONV.memoPromiseBySessionKey || typeof PCONV.memoPromiseBySessionKey !== "object") {
+        PCONV.memoPromiseBySessionKey = Object.create(null);
+      }
       const force = !!opts.force;
       const maxAgeMs = Math.max(1000, Number(opts.maxAgeMs || 15_000));
+      const source = String((opts && opts.source) || "").trim().toLowerCase();
+      if (!force && !isConversationMemoDrawerOpenForKey(key) && source !== "memo-drawer") return;
       const cur = getConversationMemoStateByKey(key);
       const fetchedAt = Number(cur.fetchedAt || 0);
       const stale = !fetchedAt || (Date.now() - fetchedAt > maxAgeMs);
       if (!force && !stale) return;
+      if (!force && PCONV.memoPromiseBySessionKey[key]) return PCONV.memoPromiseBySessionKey[key];
 
       const seq = Number(PCONV.memoRequestSeqBySessionKey[key] || 0) + 1;
       PCONV.memoRequestSeqBySessionKey[key] = seq;
       PCONV.memoLoadingBySessionKey[key] = true;
       renderConversationMemoUi();
-      try {
+      PCONV.memoPromiseBySessionKey[key] = (async () => {
+        try {
         const payload = await loadConversationMemos(projectId, sessionId);
         if (Number(PCONV.memoRequestSeqBySessionKey[key] || 0) !== seq) return;
         const items = (Array.isArray(payload && payload.items) ? payload.items : [])
@@ -2572,15 +2147,24 @@
         };
         PCONV.memoBySessionKey[key] = next;
         cleanConversationMemoConsumedByKey(key, items);
-      } catch (e) {
+        } catch (e) {
         if (Number(PCONV.memoRequestSeqBySessionKey[key] || 0) !== seq) return;
         setConversationMemoHintByKey(key, "备忘加载失败：" + String((e && e.message) || e || "未知错误"));
-      } finally {
+        } finally {
         if (Number(PCONV.memoRequestSeqBySessionKey[key] || 0) === seq) {
           PCONV.memoLoadingBySessionKey[key] = false;
         }
+        delete PCONV.memoPromiseBySessionKey[key];
         renderConversationMemoUi();
-      }
+        }
+      })();
+      return PCONV.memoPromiseBySessionKey[key];
+    }
+
+    function isConversationMemoDrawerOpenForKey(key) {
+      const targetKey = String(key || "").trim();
+      if (!targetKey) return false;
+      return !!(PCONV.memoDrawerOpen && String(PCONV.memoDrawerSessionKey || "").trim() === targetKey);
     }
 
     function hideConversationMemoEntry() {
@@ -2609,12 +2193,19 @@
       const key = convComposerDraftKey(ctx.projectId, ctx.sessionId);
       btn.style.display = "";
       const state = getConversationMemoStateByKey(key);
-      const count = countUnreadConversationMemosByKey(key, state);
+      const session = (typeof findConversationSessionById === "function")
+        ? findConversationSessionById(String(ctx.sessionId || "").trim())
+        : null;
+      const count = resolveConversationMemoDisplayCount(session, key, state);
+      const memoTitle = conversationMemoCountTitle(session, key, state);
+      btn.title = memoTitle ? ("会话需求暂存与备忘 · " + memoTitle) : "会话需求暂存与备忘";
       if (count > 0) {
         dot.style.display = "inline-flex";
         dot.textContent = memoCountText(count);
+        dot.title = memoTitle;
       } else {
         dot.style.display = "none";
+        dot.title = "";
       }
       btn.onclick = () => {
         const same = PCONV.memoDrawerOpen && String(PCONV.memoDrawerSessionKey || "") === key;
@@ -3387,6 +2978,9 @@
     }
 
     async function sendConversationMessage() {
+      if (typeof isTaskShareModeActive === "function" && isTaskShareModeActive()) {
+        return await sendTaskShareModeMessage();
+      }
       const input = document.getElementById("convMsg");
       const sendBtn = document.getElementById("convSendBtn");
       const hint = document.getElementById("convHint");
@@ -3472,21 +3066,20 @@
           }
           const resp = await r.json().catch(() => ({}));
           const runId = resp && resp.run ? String(resp.run.id || "") : "";
-          if (PCONV.optimistic && String((PCONV.optimistic && PCONV.optimistic.sessionId) || "") === String(ctx.sessionId || "")) {
-            PCONV.optimistic.runId = runId;
-            PCONV.optimistic.acknowledgedAt = new Date().toISOString();
-          }
+          injectConversationAckRunToTimeline(
+            ctx,
+            PCONV.optimistic || {},
+            resp || {},
+            { source: "announce-ack" }
+          );
+          PCONV.optimistic = null;
           PCONV.sending = false;
           const doneHint = ctx.routeReason === "explicit-sub"
             ? "已发送到子会话，等待执行回溯刷新…"
             : "已发送到主会话，等待执行回溯刷新…";
           setHintText("conv", doneHint);
           await refreshConversationPanel();
-          const clearedOptimistic = clearConversationOptimisticWhenMaterialized(composeDraftKey, ctx.sessionId, runId);
-          if (clearedOptimistic || (PCONV.optimistic && String((PCONV.optimistic && PCONV.optimistic.sessionId) || "") === String(ctx.sessionId || ""))) {
-            renderConversationDetail(false);
-          }
-          scheduleConversationPoll(1200);
+          if (runId) scheduleConversationPoll(5000);
           return true;
         }
       } catch (_) {
@@ -3875,8 +3468,52 @@
       }, ms);
     }
 
-    function conversationPollDelay(hasWorking) {
+    function ensureConversationPollingGovernanceStateMaps() {
+      if (!PCONV.pollFailureCountByProject || typeof PCONV.pollFailureCountByProject !== "object") {
+        PCONV.pollFailureCountByProject = Object.create(null);
+      }
+    }
+
+    function getConversationPollingPolicy(projectId = "") {
+      const pid = String(projectId || STATE.project || "").trim();
+      const hints = typeof conversationProjectPollingHints === "function"
+        ? conversationProjectPollingHints(pid)
+        : null;
+      return {
+        projectId: pid,
+        enabled: !!(hints && hints.enabled),
+        poll_interval_ms: Math.max(0, Number(hints && hints.poll_interval_ms) || 45000),
+        hidden_poll_interval_ms: Math.max(0, Number(hints && hints.hidden_poll_interval_ms) || 90000),
+        backoff_step_ms: Math.max(0, Number(hints && hints.backoff_step_ms) || 2000),
+        backoff_max_ms: Math.max(0, Number(hints && hints.backoff_max_ms) || 15000),
+        pause_when_hidden: !!(hints && hints.pause_when_hidden),
+      };
+    }
+
+    function conversationPollDelay(projectIdOrHasWorking, hasWorkingArg) {
+      const projectId = typeof projectIdOrHasWorking === "string"
+        ? projectIdOrHasWorking
+        : String(STATE.project || "").trim();
+      const hasWorking = typeof projectIdOrHasWorking === "string"
+        ? !!hasWorkingArg
+        : !!projectIdOrHasWorking;
       if (PCONV.sending) return 4000;
+      const policy = getConversationPollingPolicy(projectId);
+      if (policy.enabled) {
+        if (typeof document !== "undefined" && document.hidden && policy.pause_when_hidden) return 0;
+        ensureConversationPollingGovernanceStateMaps();
+        const failureCount = Math.max(0, Number(PCONV.pollFailureCountByProject[policy.projectId] || 0) || 0);
+        const baseDelay = (typeof document !== "undefined" && document.hidden)
+          ? policy.hidden_poll_interval_ms
+          : policy.poll_interval_ms;
+        if (failureCount > 0) {
+          return Math.min(
+            baseDelay + (failureCount * policy.backoff_step_ms),
+            Math.max(baseDelay, policy.backoff_max_ms)
+          );
+        }
+        return baseDelay;
+      }
       if (hasWorking) {
         if (typeof document !== "undefined" && document.hidden) return 45000;
         return 10000;

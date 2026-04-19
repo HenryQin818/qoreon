@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import re
 import threading
 import time
@@ -10,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from task_dashboard.domain import normalize_task_status
-from task_dashboard.parser_md import extract_excerpt, extract_field
+from task_dashboard.parser_md import extract_excerpt
 from task_dashboard.task_identity import (
     resolve_task_reference,
     runtime_base_dir_for_repo,
@@ -26,7 +25,6 @@ _TASK_SUMMARY_FIELD_NAMES = {"任务目标", "目标", "摘要", "说明"}
 _TASK_FILE_CACHE_LOCK = threading.Lock()
 _TASK_SUMMARY_FILE_CACHE: dict[tuple[str, int, int], str] = {}
 _TASK_HARNESS_FILE_CACHE: dict[tuple[str, int, int], dict[str, Any]] = {}
-_TASK_TIME_FILE_CACHE: dict[tuple[str, int, int], dict[str, str]] = {}
 _TASK_FILE_CACHE_MAX = 256
 
 
@@ -44,87 +42,13 @@ def _normalize_task_path(value: Any) -> str:
 
 
 def _session_repo_root(session: dict[str, Any]) -> Path | None:
-    roots = _session_repo_roots(session)
-    return roots[0] if roots else None
-
-
-def _session_repo_roots(session: dict[str, Any]) -> list[Path]:
-    out: list[Path] = []
-    seen: set[str] = set()
-    execution_context = session.get("project_execution_context") if isinstance(session.get("project_execution_context"), dict) else {}
-    source_ctx = execution_context.get("source") if isinstance(execution_context.get("source"), dict) else {}
-    target_ctx = execution_context.get("target") if isinstance(execution_context.get("target"), dict) else {}
-
-    candidates = [
-        session.get("worktree_root"),
-        session.get("workdir"),
-        target_ctx.get("workdir"),
-        source_ctx.get("workdir"),
-        target_ctx.get("worktree_root"),
-        source_ctx.get("worktree_root"),
-    ]
-    for raw in candidates:
-        text = _as_text(raw)
-        if not text:
-            continue
-        try:
-            root = Path(text).expanduser().resolve()
-        except Exception:
-            continue
-        key = str(root)
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append(root)
-    return out
-
-
-def _task_reference_path_candidates_for_session(session: dict[str, Any], task_path: str) -> list[str]:
-    raw = _normalize_task_path(task_path)
-    if not raw:
-        return []
-    out: list[str] = []
-    seen: set[str] = set()
-
-    def _append(path_value: str) -> None:
-        normalized = _normalize_task_path(path_value)
-        if not normalized or normalized in seen:
-            return
-        seen.add(normalized)
-        out.append(normalized)
-
-    _append(raw)
-    if raw.startswith("Users/"):
-        _append("/" + raw)
-
-    channel_name = _as_text(session.get("channel_name"))
-    top_level_prefixes = ("任务/", "已完成/", "暂缓/", "问题/", "反馈/", "需求/", "产出物/")
-    if not raw.startswith("任务规划/"):
-        _append("任务规划/" + raw)
-        if channel_name and raw.startswith(top_level_prefixes):
-            _append(f"任务规划/{channel_name}/{raw}")
-    return out
-
-
-def _task_reference_resolution_rank(resolved: dict[str, str]) -> tuple[int, int, int, int]:
-    matched_by = _as_text(resolved.get("matched_by"))
-    matched_rank = {
-        "task_path": 60,
-        "task_id_state": 50,
-        "path_alias": 45,
-        "task_id_scan": 40,
-        "task_title_scan": 30,
-        "unresolved_path": 0,
-        "missing": -10,
-        "missing_repo_root": -20,
-    }.get(matched_by, 0)
-    task_path = _normalize_task_path(resolved.get("task_path"))
-    return (
-        1 if _as_text(resolved.get("created_at")) else 0,
-        1 if _as_text(resolved.get("task_id")) else 0,
-        matched_rank,
-        1 if task_path.startswith("任务规划/") else 0,
-    )
+    root_text = _as_text(session.get("worktree_root") or session.get("workdir"))
+    if not root_text:
+        return None
+    try:
+        return Path(root_text).expanduser().resolve()
+    except Exception:
+        return None
 
 
 def _resolved_task_key(task_ref: dict[str, Any]) -> str:
@@ -156,48 +80,26 @@ def _resolve_task_reference_for_session(
     if isinstance(cached, dict):
         return dict(cached)
 
-    repo_roots = _session_repo_roots(session)
-    if not repo_roots:
+    repo_root = _session_repo_root(session)
+    if repo_root is None:
         resolved = {
             "task_path": raw_path,
             "task_id": raw_task_id,
             "parent_task_id": "",
-            "created_at": "",
             "matched_by": "missing_repo_root",
         }
     else:
-        best_resolved: dict[str, str] | None = None
-        candidate_paths = _task_reference_path_candidates_for_session(session, raw_path)
-        if not candidate_paths:
-            candidate_paths = [raw_path]
-        for repo_root in repo_roots:
-            for candidate_path in candidate_paths:
-                candidate_resolved = resolve_task_reference(
-                    repo_root=repo_root,
-                    runtime_base_dir=runtime_base_dir_for_repo(repo_root),
-                    project_id=_as_text(project_id),
-                    task_path=candidate_path,
-                    task_id=raw_task_id,
-                )
-                if best_resolved is None or _task_reference_resolution_rank(candidate_resolved) > _task_reference_resolution_rank(best_resolved):
-                    best_resolved = candidate_resolved
-                if _as_text(candidate_resolved.get("created_at")):
-                    best_resolved = candidate_resolved
-                    break
-            if best_resolved is not None and _as_text(best_resolved.get("created_at")):
-                break
-        resolved = best_resolved or {
-            "task_path": raw_path,
-            "task_id": raw_task_id,
-            "parent_task_id": "",
-            "created_at": "",
-            "matched_by": "missing",
-        }
+        resolved = resolve_task_reference(
+            repo_root=repo_root,
+            runtime_base_dir=runtime_base_dir_for_repo(repo_root),
+            project_id=_as_text(project_id),
+            task_path=raw_path,
+            task_id=raw_task_id,
+        )
     normalized = {
         "task_path": _normalize_task_path(resolved.get("task_path")),
         "task_id": _as_text(resolved.get("task_id")),
         "parent_task_id": _as_text(resolved.get("parent_task_id")),
-        "created_at": _as_text(resolved.get("created_at")),
         "matched_by": _as_text(resolved.get("matched_by")),
     }
     cache[cache_key] = dict(normalized)
@@ -329,32 +231,10 @@ def _cache_put_harness(signature: tuple[str, int, int] | None, roles: dict[str, 
             _TASK_HARNESS_FILE_CACHE.pop(oldest_key, None)
 
 
-def _cache_get_time_meta(signature: tuple[str, int, int] | None) -> dict[str, str] | None:
-    if signature is None:
-        return None
-    with _TASK_FILE_CACHE_LOCK:
-        cached = _TASK_TIME_FILE_CACHE.get(signature)
-    return dict(cached) if isinstance(cached, dict) else None
-
-
-def _cache_put_time_meta(signature: tuple[str, int, int] | None, meta: dict[str, str]) -> None:
-    if signature is None:
-        return
-    with _TASK_FILE_CACHE_LOCK:
-        _TASK_TIME_FILE_CACHE[signature] = {
-            "created_at": _as_text(meta.get("created_at")),
-            "due": _as_text(meta.get("due")),
-        }
-        if len(_TASK_TIME_FILE_CACHE) > _TASK_FILE_CACHE_MAX:
-            oldest_key = next(iter(_TASK_TIME_FILE_CACHE))
-            _TASK_TIME_FILE_CACHE.pop(oldest_key, None)
-
-
 def _clear_task_tracking_file_caches() -> None:
     with _TASK_FILE_CACHE_LOCK:
         _TASK_SUMMARY_FILE_CACHE.clear()
         _TASK_HARNESS_FILE_CACHE.clear()
-        _TASK_TIME_FILE_CACHE.clear()
 
 
 def _resolve_task_file_path(
@@ -372,18 +252,18 @@ def _resolve_task_file_path(
         task_id=task_id,
         cache=resolve_cache,
     )
+    root = _session_repo_root(session)
     rel_text = _normalize_task_path(resolved.get("task_path"))
-    if not rel_text:
+    if root is None or not rel_text:
         return None, resolved
-    for root in _session_repo_roots(session):
-        try:
-            target = (root / rel_text).resolve()
-            target.relative_to(root)
-        except Exception:
-            continue
-        if target.is_file():
-            return target, resolved
-    return None, resolved
+    try:
+        target = (root / rel_text).resolve()
+        target.relative_to(root)
+    except Exception:
+        return None, resolved
+    if not target.is_file():
+        return None, resolved
+    return target, resolved
 
 
 def _load_task_summary_text(
@@ -495,58 +375,6 @@ def _load_task_harness_roles(
     cache[cache_key] = dict(roles_payload)
     _cache_put_harness(signature, roles_payload)
     return dict(cache[cache_key])
-
-
-def _load_task_time_meta(
-    *,
-    session: dict[str, Any],
-    project_id: str,
-    task_path: str,
-    task_id: str = "",
-    cache: dict[str, dict[str, str]],
-    resolve_cache: dict[str, dict[str, str]],
-) -> dict[str, str]:
-    file_path, resolved = _resolve_task_file_path(
-        session=session,
-        project_id=project_id,
-        task_path=task_path,
-        task_id=task_id,
-        resolve_cache=resolve_cache,
-    )
-    cache_key = _resolved_task_key(resolved)
-    if not cache_key:
-        return {"created_at": "", "due": ""}
-    if cache_key in cache:
-        return dict(cache[cache_key])
-    if file_path is None:
-        fallback = {
-            "created_at": _as_text(resolved.get("created_at")),
-            "due": "",
-        }
-        cache[cache_key] = dict(fallback)
-        return dict(fallback)
-    signature = _task_file_signature(file_path)
-    cached_meta = _cache_get_time_meta(signature)
-    if cached_meta is not None:
-        cache[cache_key] = dict(cached_meta)
-        return dict(cached_meta)
-    try:
-        md = safe_read_text(file_path)
-    except Exception:
-        fallback = {
-            "created_at": _as_text(resolved.get("created_at")),
-            "due": "",
-        }
-        cache[cache_key] = dict(fallback)
-        return dict(fallback)
-    created_at = _as_text(resolved.get("created_at"))
-    meta = {
-        "created_at": created_at,
-        "due": _as_text(extract_field(md, "截止日期") or extract_field(md, "截止")),
-    }
-    cache[cache_key] = dict(meta)
-    _cache_put_time_meta(signature, meta)
-    return dict(meta)
 
 
 def _source_priority(source: str) -> int:
@@ -763,93 +591,6 @@ def _pick_latest_open_task_key(
     return best_key
 
 
-def _task_row_has_complete_owner(row: dict[str, Any] | None) -> bool:
-    if not isinstance(row, dict):
-        return False
-    owner = row.get("main_owner")
-    if not isinstance(owner, dict):
-        return False
-    return bool(
-        _as_text(owner.get("agent_name"))
-        or _as_text(owner.get("alias"))
-        or _as_text(owner.get("session_id"))
-    )
-
-
-def _iter_task_row_role_refs(row: dict[str, Any] | None) -> list[dict[str, Any]]:
-    if not isinstance(row, dict):
-        return []
-    refs: list[dict[str, Any]] = []
-    owner = row.get("main_owner")
-    if isinstance(owner, dict):
-        refs.append(owner)
-    for key in (
-        "collaborators",
-        "validators",
-        "challengers",
-        "backup_owners",
-        "management_slot",
-        "custom_roles",
-    ):
-        for item in row.get(key) if isinstance(row.get(key), list) else []:
-            if isinstance(item, dict):
-                refs.append(item)
-    return refs
-
-
-def _task_row_matches_session(row: dict[str, Any] | None, session: dict[str, Any]) -> bool:
-    if not isinstance(row, dict) or not isinstance(session, dict):
-        return False
-    session_tokens = {
-        _as_text(session.get("id")),
-        _as_text(session.get("alias")),
-        _as_text(session.get("display_name")),
-        _as_text(session.get("channel_name")),
-    }
-    session_tokens = {token for token in session_tokens if token}
-    if not session_tokens:
-        return False
-    for ref in _iter_task_row_role_refs(row):
-        ref_tokens = {
-            _as_text(ref.get("session_id")),
-            _as_text(ref.get("agent_name")),
-            _as_text(ref.get("alias")),
-            _as_text(ref.get("channel_name")),
-            _as_text(ref.get("name")),
-        }
-        if session_tokens & {token for token in ref_tokens if token}:
-            return True
-    return False
-
-
-def _pick_latest_task_key(
-    task_rows: dict[str, dict[str, Any]],
-    *,
-    exclude_key: str = "",
-    session: dict[str, Any] | None = None,
-    require_complete_owner: bool = False,
-    require_open: bool = False,
-) -> str:
-    best_key = ""
-    best_anchor = ""
-    for task_key, row in task_rows.items():
-        if not task_key or task_key == exclude_key:
-            continue
-        if require_open and _is_terminal_task_row(row):
-            continue
-        if require_complete_owner and not _task_row_has_complete_owner(row):
-            continue
-        if session is not None and not _task_row_matches_session(row, session):
-            continue
-        anchor = _task_row_anchor(row)
-        if not anchor:
-            continue
-        if (not best_key) or anchor > best_anchor:
-            best_key = task_key
-            best_anchor = anchor
-    return best_key
-
-
 def _build_missing_owner() -> dict[str, Any]:
     return {
         "agent_name": "",
@@ -1045,21 +786,11 @@ def _build_task_row(
     at: str,
     task_summary_cache: dict[str, str],
     task_harness_cache: dict[str, dict[str, Any]],
-    task_time_cache: dict[str, dict[str, str]],
     resolve_cache: dict[str, dict[str, str]],
 ) -> dict[str, Any]:
     task_path = _normalize_task_path(task_ref.get("task_path"))
     task_id = _as_text(task_ref.get("task_id"))
     parent_task_id = _as_text(task_ref.get("parent_task_id"))
-    task_time_meta = _load_task_time_meta(
-        session=session,
-        project_id=project_id,
-        task_path=task_path,
-        task_id=task_id,
-        cache=task_time_cache,
-        resolve_cache=resolve_cache,
-    )
-    created_at = _as_text(task_ref.get("created_at")) or _as_text(task_time_meta.get("created_at"))
     task_harness = _load_task_harness_roles(
         session=session,
         project_id=project_id,
@@ -1072,8 +803,6 @@ def _build_task_row(
         "task_path": task_path,
         "task_id": task_id,
         "parent_task_id": parent_task_id,
-        "created_at": created_at,
-        "due": _as_text(task_time_meta.get("due")),
         "task_title": _task_title_from_path(task_path),
         "task_primary_status": _task_primary_status_from_path(task_path),
         "task_summary_text": _load_task_summary_text(
@@ -1102,123 +831,6 @@ def _build_task_row(
     }
 
 
-def _run_meta_related_session_ids(meta: Any) -> set[str]:
-    row = meta if isinstance(meta, dict) else {}
-    related: set[str] = set()
-
-    def _add(value: Any) -> None:
-        text = _as_text(value)
-        if text:
-            related.add(text)
-
-    def _add_ref(payload: Any) -> None:
-        if not isinstance(payload, dict):
-            return
-        _add(payload.get("session_id") if "session_id" in payload else payload.get("sessionId"))
-
-    _add(row.get("sessionId") if "sessionId" in row else row.get("session_id"))
-    _add(row.get("target_session_id") if "target_session_id" in row else row.get("targetSessionId"))
-    _add(row.get("source_session_id") if "source_session_id" in row else row.get("sourceSessionId"))
-
-    for key in ("source_ref", "target_ref", "callback_to", "sender_agent_ref"):
-        _add_ref(row.get(key))
-
-    communication_view = row.get("communication_view")
-    if isinstance(communication_view, dict):
-        _add(
-            communication_view.get("target_session_id")
-            if "target_session_id" in communication_view
-            else communication_view.get("targetSessionId")
-        )
-        _add(
-            communication_view.get("source_session_id")
-            if "source_session_id" in communication_view
-            else communication_view.get("sourceSessionId")
-        )
-
-    technical = row.get("technical")
-    technical_route = technical.get("route_resolution") if isinstance(technical, dict) else None
-    for route in (row.get("route_resolution"), technical_route):
-        if not isinstance(route, dict):
-            continue
-        for key in ("final_target", "resolved_target", "original_callback_to", "callback_to"):
-            _add_ref(route.get(key))
-
-    return related
-
-
-def _session_list_prefetch_runs_cap() -> int:
-    raw = _as_text(os.environ.get("CCB_SESSION_LIST_TASK_TRACKING_PREFETCH_CAP"))
-    if raw:
-        try:
-            value = int(raw)
-            return max(100, min(value, 6000))
-        except Exception:
-            pass
-    return 4000
-
-
-def build_prefetched_session_run_map(
-    *,
-    store: Any,
-    project_id: str,
-    session_ids: list[str],
-    per_session_limit: int,
-) -> dict[str, list[dict[str, Any]]]:
-    pid = _as_text(project_id)
-    normalized_ids = [_as_text(item) for item in session_ids if _as_text(item)]
-    if not pid or not normalized_ids:
-        return {}
-
-    unique_ids = list(dict.fromkeys(normalized_ids))
-    wanted = set(unique_ids)
-    safe_per_session_limit = max(1, min(int(per_session_limit or 1), 120))
-    project_runs: list[dict[str, Any]] | None = None
-    batch_list_runs = getattr(store, "list_runs_for_sessions", None)
-    if callable(batch_list_runs):
-        try:
-            prefetched = batch_list_runs(
-                project_id=pid,
-                session_ids=unique_ids,
-                per_session_limit=safe_per_session_limit,
-                payload_mode="light",
-            )
-        except Exception:
-            prefetched = None
-        if isinstance(prefetched, list):
-            project_runs = prefetched
-    if project_runs is None:
-        project_limit = min(
-            max(len(unique_ids) * safe_per_session_limit, safe_per_session_limit),
-            _session_list_prefetch_runs_cap(),
-        )
-        try:
-            project_runs = store.list_runs(
-                project_id=pid,
-                limit=project_limit,
-                payload_mode="light",
-            )
-        except Exception:
-            return {sid: [] for sid in unique_ids}
-
-    grouped: dict[str, list[dict[str, Any]]] = {sid: [] for sid in unique_ids}
-    counts: dict[str, int] = {sid: 0 for sid in unique_ids}
-    for meta in project_runs if isinstance(project_runs, list) else []:
-        if not isinstance(meta, dict):
-            continue
-        related_ids = _run_meta_related_session_ids(meta)
-        if not related_ids:
-            continue
-        for sid in related_ids:
-            if sid not in wanted:
-                continue
-            if counts[sid] >= safe_per_session_limit:
-                continue
-            grouped[sid].append(meta)
-            counts[sid] += 1
-    return grouped
-
-
 def build_session_task_tracking(
     *,
     session: dict[str, Any],
@@ -1227,7 +839,6 @@ def build_session_task_tracking(
     session_id: str,
     runtime_state: dict[str, Any],
     run_limit: int = 80,
-    runs: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "version": "v1.1",
@@ -1241,15 +852,13 @@ def build_session_task_tracking(
     if not (pid and sid):
         return payload
 
-    safe_run_limit = max(1, min(int(run_limit or 80), 120))
-    if runs is None:
-        runs = store.list_runs(
-            project_id=pid,
-            session_id=sid,
-            limit=safe_run_limit,
-            payload_mode="light",
-        )
-    runs = [row for row in runs if isinstance(row, dict)][:safe_run_limit]
+    runs = store.list_runs(
+        project_id=pid,
+        session_id=sid,
+        limit=max(1, min(int(run_limit or 80), 120)),
+        payload_mode="light",
+    )
+    runs = [row for row in runs if isinstance(row, dict)]
     if not runs:
         return payload
 
@@ -1261,7 +870,6 @@ def build_session_task_tracking(
     )
     task_summary_cache: dict[str, str] = {}
     task_harness_cache: dict[str, dict[str, Any]] = {}
-    task_time_cache: dict[str, dict[str, str]] = {}
     task_resolve_cache: dict[str, dict[str, str]] = {}
     task_rows: dict[str, dict[str, Any]] = {}
     task_latest_meta: dict[str, dict[str, Any]] = {}
@@ -1302,7 +910,6 @@ def build_session_task_tracking(
                     at=at,
                     task_summary_cache=task_summary_cache,
                     task_harness_cache=task_harness_cache,
-                    task_time_cache=task_time_cache,
                     resolve_cache=task_resolve_cache,
                 )
                 task_rows[task_key] = row
@@ -1322,7 +929,6 @@ def build_session_task_tracking(
             at=_as_text(payload.get("updated_at")),
             task_summary_cache=task_summary_cache,
             task_harness_cache=task_harness_cache,
-            task_time_cache=task_time_cache,
             resolve_cache=task_resolve_cache,
         )
 
@@ -1383,36 +989,7 @@ def build_session_task_tracking(
                     task_latest_meta[action_key] = meta
 
     current_row = task_rows.get(current_task_key) if current_task_key else None
-    current_task_locked = False
-    if current_row is not None and not _is_terminal_task_row(current_row):
-        current_has_owner = _task_row_has_complete_owner(current_row)
-        current_matches_session = _task_row_matches_session(current_row, session)
-        if (not current_has_owner) or (not current_matches_session):
-            preferred_current_key = _pick_latest_task_key(
-                task_rows,
-                session=session,
-                require_complete_owner=True,
-            )
-            if not preferred_current_key and not current_has_owner:
-                preferred_current_key = _pick_latest_task_key(
-                    task_rows,
-                    exclude_key=current_task_key,
-                    require_complete_owner=True,
-                    require_open=True,
-                )
-            if preferred_current_key:
-                promoted_row = task_rows.get(preferred_current_key) or {}
-                current_task_key = preferred_current_key
-                current_task_ref = {
-                    "task_path": _normalize_task_path(promoted_row.get("task_path")),
-                    "task_id": _as_text(promoted_row.get("task_id")),
-                    "parent_task_id": _as_text(promoted_row.get("parent_task_id")),
-                    "created_at": _as_text(promoted_row.get("created_at")),
-                }
-                current_source = _as_text(promoted_row.get("source")) or "system_merge"
-                current_row = promoted_row
-                current_task_locked = True
-    if not current_task_locked and (current_row is None or _is_terminal_task_row(current_row)):
+    if current_row is None or _is_terminal_task_row(current_row):
         latest_open_task_key = _pick_latest_open_task_key(task_rows, exclude_key=current_task_key)
         if latest_open_task_key:
             promoted_row = task_rows.get(latest_open_task_key) or {}
@@ -1421,7 +998,6 @@ def build_session_task_tracking(
                 "task_path": _normalize_task_path(promoted_row.get("task_path")),
                 "task_id": _as_text(promoted_row.get("task_id")),
                 "parent_task_id": _as_text(promoted_row.get("parent_task_id")),
-                "created_at": _as_text(promoted_row.get("created_at")),
             }
             current_source = _as_text(promoted_row.get("source")) or "system_merge"
         else:
@@ -1443,7 +1019,6 @@ def build_session_task_tracking(
                         at=_as_text(payload.get("updated_at")),
                         task_summary_cache=task_summary_cache,
                         task_harness_cache=task_harness_cache,
-                        task_time_cache=task_time_cache,
                         resolve_cache=task_resolve_cache,
                     )
                 session_primary_row = task_rows.get(session_primary_key) if session_primary_key else None

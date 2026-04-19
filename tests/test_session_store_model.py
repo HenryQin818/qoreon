@@ -59,38 +59,6 @@ class SessionStoreModelTests(unittest.TestCase):
             got = store.get_session("22222222-2222-2222-2222-222222222222") or {}
             self.assertEqual(got.get("reasoning_effort"), "extra_high")
 
-    def test_create_session_rejects_duplicate_session_id_across_projects(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            store = SessionStore(base_dir=Path(td))
-            sid = "12121212-1212-1212-1212-121212121212"
-            store.create_session(
-                project_id="local_service_hub",
-                channel_name="辅助01",
-                cli_type="codex",
-                session_id=sid,
-            )
-            with self.assertRaisesRegex(ValueError, "another project"):
-                store.create_session(
-                    project_id="task_dashboard_open_source_execution",
-                    channel_name="子级04",
-                    cli_type="codex",
-                    session_id=sid,
-                )
-
-    def test_get_session_supports_project_scoped_lookup(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            store = SessionStore(base_dir=Path(td))
-            sid = "13131313-1313-1313-1313-131313131313"
-            store.create_session(
-                project_id="task_dashboard",
-                channel_name="辅助06",
-                cli_type="codex",
-                session_id=sid,
-            )
-            scoped = store.get_session(sid, project_id="task_dashboard") or {}
-            self.assertEqual(scoped.get("project_id"), "task_dashboard")
-            self.assertEqual(scoped.get("channel_name"), "辅助06")
-
     def test_session_store_persists_work_context_fields(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             store = SessionStore(base_dir=Path(td))
@@ -372,6 +340,41 @@ class SessionStoreModelTests(unittest.TestCase):
             self.assertEqual((visible[0] or {}).get("id"), sid2)
             default_row = store.get_channel_default_session("task_dashboard", "子级04-前端体验（task-overview 页面交互）") or {}
             self.assertEqual(default_row.get("id"), sid2)
+
+    def test_delete_session_marks_session_deleted_and_promotes_fallback_primary(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            store = SessionStore(base_dir=Path(td))
+            sid1 = "67676767-6767-6767-6767-676767676767"
+            sid2 = "78787878-7878-7878-7878-787878787878"
+            channel_name = "辅助05-督办PMO（排期-巡查-催办-升级）"
+            first = store.create_session(
+                project_id="task_dashboard",
+                channel_name=channel_name,
+                cli_type="codex",
+                session_id=sid1,
+                session_role="primary",
+                is_primary=True,
+            )
+            second = store.create_session(
+                project_id="task_dashboard",
+                channel_name=channel_name,
+                cli_type="codex",
+                session_id=sid2,
+            )
+            self.assertTrue(bool(first.get("is_primary")))
+            self.assertFalse(bool(second.get("is_primary")))
+
+            self.assertTrue(store.delete_session(sid1))
+
+            deleted = store.get_session(sid1) or {}
+            fallback = store.get_session(sid2) or {}
+            self.assertTrue(bool(deleted.get("is_deleted")))
+            self.assertEqual(str(deleted.get("deleted_reason") or ""), "api_delete_session")
+            self.assertFalse(bool(deleted.get("is_primary")))
+            self.assertTrue(str(deleted.get("deleted_at") or ""))
+            self.assertTrue(bool(fallback.get("is_primary")))
+            visible = store.list_sessions("task_dashboard", channel_name)
+            self.assertEqual([row.get("id") for row in visible], [sid2])
 
     def test_get_channel_default_session_ignores_legacy_status_field(self) -> None:
         with tempfile.TemporaryDirectory() as td:

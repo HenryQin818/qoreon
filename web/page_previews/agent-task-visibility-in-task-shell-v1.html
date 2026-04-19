@@ -1,0 +1,556 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>B 批 · 任务页 Agent 可见性静态镜像 v1</title>
+  <link rel="stylesheet" href="./task-shell-preview-base.css" />
+  <link rel="stylesheet" href="./agent-task-ops-preview-v1.css" />
+</head>
+<body class="agent-ops-preview">
+  <div class="ambient-bg">
+    <div class="blob blob-1"></div>
+    <div class="blob blob-2"></div>
+    <div class="blob blob-3"></div>
+    <div class="blob blob-4"></div>
+    <div class="blob blob-5"></div>
+    <div class="blob blob-6"></div>
+    <div class="blob blob-7"></div>
+    <div class="blob blob-8"></div>
+  </div>
+  <div class="shell">
+    <header>
+      <div class="header-main">
+        <a class="back-link" href="/share/agent-task-ops-unified-scenarios-v1.html" title="返回场景总入口">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" width="18" height="18">
+            <path d="M15 19l-7-7 7-7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <span>场景包</span>
+        </a>
+        <div class="project-info">
+          <h1 class="project-title">task_dashboard</h1>
+          <div class="project-meta-row">
+            <span class="project-desc">B 批静态确认稿 · 任务页内补 Agent 轻量过滤 / 定位，不改页面级结构</span>
+            <span class="env-chip is-stable">stable</span>
+            <span class="source-chip is-fixtures">静态 demo</span>
+            <span class="project-mode-chip is-privileged">task</span>
+          </div>
+        </div>
+      </div>
+      <div class="header-nav">
+        <div class="header-mode-tabs" role="tablist" aria-label="一级页面切换">
+          <button class="header-mode-btn" type="button" role="tab" aria-selected="false">通道</button>
+          <button class="header-mode-btn" type="button" role="tab" aria-selected="false">对话</button>
+          <button class="header-mode-btn active" type="button" role="tab" aria-selected="true">任务</button>
+        </div>
+      </div>
+      <div class="hctrl">
+        <span class="pill is-active">B 批</span>
+      </div>
+    </header>
+
+    <main class="scenario-page">
+      <section class="banner">
+        <h2 class="banner-title">任务页 Agent 可见性 · 真实任务壳静态镜像</h2>
+        <div class="banner-copy">这版只在当前任务页控制区增加 `Agent` 轻量过滤入口，并让总任务 / 子任务继续沿用现有任务面板的阅读结构。过滤结果仍以任务为中心，子任务只跟随所属总任务显示，不单独跨组漂移。</div>
+        <div class="banner-row">
+          <span class="pill is-active">不改页面级结构</span>
+          <span class="pill">Agent 轻量过滤</span>
+          <span class="pill">任务优先</span>
+          <span class="pill">总任务优先 / 子任务跟随</span>
+          <span class="pill">只读静态镜像</span>
+        </div>
+      </section>
+
+      <section class="layout-channel">
+        <aside class="surface">
+          <div class="section-head">
+            <div>
+              <h2>通道</h2>
+              <div class="section-copy">左侧通道区保持现网页壳关系，只为说明当前用户还在 `task` 页内，没有被带去独立 Agent 中心页。</div>
+            </div>
+            <span class="pill">当前项目</span>
+          </div>
+          <div class="channel-stack">
+            <article class="channel-card">
+              <div class="channel-card-title">主体-总控（合并与验收）</div>
+              <div class="channel-card-summary">总控当前只看 B/C 边界冻结，不提前放行真实研发实施。</div>
+              <div class="chip-row">
+                <span class="pill">待回评审</span>
+              </div>
+            </article>
+            <article class="channel-card is-active">
+              <div class="channel-card-title">辅助04-原型设计与 Demo 可视化</div>
+              <div class="channel-card-summary">当前主线：先做任务页 Agent 可见性与 overview 任务数量标记的系统壳静态确认稿，再回收可实施性评审。</div>
+              <div class="chip-row">
+                <span class="pill is-active">B/C 主线</span>
+                <span class="pill">静态确认</span>
+              </div>
+            </article>
+            <article class="channel-card">
+              <div class="channel-card-title">子级04-前端体验</div>
+              <div class="channel-card-summary">这轮只改 `page_previews` 和 `/share` 产物，不进入 live 任务页实现。</div>
+              <div class="chip-row">
+                <span class="pill">只读预演</span>
+              </div>
+            </article>
+          </div>
+        </aside>
+
+        <section class="surface">
+          <div class="section-head">
+            <div>
+              <h2>任务主画布</h2>
+              <div class="section-copy">控制区新增 `Agent` 轻量过滤后，中区继续还是原来的任务面板语法。下面示例默认选中 `前端页面-规范策划`，用来说明“这个 Agent 当前关联了哪些任务”。</div>
+            </div>
+            <div class="chip-row" id="statusPills"></div>
+          </div>
+
+          <div class="task-filter-toolbar">
+            <div class="task-filter-left">
+              <div class="chip-row">
+                <span class="pill is-active">排序基准：最新动作</span>
+                <span class="pill">状态筛选：全部</span>
+                <span class="pill">点击任务卡查看右侧详情</span>
+              </div>
+              <div class="agent-filter-row" id="agentFilterRow"></div>
+            </div>
+            <div class="task-filter-right">
+              <button class="soft-btn" id="clearFilterBtn" type="button">清空 Agent 过滤</button>
+            </div>
+          </div>
+
+          <div class="result-row" id="filterResultBar"></div>
+          <div class="task-board" id="taskBoard"></div>
+        </section>
+
+        <aside class="surface detail-pane" id="detailPane"></aside>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const toneByAgent = {
+      "前端页面-规范策划": "tone-blue",
+      "产品策划-任务派发": "tone-green",
+      "数据治理-消息监控": "tone-orange",
+      "总控-项目经理": "tone-purple",
+      "测试验收-Agent": "tone-slate",
+      "服务开发": "tone-blue",
+    };
+
+    const agents = [
+      "前端页面-规范策划",
+      "产品策划-任务派发",
+      "数据治理-消息监控",
+      "总控-项目经理",
+      "测试验收-Agent",
+      "服务开发",
+    ];
+
+    const days = [
+      {
+        label: "创建于 04月06日",
+        rows: [
+          {
+            kind: "parent",
+            title: "B/C 前端静态确认稿与可实施性评审",
+            status: "进行中",
+            updatedAt: "04-06 15:02",
+            owner: "前端页面-规范策划",
+            createdAt: "04-05 00:35",
+            summary: "当前只做系统壳静态确认稿，不进入真实实施。任务页需要补 Agent 轻量过滤入口，overview 只补 `处理中 / 待处理` 负载标记。",
+            detail: "这条总任务承接辅助04当前主线，静态确认阶段需要把 Agent 过滤做成任务页内的轻入口，而不是独立 Agent 中心。",
+            roles: {
+              "主": ["前端页面-规范策划"],
+              "管": ["产品策划-任务派发"],
+              "协": ["数据治理-消息监控"],
+              "验": ["总控-项目经理"],
+            },
+            children: [
+              {
+                title: "任务页 Agent 过滤静态确认稿",
+                status: "进行中",
+                updatedAt: "04-06 15:18",
+                owner: "前端页面-规范策划",
+                createdAt: "04-06 15:05",
+                summary: "在顶部控制区增加 Agent 轻量过滤与清空入口，过滤结果继续走当前总任务 / 子任务关系。",
+                detail: "真实实施预计触达 `web/task.html.tpl`、`web/task.css`、`web/task_parts/77-project-modes.js`。",
+                roles: {
+                  "主": ["前端页面-规范策划"],
+                  "管": ["产品策划-任务派发"],
+                  "协": ["数据治理-消息监控"],
+                },
+              },
+              {
+                title: "overview 数量标记静态确认稿",
+                status: "待办",
+                updatedAt: "04-06 15:10",
+                owner: "前端页面-规范策划",
+                createdAt: "04-06 15:05",
+                summary: "在进程 / 会话列表卡片内容区试排 `处理中 / 待处理` 两类 badge，不把 overview 做成新的统计面板。",
+                detail: "真实实施预计触达 `web/overview.html.tpl`、`web/overview.css`、`web/overview.js`。",
+                roles: {
+                  "主": ["前端页面-规范策划"],
+                  "协": ["产品策划-任务派发"],
+                },
+              },
+              {
+                title: "统一入口页与 share 路径发布",
+                status: "待验收",
+                updatedAt: "04-06 15:21",
+                owner: "产品策划-任务派发",
+                createdAt: "04-06 15:06",
+                summary: "统一入口页需要把 B/C 两个场景串起来，产品可以直接逐页拍板。",
+                detail: "这条子任务用于交付 `/share/agent-task-ops-unified-scenarios-v1.html` 并补五段式回执。",
+                roles: {
+                  "主": ["产品策划-任务派发"],
+                  "协": ["前端页面-规范策划"],
+                  "验": ["总控-项目经理"],
+                },
+              },
+            ],
+          },
+          {
+            kind: "parent",
+            title: "负责Agent术语统一与任务详情弹框统一接线实施",
+            status: "已完成",
+            updatedAt: "04-06 02:33",
+            owner: "前端页面-规范策划",
+            createdAt: "04-06 02:31",
+            summary: "A 批前置执行已完成，当前任务详情弹框已统一复用对话页只读 viewer，并将相关展示层文案改成 `负责Agent`。",
+            detail: "这条已完成任务保留在过滤结果里，是因为它仍然与当前选中的前端 Agent 强关联，可作为 B 批复用路径的前置依据。",
+            roles: {
+              "主": ["前端页面-规范策划"],
+              "管": ["产品策划-任务派发"],
+              "验": ["测试验收-Agent"],
+            },
+            children: [
+              {
+                title: "任务 tab 全卡详情点击恢复",
+                status: "已完成",
+                updatedAt: "04-06 02:33",
+                owner: "前端页面-规范策划",
+                createdAt: "04-06 02:32",
+                summary: "统一 viewer bridge 已抽通，任务 tab 与对话页详情层现在走同一条只读弹框。",
+                detail: "这说明后续 B 批如需从任务卡快速回填 Agent 过滤，前端已有稳定详情承接层可复用。",
+                roles: {
+                  "主": ["前端页面-规范策划"],
+                  "验": ["测试验收-Agent"],
+                },
+              },
+            ],
+          },
+        ],
+      },
+      {
+        label: "创建于 04月05日",
+        rows: [
+          {
+            kind: "parent",
+            title: "任务页创建时间显示与时间轴排查",
+            status: "已完成",
+            updatedAt: "04-06 11:38",
+            owner: "前端页面-规范策划",
+            createdAt: "04-06 11:38",
+            summary: "前端已修复缺 `current_task_ref.created_at` 的补拉逻辑，时间轴按具体日期分桶正常显示。",
+            detail: "这条前置已稳定，说明 B 批在任务页增加 Agent 过滤时，可以继续建立在当前时间语义和分桶结果之上。",
+            roles: {
+              "主": ["前端页面-规范策划"],
+              "协": ["数据治理-消息监控"],
+              "验": ["产品策划-任务派发"],
+            },
+            children: [
+              {
+                title: "created_at 详情补拉修复",
+                status: "已完成",
+                updatedAt: "04-06 11:44",
+                owner: "前端页面-规范策划",
+                createdAt: "04-06 11:40",
+                summary: "会话浅层目录缺创建时间时，任务面板会主动补拉 `/api/sessions/:id` 详情，不再误落 `未标创建时间`。",
+                detail: "如果 B 批后续要把 Agent 过滤结果和时间轴共同展示，这条逻辑仍然可复用。",
+                roles: {
+                  "主": ["前端页面-规范策划"],
+                  "协": ["数据治理-消息监控"],
+                },
+              },
+            ],
+          },
+        ],
+      },
+    ];
+
+    const statusMeta = {
+      "待办": { key: "todo", label: "待办" },
+      "进行中": { key: "ongoing", label: "进行中" },
+      "待验收": { key: "review", label: "待验收" },
+      "已完成": { key: "done", label: "已完成" },
+      "暂缓": { key: "paused", label: "暂缓" },
+    };
+
+    const state = {
+      selectedAgent: "前端页面-规范策划",
+      selectedTaskKey: "",
+    };
+
+    function roleEntries(roles) {
+      return Object.entries(roles || {}).filter((entry) => Array.isArray(entry[1]) && entry[1].length);
+    }
+
+    function isStrongRelated(task, agent) {
+      return roleEntries(task.roles).some(([, members]) => members.includes(agent));
+    }
+
+    function taskKey(task, rowIndex, childIndex) {
+      return [task.title, rowIndex, childIndex].join("::");
+    }
+
+    function shortName(name) {
+      return String(name || "").trim().slice(0, 1) || "A";
+    }
+
+    function avatarMarkup(name) {
+      const tone = toneByAgent[name] || "tone-blue";
+      return `<span class="avatar ${tone}" title="${name}">${shortName(name)}</span>`;
+    }
+
+    function roleGroupsMarkup(task) {
+      return roleEntries(task.roles).map(([label, members]) => {
+        return `
+          <div class="role-group">
+            <span class="role-group-label">${label}</span>
+            <div class="avatar-list">${members.map((name) => avatarMarkup(name)).join("")}</div>
+          </div>
+        `;
+      }).join("");
+    }
+
+    function filterDaysByAgent(agent) {
+      return days.map((day, dayIndex) => {
+        const rows = day.rows.map((row, rowIndex) => {
+          const parentVisible = !agent || isStrongRelated(row, agent);
+          const visibleChildren = (row.children || []).filter((child) => !agent || isStrongRelated(child, agent));
+          if (!parentVisible && !visibleChildren.length) return null;
+          return {
+            ...row,
+            __dayIndex: dayIndex,
+            __rowIndex: rowIndex,
+            __key: taskKey(row, rowIndex, -1),
+            visibleChildren,
+          };
+        }).filter(Boolean);
+        return rows.length ? { ...day, rows } : null;
+      }).filter(Boolean);
+    }
+
+    function collectVisibleTasks(filteredDays) {
+      const out = [];
+      filteredDays.forEach((day) => {
+        day.rows.forEach((row) => {
+          out.push({ task: row, type: "parent" });
+          (row.visibleChildren || []).forEach((child, childIndex) => {
+            out.push({
+              task: child,
+              type: "child",
+              parentTitle: row.title,
+              key: taskKey(child, row.__rowIndex, childIndex),
+            });
+          });
+        });
+      });
+      return out;
+    }
+
+    function renderStatusPills(filteredDays) {
+      const pills = document.getElementById("statusPills");
+      const counters = { "待办": 0, "进行中": 0, "待验收": 0, "已完成": 0, "暂缓": 0 };
+      collectVisibleTasks(filteredDays).forEach(({ task }) => {
+        counters[task.status] = (counters[task.status] || 0) + 1;
+      });
+      pills.innerHTML = Object.keys(counters).map((label) => {
+        const active = label === "进行中";
+        return `<span class="pill${active ? " is-active" : ""}">${label} ${counters[label]}</span>`;
+      }).join("");
+    }
+
+    function renderAgentFilters(filteredDays) {
+      const row = document.getElementById("agentFilterRow");
+      const visibleTasks = collectVisibleTasks(filterDaysByAgent(""));
+      row.innerHTML = agents.map((agent) => {
+        const count = visibleTasks.filter(({ task }) => isStrongRelated(task, agent)).length;
+        const cls = state.selectedAgent === agent ? "agent-pill is-active" : "agent-pill";
+        return `<button type="button" class="${cls}" data-agent="${agent}">${agent}<small>${count} 条</small></button>`;
+      }).join("");
+      row.querySelectorAll("[data-agent]").forEach((node) => {
+        node.addEventListener("click", () => {
+          state.selectedAgent = node.getAttribute("data-agent") || "";
+          state.selectedTaskKey = "";
+          render();
+        });
+      });
+      document.getElementById("clearFilterBtn").onclick = () => {
+        state.selectedAgent = "";
+        state.selectedTaskKey = "";
+        render();
+      };
+    }
+
+    function renderResultBar(filteredDays) {
+      const bar = document.getElementById("filterResultBar");
+      const visibleTasks = collectVisibleTasks(filteredDays);
+      const total = visibleTasks.length;
+      const groupCount = filteredDays.reduce((sum, day) => sum + day.rows.length, 0);
+      const agentText = state.selectedAgent || "全部 Agent";
+      bar.innerHTML = `
+        <strong>当前过滤：</strong>${agentText}
+        <span class="meta-chip is-active">强关联任务 ${total}</span>
+        <span class="meta-chip">总任务主线 ${groupCount}</span>
+        <span class="meta-chip">子任务仍跟随所属总任务显示</span>
+      `;
+    }
+
+    function renderBoard(filteredDays) {
+      const board = document.getElementById("taskBoard");
+      const visibleTasks = collectVisibleTasks(filteredDays);
+      if (!state.selectedTaskKey && visibleTasks.length) {
+        const first = visibleTasks[0];
+        state.selectedTaskKey = first.type === "parent" ? first.task.__key : first.key;
+      }
+      if (!filteredDays.length) {
+        board.innerHTML = `<div class="empty-state">当前 Agent 过滤下暂无任务。静态稿里保留弱态提示和清空入口，真实实现可直接沿用这个降级关系。</div>`;
+        return;
+      }
+      board.innerHTML = filteredDays.map((day) => {
+        return `
+          <section class="timeline-day">
+            <div class="timeline-day-head">
+              <div class="timeline-day-title">${day.label}</div>
+              <div class="timeline-day-meta">${day.rows.length} 组总任务</div>
+            </div>
+            ${day.rows.map((row) => {
+              const parentMeta = statusMeta[row.status] || statusMeta["待办"];
+              const parentSelected = state.selectedTaskKey === row.__key ? " is-selected" : "";
+              const childCards = row.visibleChildren.map((child, childIndex) => {
+                const childKey = taskKey(child, row.__rowIndex, childIndex);
+                const childMeta = statusMeta[child.status] || statusMeta["待办"];
+                const selected = state.selectedTaskKey === childKey ? " is-selected" : "";
+                return `
+                  <article class="task-mini-card status-${childMeta.key}${selected}" data-task-key="${childKey}" data-parent-title="${row.title}">
+                    <div class="task-card-head">
+                      <div class="task-card-title">${child.title}</div>
+                      <span class="task-status is-${childMeta.key}">${childMeta.label}</span>
+                    </div>
+                    <div class="task-card-meta">更新 ${child.updatedAt} · 负责Agent ${child.owner}</div>
+                    <div class="task-card-summary">${child.summary}</div>
+                    <div class="role-groups">${roleGroupsMarkup(child)}</div>
+                  </article>
+                `;
+              }).join("");
+              return `
+                <div class="timeline-row">
+                  <div class="timeline-track"><span class="timeline-dot"></span></div>
+                  <article class="task-card status-${parentMeta.key}${parentSelected}" data-task-key="${row.__key}">
+                    <div class="task-card-head">
+                      <div class="task-card-title">${row.title}</div>
+                      <span class="task-status is-${parentMeta.key}">${parentMeta.label}</span>
+                    </div>
+                    <div class="task-card-meta">更新 ${row.updatedAt} · 创建 ${row.createdAt} · 负责Agent ${row.owner}</div>
+                    <div class="task-card-summary">${row.summary}</div>
+                    <div class="task-inline-note">${row.visibleChildren.length ? "当前过滤下的相关子任务会继续留在所属总任务后面，避免单独漂移成另一条列表。" : "当前过滤命中的是总任务本身，当前没有额外命中的子任务。"}</div>
+                    <div class="role-groups">${roleGroupsMarkup(row)}</div>
+                  </article>
+                  <div class="timeline-children">${childCards || `<div class="empty-state">当前过滤下暂无额外命中的子任务。</div>`}</div>
+                </div>
+              `;
+            }).join("")}
+          </section>
+        `;
+      }).join("");
+      board.querySelectorAll("[data-task-key]").forEach((node) => {
+        node.addEventListener("click", () => {
+          state.selectedTaskKey = node.getAttribute("data-task-key") || "";
+          renderDetail(filteredDays);
+          renderBoard(filteredDays);
+        });
+      });
+    }
+
+    function findSelectedTask(filteredDays) {
+      for (const day of filteredDays) {
+        for (const row of day.rows) {
+          if (row.__key === state.selectedTaskKey) return { task: row, kind: "总任务", parentTitle: "" };
+          for (let i = 0; i < row.visibleChildren.length; i += 1) {
+            const child = row.visibleChildren[i];
+            const childKey = taskKey(child, row.__rowIndex, i);
+            if (childKey === state.selectedTaskKey) return { task: child, kind: "子任务", parentTitle: row.title };
+          }
+        }
+      }
+      return null;
+    }
+
+    function renderDetail(filteredDays) {
+      const pane = document.getElementById("detailPane");
+      const selected = findSelectedTask(filteredDays);
+      if (!selected) {
+        pane.innerHTML = `<div class="empty-state">点击中区任务卡后，这里承接当前任务的详情预览。</div>`;
+        return;
+      }
+      const task = selected.task;
+      const status = statusMeta[task.status] || statusMeta["待办"];
+      pane.innerHTML = `
+        <div class="section-head">
+          <div>
+            <h2>右侧详情承接</h2>
+            <div class="section-copy">继续复用当前任务页右侧详情位，不新增第二套 Agent 详情层。</div>
+          </div>
+          <span class="pill is-active">${selected.kind}</span>
+        </div>
+        <h3 class="detail-title">${task.title}</h3>
+        <div class="detail-meta-row">
+          <span class="task-status is-${status.key}">${status.label}</span>
+          <span class="meta-chip">负责Agent ${task.owner}</span>
+          ${selected.parentTitle ? `<span class="meta-chip">所属总任务 ${selected.parentTitle}</span>` : ""}
+        </div>
+        <div class="detail-section">
+          <div class="detail-kv">
+            <div class="detail-kv-label">当前结论</div>
+            <div class="detail-kv-value">${task.summary}</div>
+          </div>
+          <div class="detail-kv">
+            <div class="detail-kv-label">承接说明</div>
+            <div class="detail-kv-value">${task.detail}</div>
+          </div>
+          <div class="detail-kv">
+            <div class="detail-kv-label">时间语义</div>
+            <div class="detail-kv-value">创建 ${task.createdAt} · 最近更新 ${task.updatedAt}</div>
+          </div>
+        </div>
+        <div class="detail-section">
+          <div class="detail-kv">
+            <div class="detail-kv-label">责任位</div>
+            <div class="role-groups">${roleGroupsMarkup(task)}</div>
+          </div>
+        </div>
+        <div class="detail-actions">
+          <span class="pill">任务视角优先</span>
+          <span class="pill">Agent 只做过滤 / 定位</span>
+          <span class="pill">不单开 Agent 中心页</span>
+        </div>
+        <div class="detail-note">如果进入真实实施，当前静态稿对应的最小改动面是 web/task.html.tpl、web/task.css、web/task_parts/77-project-modes.js。默认不需要新增字段或接口。</div>
+      `;
+    }
+
+    function render() {
+      const filteredDays = filterDaysByAgent(state.selectedAgent);
+      renderStatusPills(filteredDays);
+      renderAgentFilters(filteredDays);
+      renderResultBar(filteredDays);
+      renderBoard(filteredDays);
+      renderDetail(filteredDays);
+    }
+
+    render();
+  </script>
+</body>
+</html>

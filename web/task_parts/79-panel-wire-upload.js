@@ -1,9 +1,39 @@
+    function isTaskSingleCanvasMode() {
+      return normalizePanelMode(STATE.panelMode) === "task"
+        && normalizeTaskModule(STATE.taskModule) === "tasks";
+    }
+
+    function syncTaskCanvasDetailState() {
+      const active = isTaskSingleCanvasMode() && !!STATE.taskCanvasDetailOpen;
+      try {
+        document.body.classList.toggle("task-canvas-detail-open", active);
+      } catch (_) {}
+      return active;
+    }
+
+    function openTaskCanvasDetail() {
+      if (!isTaskSingleCanvasMode()) return false;
+      STATE.taskCanvasDetailOpen = true;
+      syncTaskCanvasDetailState();
+      return true;
+    }
+
+    function closeTaskCanvasDetail() {
+      STATE.taskCanvasDetailOpen = false;
+      syncTaskCanvasDetailState();
+      return true;
+    }
+
     function applyPanelMode() {
       const mode = normalizePanelMode(STATE.panelMode);
+      const taskSingleCanvas = mode === "task" && normalizeTaskModule(STATE.taskModule) === "tasks";
+      if (!taskSingleCanvas) STATE.taskCanvasDetailOpen = false;
       document.body.classList.toggle("panel-conv", mode === "conv");
       document.body.classList.toggle("panel-task", mode === "task");
       document.body.classList.toggle("panel-org-info", mode === "org");
       document.body.classList.toggle("panel-org", mode === "arch");
+      document.body.classList.toggle("panel-task-single-canvas", taskSingleCanvas);
+      syncTaskCanvasDetailState();
       const segBtns = Array.from(document.querySelectorAll("[data-panel-mode]"));
       for (const btn of segBtns) {
         const btnMode = normalizePanelMode(btn.getAttribute("data-panel-mode") || "channel");
@@ -150,7 +180,6 @@
       sessionDirectoryByProject: Object.create(null), // projectId -> all sessions (unfiltered)
       sessionDirectoryMetaByProject: Object.create(null), // projectId -> { liveLoaded, loadedAt, source, error }
       sessionDirectoryPromiseByProject: Object.create(null), // projectId -> Promise
-      pendingCreateBlocksByProject: Object.create(null), // projectId -> [{ id, channelName, state, error, formDraft }]
       runsBySession: Object.create(null),
       sessionTimelineMap: Object.create(null),
       projectRuns: [],
@@ -189,11 +218,6 @@
         groups: [],
         draftKey: "",
       },
-      globalMentionRefresh: {
-        busy: false,
-        error: "",
-        refreshedAt: "",
-      },
       memoBySessionKey: Object.create(null), // projectId::sessionId -> { count, items, updatedAt, fetchedAt }
       memoLoadingBySessionKey: Object.create(null),
       memoActionBusyBySessionKey: Object.create(null), // save|delete|clear|apply
@@ -220,10 +244,6 @@
       fileStarredBySessionKey: loadSessionScopedMap(CONV_FILE_STARRED_KEY), // projectId::sessionId -> { fileKey:true }
       trainingSentBySessionKey: loadSessionScopedMap(CONV_TRAINING_SENT_KEY), // projectId::sessionId -> sentAt
       trainingDismissedBySessionKey: Object.create(null), // projectId::sessionId -> true
-      trainingManualOpenBySessionKey: Object.create(null), // projectId::sessionId -> true
-      startupHintDismissedBySessionKey: Object.create(null), // projectId::sessionId -> true
-      startupHintManualOpenBySessionKey: Object.create(null), // projectId::sessionId -> true
-      currentTaskStripCollapsedBySessionKey: Object.create(null), // projectId::sessionId -> true
       fileOnlyStarredBySessionKey: Object.create(null),
       fileSortBySessionKey: Object.create(null),
       fileTypeFilterBySessionKey: Object.create(null),
@@ -243,7 +263,7 @@
         userEdited: false,
         loadToken: 0,
       },
-      leftListScrollTop: 0,
+      listScrollTopByKey: Object.create(null),
       listScrollActiveUntil: 0,
       listScrollIdleTimer: 0,
       deferredPanelRender: false,
@@ -311,9 +331,56 @@
       return normalizePanelMode(STATE.panelMode) === "conv" && !isMobileViewport();
     }
 
+    function conversationListScrollKey(projectId = "", layout = "") {
+      const pid = String(projectId || (typeof STATE !== "undefined" && STATE ? STATE.project : "") || "").trim();
+      if (!pid || pid === "overview") return "";
+      const normalizedLayout = normalizeConversationListLayout(layout || (typeof STATE !== "undefined" && STATE ? STATE.convListLayout : ""));
+      return pid + "::" + normalizedLayout;
+    }
+
+    function readConversationListStoredScrollTop(projectId = "", layout = "") {
+      const key = conversationListScrollKey(projectId, layout);
+      if (!key) return 0;
+      const raw = Number((PCONV.listScrollTopByKey && PCONV.listScrollTopByKey[key]) || 0);
+      return Number.isFinite(raw) && raw > 0 ? raw : 0;
+    }
+
+    function rememberConversationListScrollTop(top, projectId = "", layout = "") {
+      const key = conversationListScrollKey(projectId, layout);
+      if (!key) return 0;
+      const next = Math.max(0, Number(top || 0) || 0);
+      if (!PCONV.listScrollTopByKey || typeof PCONV.listScrollTopByKey !== "object") {
+        PCONV.listScrollTopByKey = Object.create(null);
+      }
+      PCONV.listScrollTopByKey[key] = next;
+      return next;
+    }
+
+    function conversationListScrollBox() {
+      const left = document.getElementById("leftList");
+      if (left) return left.closest(".aside-scroll") || left;
+      return document.querySelector("#channelAside .aside-scroll");
+    }
+
+    function captureConversationListScrollTop(projectId = "", layout = "") {
+      const box = conversationListScrollBox();
+      const top = Math.max(0, Number((box && box.scrollTop) || 0) || 0);
+      return rememberConversationListScrollTop(top, projectId, layout);
+    }
+
+    function restoreConversationListScrollTop(top, projectId = "", layout = "") {
+      const desiredTop = rememberConversationListScrollTop(top, projectId, layout);
+      if (!(desiredTop > 0)) return;
+      requestAnimationFrame(() => {
+        const box = conversationListScrollBox();
+        if (!box) return;
+        const maxTop = Math.max(0, Number(box.scrollHeight || 0) - Number(box.clientHeight || 0));
+        box.scrollTop = Math.min(desiredTop, maxTop);
+      });
+    }
+
     function isConversationListScrollActive() {
-      if (!isConversationDesktopMode()) return false;
-      return Number(PCONV.listScrollActiveUntil || 0) > Date.now();
+      return false;
     }
 
     function queueDeferredConversationRender(opts = {}) {
@@ -354,23 +421,12 @@
     }
 
     function markConversationListScrollActive() {
-      const scroller = document.querySelector("#channelAside .aside-scroll");
-      if (scroller) {
-        PCONV.leftListScrollTop = Math.max(0, Number(scroller.scrollTop || 0));
-      }
       if (PCONV.listScrollIdleTimer) {
         clearTimeout(PCONV.listScrollIdleTimer);
         PCONV.listScrollIdleTimer = 0;
       }
-      PCONV.listScrollActiveUntil = Date.now() + CONV_LIST_SCROLL_IDLE_MS;
-      try { document.body.classList.add("conv-list-scrolling"); } catch (_) {}
-      PCONV.listScrollIdleTimer = window.setTimeout(() => {
-        PCONV.listScrollIdleTimer = 0;
-        if (Number(PCONV.listScrollActiveUntil || 0) > Date.now()) return;
-        PCONV.listScrollActiveUntil = 0;
-        try { document.body.classList.remove("conv-list-scrolling"); } catch (_) {}
-        flushDeferredConversationRender();
-      }, CONV_LIST_SCROLL_IDLE_MS + 24);
+      PCONV.listScrollActiveUntil = 0;
+      try { document.body.classList.remove("conv-list-scrolling"); } catch (_) {}
     }
 
     function initConversationListScrollMonitor() {
@@ -378,6 +434,7 @@
       if (!scroller || scroller.__convListScrollBound) return;
       scroller.__convListScrollBound = true;
       scroller.addEventListener("scroll", () => {
+        captureConversationListScrollTop();
         markConversationListScrollActive();
       }, { passive: true });
     }
@@ -444,21 +501,76 @@
         raw.id,
       ]) || "").trim();
       if (!channelName || !sessionId) return null;
+      const issue = String(firstNonEmptyText([
+        raw.agent_display_issue,
+        raw.agentDisplayIssue,
+      ]) || "").trim();
+      const rawState = firstNonEmptyText([
+        raw.agent_name_state,
+        raw.agentNameState,
+      ]);
+      const derivedState = (typeof normalizeAgentNameState === "function")
+        ? normalizeAgentNameState(rawState, "")
+        : String(rawState || "").trim().toLowerCase();
+      const explicitAgentName = String(firstNonEmptyText([
+        raw.agent_display_name,
+        raw.agentDisplayName,
+        raw.agent_name,
+        raw.agentName,
+        raw.sender_name,
+        raw.senderName,
+        raw.alias,
+      ]) || "").trim();
+      const legacyDisplayName = String(firstNonEmptyText([
+        raw.display_name,
+        raw.displayName,
+        raw.label,
+      ]) || "").trim();
+      const probe = {
+        channel_name: channelName,
+        channelName,
+        session_id: sessionId,
+        sessionId,
+      };
+      const safeLegacyDisplayName = legacyDisplayName
+        && legacyDisplayName !== channelName
+        && !(typeof isSessionDerivedAgentDisplayName === "function"
+          && isSessionDerivedAgentDisplayName(legacyDisplayName, probe))
+        ? legacyDisplayName
+        : "";
+      const resolvedName = explicitAgentName || safeLegacyDisplayName;
+      let agentNameState = derivedState;
+      if (!agentNameState) {
+        if (issue) {
+          agentNameState = (typeof normalizeAgentNameState === "function")
+            ? normalizeAgentNameState("", issue.indexOf("polluted") >= 0 ? "polluted" : "identity_unresolved")
+            : (issue.indexOf("polluted") >= 0 ? "polluted" : "identity_unresolved");
+        } else if (resolvedName) {
+          agentNameState = "resolved";
+        } else {
+          agentNameState = "identity_unresolved";
+        }
+      }
+      const stateLabel = (typeof agentNameStateLabel === "function")
+        ? String(agentNameStateLabel(agentNameState, issue) || "").trim()
+        : "";
+      const displayName = agentNameState === "resolved" && resolvedName
+        ? resolvedName
+        : (stateLabel || "身份未解析");
       return {
         channel_name: channelName,
         session_id: sessionId,
         cli_type: String(firstNonEmptyText([raw.cli_type, raw.cliType, "codex"]) || "codex").trim() || "codex",
-        display_name: String(firstNonEmptyText([
-          raw.alias,
-          raw.display_name,
-          raw.displayName,
-          raw.sender_name,
-          raw.senderName,
-          raw.agent_name,
-          raw.agentName,
-          raw.label,
-          channelName,
-        ]) || channelName).trim() || channelName,
+        display_name: displayName,
+        agent_display_name: agentNameState === "resolved" ? resolvedName : "",
+        agent_display_name_source: String(firstNonEmptyText([
+          raw.agent_display_name_source,
+          raw.agentDisplayNameSource,
+        ]) || (explicitAgentName ? "agent_display_name" : (safeLegacyDisplayName ? "display_name" : ""))).trim(),
+        agent_name_state: agentNameState,
+        agent_display_issue: issue,
+        alias: String(firstNonEmptyText([raw.alias]) || "").trim(),
+        agent_name: String(firstNonEmptyText([raw.agent_name, raw.agentName]) || "").trim(),
         project_id: String(firstNonEmptyText([
           raw.project_id,
           raw.projectId,
@@ -587,17 +699,6 @@
       const trainingDesc = document.getElementById("convTrainingDesc");
       const trainingSendBtn = document.getElementById("convTrainingSendBtn");
       const trainingCloseBtn = document.getElementById("convTrainingCloseBtn");
-      const trainingReopenBtn = document.getElementById("convTrainingReopenBtn");
-      const startupHintContainer = document.getElementById("convStartupHint");
-      const startupHintTitle = document.getElementById("convStartupHintTitle");
-      const startupHintState = document.getElementById("convStartupHintState");
-      const startupHintDesc = document.getElementById("convStartupHintDesc");
-      const startupHintPrompt = document.getElementById("convStartupHintPrompt");
-      const startupHintActions = document.getElementById("convStartupHintActions");
-      const startupHintCopyBtn = document.getElementById("convStartupHintCopyBtn");
-      const startupHintSendBtn = document.getElementById("convStartupHintSendBtn");
-      const startupHintCloseBtn = document.getElementById("convStartupHintCloseBtn");
-      const startupHintReopenBtn = document.getElementById("convStartupHintReopenBtn");
       let recentAgentContainer = document.getElementById("convRecentAgents");
       let recentAgentToggle = document.getElementById("convRecentAgentsGlobalToggle");
       let mentionContainer = document.getElementById("convMentions");
@@ -693,17 +794,6 @@
         trainingDesc,
         trainingSendBtn,
         trainingCloseBtn,
-        trainingReopenBtn,
-        startupHintContainer,
-        startupHintTitle,
-        startupHintState,
-        startupHintDesc,
-        startupHintPrompt,
-        startupHintActions,
-        startupHintCopyBtn,
-        startupHintSendBtn,
-        startupHintCloseBtn,
-        startupHintReopenBtn,
         mentionContainer,
         replyContainer,
         mentionSuggest,
@@ -1045,33 +1135,17 @@
     function setPanelMode(nextMode) {
       const mode = normalizePanelMode(nextMode);
       if (STATE.panelMode === mode) return;
-      const prevMode = STATE.panelMode;
       STATE.panelMode = mode;
-      if (mode === "task" && normalizeTaskModule(STATE.taskModule) === "org") {
+      if (mode === "task") {
         STATE.taskModule = "tasks";
       }
       if (mode !== "conv") {
         PCONV.memoDrawerOpen = false;
         PCONV.memoDrawerSessionKey = "";
       }
-      if (mode === "channel" && String(STATE.selectedSessionId || "").trim()) {
-        rememberConversationSelection(
-          String(STATE.project || ""),
-          String(STATE.channel || ""),
-          String(STATE.selectedSessionId || "")
-        );
-      }
-      if (mode === "org" || mode === "arch" || mode === "channel") {
+      if (mode === "task" || mode === "org" || mode === "arch") {
         STATE.selectedSessionId = "";
         STATE.selectedSessionExplicit = false;
-        try { localStorage.removeItem("taskDashboard.selectedSessionId"); } catch (_) {}
-      }
-      if (mode === "conv") {
-        const rememberedSid = readRememberedConversationSelection(String(STATE.project || ""), String(STATE.channel || ""));
-        if (rememberedSid) {
-          STATE.selectedSessionId = rememberedSid;
-          if (prevMode === "channel") STATE.selectedSessionExplicit = true;
-        }
       }
       try {
         localStorage.setItem("taskDashboard.panelMode", STATE.panelMode);
@@ -1080,13 +1154,11 @@
       if (STATE.panelMode === "conv") {
         stopCCBPoll();
       } else {
-        if (!PCONV.sending) stopConversationPoll();
+        // 任务模式下仍可能在看会话详情：仅在没有会话上下文时停止轮询。
+        if (!STATE.selectedSessionId && !PCONV.sending) stopConversationPoll();
       }
       setHash();
       render();
-      if (STATE.panelMode === "conv" && typeof refreshConversationPanel === "function") {
-        refreshConversationPanel();
-      }
       // 移动端切换模式时回到列表视图
       if (isMobileViewport()) {
         showListView();
@@ -1242,33 +1314,6 @@
           dismissConversationTrainingPrompt();
         });
       }
-      const ctr = document.getElementById("convTrainingReopenBtn");
-      if (ctr && !ctr.__convTrainingReopenBound) {
-        ctr.__convTrainingReopenBound = true;
-        ctr.addEventListener("click", (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          reopenConversationTrainingPrompt();
-        });
-      }
-      const cshc = document.getElementById("convStartupHintCloseBtn");
-      if (cshc && !cshc.__convStartupHintCloseBound) {
-        cshc.__convStartupHintCloseBound = true;
-        cshc.addEventListener("click", (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          dismissConversationTeamExpansionHint();
-        });
-      }
-      const cshr = document.getElementById("convStartupHintReopenBtn");
-      if (cshr && !cshr.__convStartupHintReopenBound) {
-        cshr.__convStartupHintReopenBound = true;
-        cshr.addEventListener("click", (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          reopenConversationTeamExpansionHint();
-        });
-      }
       const cms = document.getElementById("convMemoSaveBtn");
       if (cms) cms.addEventListener("click", (e) => { e.preventDefault(); saveCurrentComposerAsMemo(); });
       const cet = document.getElementById("convEnterSendToggle");
@@ -1303,6 +1348,7 @@
       const newConvSessionId = document.getElementById("newConvSessionId");
       const newConvInitMessage = document.getElementById("newConvInitMessage");
       const ccbNewConvBtn = document.getElementById("ccbNewConvBtn");
+      const newConvMobileBtn = document.getElementById("newConvMobileBtn");
       const convSessionInfoMask = document.getElementById("convSessionInfoMask");
       const convSessionInfoCancelBtn = document.getElementById("convSessionInfoCancelBtn");
       const convSessionInfoSaveBtn = document.getElementById("convSessionInfoSaveBtn");
@@ -1411,6 +1457,13 @@
         });
       }
 
+      // 移动端的新增对话按钮
+      if (newConvMobileBtn) {
+        newConvMobileBtn.addEventListener("click", () => {
+          openNewConvModal(STATE.project, STATE.channel);
+        });
+      }
+
       initConversationResizeHandle();
 
       // 新增通道弹窗事件绑定
@@ -1454,71 +1507,20 @@
         });
       }
 
+      // 通道对话区块的新增按钮
+      const channelConvNewBtn = document.getElementById("channelConvNewBtn");
+      if (channelConvNewBtn) {
+        channelConvNewBtn.addEventListener("click", () => {
+          openNewConvModal(STATE.project, STATE.channel);
+        });
+      }
+
       // Allow manual hash edits/back-forward (when there are history entries) to rehydrate state.
       window.addEventListener("hashchange", () => {
         parseHash();
         ensureBindingsLoadedForProject(STATE.project);
         render();
       });
-      document.addEventListener(
-        "dragstart",
-        (e) => {
-          const target = e && e.target && typeof e.target.closest === "function"
-            ? e.target.closest("[data-schedule-drag-source='1']")
-            : null;
-          if (!target) return;
-          const dragPath = normalizeScheduleTaskPath(target.getAttribute("data-schedule-task-path"));
-          if (!dragPath) return;
-          const title = String(target.getAttribute("data-schedule-task-title") || "").trim();
-          setTaskScheduleDragPayload(dragPath, title);
-        },
-        true
-      );
-      document.addEventListener(
-        "dragenter",
-        (e) => {
-          if (!TASK_SCHEDULE_DND.active) return;
-          const path = normalizeScheduleTaskPath(TASK_SCHEDULE_DND.draggingPath);
-          if (!path || !isMasterTaskPath(STATE.project, path)) return;
-          const zone = e && e.target && typeof e.target.closest === "function"
-            ? e.target.closest("[data-schedule-drop-zone='1']")
-            : null;
-          setTaskScheduleDropHoverState(zone, !!zone);
-        },
-        true
-      );
-      document.addEventListener(
-        "dragover",
-        (e) => {
-          if (!TASK_SCHEDULE_DND.active) return;
-          const path = normalizeScheduleTaskPath(TASK_SCHEDULE_DND.draggingPath);
-          if (!path || !isMasterTaskPath(STATE.project, path)) return;
-          const zone = e && e.target && typeof e.target.closest === "function"
-            ? e.target.closest("[data-schedule-drop-zone='1']")
-            : null;
-          if (zone) {
-            e.preventDefault();
-            if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
-          }
-          setTaskScheduleDropHoverState(zone, !!zone);
-        },
-        true
-      );
-      document.addEventListener(
-        "dragleave",
-        (e) => {
-          if (!TASK_SCHEDULE_DND.active) return;
-          const zone = e && e.target && typeof e.target.closest === "function"
-            ? e.target.closest("[data-schedule-drop-zone='1']")
-            : null;
-          if (!zone) return;
-          const related = e && e.relatedTarget && typeof e.relatedTarget.closest === "function"
-            ? e.relatedTarget.closest("[data-schedule-drop-zone='1']")
-            : null;
-          if (!related) setTaskScheduleDropHoverState(null, false);
-        },
-        true
-      );
       window.addEventListener("dragend", () => {
         clearTaskScheduleDragPayload();
         clearQueuedForwardDragPayload();
@@ -1537,6 +1539,7 @@
       const preferredProjectId = String((opts && opts.preferredProjectId) || "").trim();
       const h = String(location.hash || "").replace(/^#/, "");
       const params = new URLSearchParams(h || "");
+      let shouldNormalizeHash = false;
       const hasProjectParam = params.has("p");
       const hasChannelParam = params.has("c");
       const p = params.get("p");
@@ -1549,7 +1552,6 @@
       const tm = params.get("tm");
       const tl = params.get("tl");
       const cl = params.get("cl");
-      const sid = params.get("sid");
       HASH_BOOTSTRAP.projectOnly = false;
       if (p && pages().some(x => x.id === p)) STATE.project = p;
       else if (!hasProjectParam && preferredProjectId && pages().some(x => x.id === preferredProjectId)) {
@@ -1562,7 +1564,13 @@
       if (q !== null) STATE.q = q;
       if (t) STATE.type = t;
       if (s) STATE.status = s;
-      if (tm) STATE.taskModule = normalizeTaskModule(tm);
+      if (tm) {
+        const normalizedTaskModule = normalizeTaskModule(tm);
+        STATE.taskModule = normalizedTaskModule;
+        if (String(tm || "").trim().toLowerCase() !== normalizedTaskModule) {
+          shouldNormalizeHash = true;
+        }
+      }
       if (tl) {
         const lane = String(tl || "").trim();
         const allowed = new Set(["全部", ...taskLaneOrderList()]);
@@ -1570,17 +1578,18 @@
       }
       if (cl) STATE.convListLayout = normalizeConversationListLayout(cl);
       else if (pm === "c") STATE.convListLayout = "channel";
-      if (sid !== null) {
-        STATE.selectedSessionId = String(sid || "").trim();
-        STATE.selectedSessionExplicit = !!String(STATE.selectedSessionId || "").trim();
-      }
       if (vm === "c") STATE.view = "comms";
       if (vm === "w") STATE.view = "work";
-      if (pm === "c" || pm === "conv") STATE.panelMode = "conv";
+      if (pm === "c") STATE.panelMode = "conv";
       else if (pm === "g" || pm === "a" || pm === "arch") STATE.panelMode = "arch";
       else if (pm === "og" || pm === "org") STATE.panelMode = "org";
-      else if (pm === "t" || pm === "task") STATE.panelMode = "task";
-      else if (pm === "o" || pm === "ch" || pm === "channel") STATE.panelMode = "channel";
+      else if (pm === "t") STATE.panelMode = "task";
+      else if (pm === "o" || pm === "ch") STATE.panelMode = "channel";
+      if (STATE.panelMode === "task" && !tm) {
+        // 一级任务入口在未显式给出 tm 时，统一回到任务主视图；
+        // 不能继续沿用本地缓存里的 schedule/org 子视图。
+        STATE.taskModule = "tasks";
+      }
       if (STATE.panelMode === "task" && normalizeTaskModule(STATE.taskModule) === "org") {
         STATE.panelMode = "org";
       }
@@ -1612,6 +1621,7 @@
           }
         }
       }
+      if (shouldNormalizeHash) setHash();
     }
 
     function setHash() {
@@ -1627,7 +1637,6 @@
         else if (STATE.panelMode === "arch") params.set("pm", "g");
         else if (STATE.panelMode === "org") params.set("pm", "og");
         else if (STATE.panelMode === "task") params.set("pm", "t");
-        if (STATE.selectedSessionId) params.set("sid", String(STATE.selectedSessionId));
         const convLayout = normalizeConversationListLayout(STATE.convListLayout);
         if (convLayout !== "channel") params.set("cl", convLayout);
         const moduleMode = normalizeTaskModule(STATE.taskModule);
@@ -1645,6 +1654,10 @@
     // applyViewTabs function removed - viewTabs HTML removed from template
 
     function render() {
+      if (typeof isTaskShareModeActive === "function" && isTaskShareModeActive()) {
+        renderTaskShareModePage();
+        return;
+      }
       const qEl = document.getElementById("q");
       if (document.activeElement !== qEl) qEl.value = STATE.q;
 
@@ -1692,26 +1705,13 @@
         if (STATE.panelMode === "channel") {
           STATE.selectedSessionId = "";
           STATE.selectedSessionExplicit = false;
-          try { localStorage.removeItem("taskDashboard.selectedSessionId"); } catch (_) {}
-          // 通道模式下加载对话数据，然后构建通道对话列表
-          loadProjectConversations(STATE.project).then(() => {
-            renderChannelInfoCard();
-            buildChannelConversationList();
-          });
-          // 同时也立即调用一次（使用缓存数据），确保切换通道时列表更新
           buildChannelConversationList();
         } else {
-          const rememberedSid = readRememberedConversationSelection(String(STATE.project || ""), String(STATE.channel || ""));
-          if (rememberedSid) {
-            STATE.selectedSessionId = rememberedSid;
-            STATE.selectedSessionExplicit = true;
-          }
           buildChannelConversationList();
         }
         ensureSelection();
         renderDetail(selectedItem());
-        if (STATE.panelMode === "channel") refreshCCB();
-        else stopCCBPoll();
+        stopCCBPoll();
         updateSelectionUI();
       }
     }
@@ -1730,9 +1730,11 @@
         }
       } catch (_) {}
 
+      const shareModeRequested = typeof isTaskShareModeRequested === "function" && isTaskShareModeRequested();
       const rawHash = String(window.location.hash || "").replace(/^#/, "").trim();
+      const shouldRewriteLegacyTaskHash = /(?:^|&)(?:tm|mode)=schedule(?:&|$)/.test(rawHash);
       const hasConvLayoutInHash = /(?:^|&)cl=/.test(rawHash);
-      const shouldUseDefaultChannelLanding = !rawHash;
+      const shouldUseDefaultChannelLanding = !rawHash && !shareModeRequested;
       try {
         const vm = localStorage.getItem("taskDashboard.view");
         if (vm === "work" || vm === "comms") STATE.view = vm;
@@ -1779,8 +1781,11 @@
       restoreAsideWidthFromStorage();
       restoreConvAsideWidthFromStorage();
       initBackLink();
-      const healthInfo = await fetchHealthInfo();
-      applyEnvironmentBadge(healthInfo);
+      let healthInfo = null;
+      if (!shareModeRequested) {
+        healthInfo = await fetchHealthInfo();
+        applyEnvironmentBadge(healthInfo);
+      }
       // Initialize message input components
       initAllMessageInputs();
       // Initialize mobile view switch
@@ -1789,10 +1794,32 @@
       initChannelSelector();
       // Initialize cross-tab unread/memo count sync
       initConversationCrossTabSync();
-      const preferredProjectId = String(
-        (healthInfo && (healthInfo.project_id || healthInfo.projectId)) || ""
-      ).trim();
-      parseHash({ preferredProjectId });
+      const preferredProjectId = shareModeRequested
+        ? taskShareModeText((taskShareModeParams && taskShareModeParams().project_id) || "")
+        : String(
+          (healthInfo && (healthInfo.project_id || healthInfo.projectId)) || ""
+        ).trim();
+      if (shareModeRequested) {
+        await loadTaskShareModeBootstrap();
+      } else {
+        parseHash({ preferredProjectId });
+        if (shouldRewriteLegacyTaskHash) {
+          try {
+            const rewriteParams = new URLSearchParams(String(window.location.hash || "").replace(/^#/, "").trim());
+            rewriteParams.delete("tm");
+            rewriteParams.delete("mode");
+            rewriteParams.set("p", STATE.project);
+            rewriteParams.set("pm", "t");
+            if (STATE.channel) rewriteParams.set("c", STATE.channel);
+            else rewriteParams.delete("c");
+            if (STATE.taskLane && STATE.taskLane !== "全部") rewriteParams.set("tl", STATE.taskLane);
+            else rewriteParams.delete("tl");
+            history.replaceState(null, "", "#" + rewriteParams.toString());
+          } catch (_) {
+            setHash();
+          }
+        }
+      }
       wire();
       // Initialize file upload handling
       initFileUpload();
@@ -1801,6 +1828,15 @@
       initConversationFileUi();
       initConversationTaskUi();
       render();
+      setTimeout(() => {
+        if (
+          STATE.panelMode === "task"
+          && normalizeTaskModule(STATE.taskModule) === "tasks"
+          && /(?:^|&)(?:tm|mode)=schedule(?:&|$)/.test(String(window.location.hash || "").replace(/^#/, "").trim())
+        ) {
+          setHash();
+        }
+      }, 0);
     }
 
     queueMicrotask(() => {

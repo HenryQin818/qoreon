@@ -47,6 +47,15 @@
     return Number.isFinite(n) ? n.toFixed(digits) : "-";
   }
 
+  function formatPct(value, digits = 1) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return "-";
+    return n
+      .toFixed(digits)
+      .replace(/\.0+$/, "")
+      .replace(/(\.\d*[1-9])0+$/, "$1");
+  }
+
   function pageParams() {
     const out = new URLSearchParams(window.location.search || "");
     const hash = String(window.location.hash || "").replace(/^#/, "").trim();
@@ -394,14 +403,58 @@
     return bits.join(" · ") || "暂无更多节奏数据";
   }
 
+  function recentCompactionItems(row, limit = 4) {
+    const observations = Array.isArray(row.compaction_observations) ? row.compaction_observations : [];
+    return observations
+      .filter((item) => item && typeof item === "object" && item.compacted_at)
+      .slice(-limit)
+      .reverse();
+  }
+
+  function createPaceHistoryBlock(row) {
+    if (row.risk_level === "unsupported") {
+      return el("div", { class: "pace-history-empty", text: "当前页只支持 Codex compact 历史" });
+    }
+    const items = recentCompactionItems(row);
+    if (!items.length) {
+      return el("div", { class: "pace-history-empty", text: "最近几次压缩记录暂缺" });
+    }
+    return el("div", { class: "pace-history-wrap" }, [
+      el("div", { class: "pace-history-label", text: "最近几次压缩记录" }),
+      el("div", { class: "pace-history" }, items.map((item) => {
+        const before = formatPct(item.before_pct);
+        const after = formatPct(item.after_pct);
+        const compactedAt = String(item.compacted_at || "").trim();
+        return el("div", { class: "pace-history-item" }, [
+          el("span", {
+            class: "pace-history-time",
+            text: formatZhDateTimeShort(compactedAt),
+            title: formatZhDateTime(compactedAt),
+          }),
+          el("span", {
+            class: "pace-history-change",
+            text: `${before}% → ${after}%`,
+          }),
+        ]);
+      })),
+    ]);
+  }
+
   function recentCompactionText(row) {
     if (row.risk_level === "unsupported") return "-";
     const count = Number(row.recent_compactions_24h || 0);
     return String(count);
   }
 
+  function resetButtonThresholdPct() {
+    const value = Number(DATA.thresholds && DATA.thresholds.reset_button_threshold_pct);
+    if (Number.isFinite(value)) return value;
+    return 20;
+  }
+
   function shouldShowReset(row) {
-    return row.risk_level === "high" || row.risk_level === "medium";
+    if (row.risk_level === "unsupported") return false;
+    return baselineFloor(row) >= resetButtonThresholdPct();
   }
 
   function normalizeTaskTracking(src) {
@@ -422,30 +475,15 @@
   function taskTrackingSummary(row) {
     const tracking = normalizeTaskTracking(row && row.task_tracking);
     const currentRef = tracking.current_task_ref || null;
-    const currentIdentity = readTaskRefIdentity(currentRef);
     const currentTitle = String(
       (currentRef && (currentRef.task_title || currentRef.title || currentRef.task_path || currentRef.path)) || ""
-    ).trim();
-    const recentAction = Array.isArray(tracking.recent_task_actions) && tracking.recent_task_actions.length
-      ? tracking.recent_task_actions[0]
-      : null;
-    const recentIdentity = readTaskRefIdentity(recentAction);
-    const recentKind = String((recentAction && recentAction.action_kind) || "").trim();
-    const nextOwner = currentRef && typeof currentRef.next_owner === "object" ? currentRef.next_owner : null;
-    const nextOwnerAlias = String(
-      (nextOwner && (nextOwner.alias || nextOwner.agent_name || nextOwner.session_id)) || ""
     ).trim();
     const refsCount = tracking.conversation_task_refs.length;
     const actionsCount = tracking.recent_task_actions.length;
     const bits = [];
     if (currentTitle) bits.push(`current_task_ref=${currentTitle}`);
     else bits.push("current_task_ref=待复核");
-    bits.push(`current_identity=${taskIdentityText(currentIdentity)}`);
     bits.push(`conversation_task_refs=${refsCount}条`);
-    if (recentKind || recentIdentity.taskId || recentIdentity.taskPath) {
-      bits.push(`recent_task_action=${recentKind || "-"} · ${taskIdentityText(recentIdentity)}`);
-    }
-    if (nextOwnerAlias) bits.push(`next_owner=${nextOwnerAlias}`);
     bits.push(`recent_task_actions=${actionsCount}条`);
     return bits.join("；");
   }
@@ -529,17 +567,15 @@
       `- 异常判断：压缩后占用基线=${baselineText(row)}（${baselineQualifier(row) || "估算"}）；${pressureDetail(row)}；${transitionDetail(row) || baselineReasons(row)}`,
       `- 处理要求：`,
       `  0. 旧会话先自行整理一版工作转交资料；若旧会话不可用，必须回执 \`旧会话自交接: skipped\`、跳过原因和替代资料来源。`,
-      `  0.1 旧会话自交接除主线/门禁外，还必须提炼“可沉淀知识”，至少给出沉淀标题建议、摘要与 3-5 条可复用要点。`,
-      `  0.2 执行接力时，必须把这份交接知识同步写入目标通道 \`产出物/沉淀/\` 并更新目录；若旧会话不可用，则由接力方人工抽取后落盘。`,
       `  1. 创建新会话并完成项目内对话替换；若当前为主会话则替换正式主绑定。`,
-      `  2. 新会话必须先学习继承旧会话上下文与本轮新写入的交接沉淀，再完成接管初始化训练，然后才能继续推进。`,
-      `  2.1 接管初始化训练至少覆盖：正式消息发送链路、开始任务顺序（先读 README/任务/反馈/材料/沉淀，且优先读本轮交接沉淀，再回“已完成初始化”）、回执时机与 notify_only 例外、声称“已发送”时必须带 announce_run_id。`,
+      `  2. 新会话必须先学习继承旧会话上下文，再完成接管初始化训练，然后才能继续推进。`,
+      `  2.1 接管初始化训练至少覆盖：正式消息发送链路、开始任务顺序（先读 README/任务/反馈/材料/沉淀，再回“已完成初始化”）、回执时机与 notify_only 例外、声称“已发送”时必须带 announce_run_id。`,
       `  2.2 若发生 session 换绑，还必须同步处理任务承接链路：确认当前正式主绑定是否需要替换，说明旧/新 session 交接关系，并把当前主任务、相关任务、交接锚点一起纳入接管。`,
-      `  2.3 至少检查 \`current_task_ref / conversation_task_refs / recent_task_actions\` 是否仍正确指向当前业务主线，并明确核对 \`task_id / task_path\` 是否连续；若存在活动任务、交接锚点或待验收回执，要求同步确认任务文件、反馈文件与协作链路是否需要补口。`,
+      `  2.3 至少检查 \`current_task_ref / conversation_task_refs / recent_task_actions\` 是否仍正确指向当前业务主线；若存在活动任务、交接锚点或待验收回执，要求同步确认任务文件、反馈文件与协作链路是否需要补口。`,
       `  2.4 不能只重置会话，不处理任务承接链路；若判断无需补口，也必须在回执里明确写“当前任务承接链路已核对，无需补口”。`,
       `  2.5 当前任务跟踪线索：${taskTrackingSummary(row)}`,
       `  3. 旧会话从当前列表移除；若不能删除则明确标记冻结/历史，并说明旧会话处理策略。`,
-      `  4. 回执给我：旧会话自交接状态、新 session_id、继承/初始化 run_id、验收 run_id、已完成继承、已完成初始化、当前主线、唯一阻塞、主绑定是否已替换、当前任务承接链路是否已核对、是否需要补任务文件/反馈文件/协作链路、交接沉淀文件路径。`,
+      `  4. 回执给我：旧会话自交接状态、新 session_id、继承/初始化 run_id、验收 run_id、已完成继承、已完成初始化、当前主线、唯一阻塞、主绑定是否已替换、当前任务承接链路是否已核对。`,
     ].join("\n");
   }
 
@@ -593,7 +629,7 @@
       autoStatusText.textContent = parts.join(" · ");
     }
     if (heroSub) {
-      heroSub.textContent = `当前只展示项目 ${currentProjectName()} 的 agent 会话数据；后台已纳入全局项目自动统计，当前项目可在右侧修改自动统计开关与频率。`;
+      heroSub.textContent = `当前只展示项目 ${currentProjectName()} 的 agent 会话数据；后台已纳入全局项目自动统计，当前项目可在右侧修改自动统计开关与频率。压缩后占用基线达到 ${fmtNumber(resetButtonThresholdPct())}% 时，会提前开放重置按钮。`;
     }
     if (overviewLink) overviewLink.href = linkValue("overview_page", "/share/project-overview-dashboard.html");
     if (taskLink) taskLink.href = linkValue("task_page", "/share/project-task-dashboard.html");
@@ -969,6 +1005,7 @@
         el("td", { class: "pace-cell" }, [
           el("div", { class: "pace-title", text: paceTitle(row) }),
           el("div", { class: "pace-note", text: paceNote(row) }),
+          createPaceHistoryBlock(row),
         ]),
         el("td", { class: "advice-cell" }, [
           el("div", { class: "advice-title", text: String(row.health_action || "继续观察") }),
@@ -990,9 +1027,9 @@
             "data-copy-key": copyKey,
             text: copyTextLabel,
           }),
-          el("div", { class: "tiny-note", text: "复制后可直接发给执行 agent 做标准重置，已包含 session 换绑与任务承接要求" }),
+          el("div", { class: "tiny-note", text: `复制后可直接发给执行 agent 做标准重置，已包含 session 换绑与任务承接要求；当前按钮提前开放门槛>=${fmtNumber(resetButtonThresholdPct())}%` }),
         ] : [
-          el("div", { class: "tiny-note", text: "当前无需直接重置" }),
+          el("div", { class: "tiny-note", text: `当前无需直接重置（按钮门槛>=${fmtNumber(resetButtonThresholdPct())}%）` }),
         ]),
       ]));
     });

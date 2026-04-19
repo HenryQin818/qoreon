@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>C 批 · overview 进程列表任务数量标记静态镜像 v1</title>
+  <link rel="stylesheet" href="./task-shell-preview-base.css" />
+  <link rel="stylesheet" href="./agent-task-ops-preview-v1.css" />
+</head>
+<body class="agent-ops-preview overview-shell">
+  <div class="overview-head">
+    <div>
+      <div class="chip-row">
+        <a class="back-link" href="/share/agent-task-ops-unified-scenarios-v1.html" title="返回场景总入口">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" width="18" height="18">
+            <path d="M15 19l-7-7 7-7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <span>场景包</span>
+        </a>
+        <span class="pill is-active">C 批</span>
+      </div>
+      <h1 class="overview-title">Qoreon · overview 进程列表静态镜像</h1>
+      <p class="overview-sub">只在当前卡片内容区补 `处理中 / 待处理` 轻量 badge，不重做 overview 页面结构，不把它做成新的任务中心。</p>
+    </div>
+    <div class="overview-actions">
+      <button class="overview-btn primary" type="button">当前项目 task_dashboard</button>
+      <button class="overview-btn" type="button">消息瀑布</button>
+      <button class="overview-btn" type="button">组织战略</button>
+      <button class="overview-btn" type="button">配置</button>
+    </div>
+  </div>
+
+  <div class="overview-ctrlbar">
+    <div class="overview-filters">
+      <div class="overview-search">搜索 Agent / 会话...</div>
+      <button class="overview-filter-btn is-active" type="button">全部卡片</button>
+      <button class="overview-filter-btn" type="button">处理中有任务</button>
+      <button class="overview-filter-btn" type="button">待处理堆积</button>
+      <button class="overview-filter-btn" type="button">无关联任务</button>
+    </div>
+    <div class="chip-row">
+      <span class="pill">只补 badge</span>
+      <span class="pill">不改页面级结构</span>
+      <span class="pill">零任务时降级为无关联任务</span>
+    </div>
+  </div>
+
+  <main class="overview-stage">
+    <section class="summary-grid">
+      <article class="summary-card">
+        <div class="summary-card-title">当前活跃 Agent</div>
+        <div class="summary-card-copy">进程列表卡片总量继续沿用 overview 的卡片区域，只在卡片内部多放一行任务负载信号。</div>
+        <div class="summary-card-value">6</div>
+        <div class="summary-card-meta">
+          <span class="pill">可直接评审</span>
+          <span class="pill">静态镜像</span>
+        </div>
+      </article>
+      <article class="summary-card">
+        <div class="summary-card-title">处理中任务</div>
+        <div class="summary-card-copy">只统计强关联任务里 `primary_status=进行中` 的数量，不把已完成 / 暂缓混进 badge。</div>
+        <div class="summary-card-value">8</div>
+        <div class="summary-card-meta">
+          <span class="pill is-active">处理中</span>
+        </div>
+      </article>
+      <article class="summary-card">
+        <div class="summary-card-title">待处理任务</div>
+        <div class="summary-card-copy">按 `待办 + 待验收` 聚合；两类都为 `0` 时，卡片降级为 `无关联任务`。</div>
+        <div class="summary-card-value">6</div>
+        <div class="summary-card-meta">
+          <span class="pill">待处理</span>
+        </div>
+      </article>
+    </section>
+
+    <section class="surface">
+      <div class="section-head">
+        <div>
+          <h2>进程 / 会话列表卡片</h2>
+          <div class="section-copy">当前示例按 overview 卡片区承接每个 Agent / 会话的任务负载。页面结构还是 overview 的 `头部 + 控制栏 + 卡片区`，当前只验证卡片内容区是否足够轻量、够快读。</div>
+        </div>
+        <div class="chip-row">
+          <span class="pill is-active">处理中 / 待处理</span>
+          <span class="pill">无关联任务</span>
+        </div>
+      </div>
+
+      <div class="process-grid" id="processGrid"></div>
+    </section>
+
+    <section class="surface">
+      <div class="section-head">
+        <div>
+          <h2>当前前端判断</h2>
+          <div class="section-copy">C 批如果进入真实实施，前端默认可以沿用当前 overview 卡片区直接落，不需要额外开新容器或新接口。</div>
+        </div>
+      </div>
+      <ul class="assessment-card-list">
+        <li><strong>预计落点：</strong>`web/overview.html.tpl`、`web/overview.css`、`web/overview.js`。</li>
+        <li><strong>默认真源：</strong>稳定角色字段 + 正式任务状态；不启用 `heartbeat_summary` 或启发式 `_taskRef`。</li>
+        <li><strong>复杂度判断：</strong>中低，主要是卡片内容层的 badge 生成与降级文案，不涉及页面级结构改造。</li>
+      </ul>
+    </section>
+  </main>
+
+  <script>
+    const cards = [
+      {
+        name: "前端页面-规范策划",
+        channel: "子级04-前端体验",
+        session: "主会话 · 019d5945-0d1d-78b1-b5c9-8ed813c8ccaa",
+        running: 2,
+        pending: 1,
+        note: "当前正处理 B/C 静态确认稿与可实施性评审，任务负载偏集中。",
+        tone: "tone-blue",
+        state: "处理中",
+      },
+      {
+        name: "产品策划-任务派发",
+        channel: "辅助04-原型设计与 Demo 可视化",
+        session: "子会话 · 019d51f2-61bf-7fd3-bee4-8aa1f6bef3ff",
+        running: 1,
+        pending: 2,
+        note: "当前负责 B/C 主线派发与产品确认回收，待处理量略高。",
+        tone: "tone-green",
+        state: "活跃",
+      },
+      {
+        name: "数据治理-消息监控",
+        channel: "子级06-数据治理与契约",
+        session: "子会话 · 019d2a60-b8be-7b21-bed0-2c95ab2123ff",
+        running: 1,
+        pending: 1,
+        note: "当前主要承接计数口径与字段稳定性冻结，属于协同负载。",
+        tone: "tone-orange",
+        state: "处理中",
+      },
+      {
+        name: "总控-项目经理",
+        channel: "主体-总控（合并与验收）",
+        session: "主会话 · 总控绑定中",
+        running: 1,
+        pending: 0,
+        note: "当前只看边界放行与批次顺序，不直接下沉到 UI 实现。",
+        tone: "tone-purple",
+        state: "审阅中",
+      },
+      {
+        name: "测试验收-Agent",
+        channel: "测试验收",
+        session: "待触达",
+        running: 0,
+        pending: 0,
+        note: "当前这张卡片走降级表达：不显示空 badge，而是直接说明无关联任务。",
+        tone: "tone-slate",
+        state: "空闲",
+      },
+      {
+        name: "服务开发",
+        channel: "子级02-CCB 运行时",
+        session: "暂未进入本批",
+        running: 0,
+        pending: 2,
+        note: "当前只是潜在依赖位，若后续产品坚持 overview 里要显示运行态和任务态并行，再评估是否需要补最小承接信息。",
+        tone: "tone-blue",
+        state: "待协同",
+      },
+    ];
+
+    const grid = document.getElementById("processGrid");
+    grid.innerHTML = cards.map((card, index) => {
+      const isActive = index === 0 ? " is-active" : "";
+      const badges = (card.running === 0 && card.pending === 0)
+        ? `<span class="load-badge is-empty">无关联任务</span>`
+        : `
+          ${card.running > 0 ? `<span class="load-badge is-running">处理中 ${card.running}</span>` : ""}
+          ${card.pending > 0 ? `<span class="load-badge is-pending">待处理 ${card.pending}</span>` : ""}
+        `;
+      return `
+        <article class="process-card${isActive}">
+          <div class="process-head">
+            <div class="process-avatar-row">
+              <span class="avatar process-avatar ${card.tone}" title="${card.name}">${String(card.name).slice(0, 1)}</span>
+              <div class="process-title-wrap">
+                <div class="process-title">${card.name}</div>
+                <div class="process-sub">${card.channel}</div>
+              </div>
+            </div>
+            <div class="process-head-meta">
+              <span class="status-chip is-review">${card.state}</span>
+            </div>
+          </div>
+          <div class="process-copy">${card.session}</div>
+          <div class="load-row">${badges}</div>
+          <div class="process-note">${card.note}</div>
+        </article>
+      `;
+    }).join("");
+  </script>
+</body>
+</html>

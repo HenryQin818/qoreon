@@ -1,0 +1,1225 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>聊天区结果态原型直出页 v1</title>
+  <link rel="stylesheet" href="./task-shell-preview-base.css" />
+  <style>
+    :root {
+      --proto-line: rgba(15, 23, 42, 0.08);
+      --proto-panel: rgba(255, 255, 255, 0.9);
+      --proto-panel-strong: rgba(255, 255, 255, 0.96);
+      --proto-ink: rgba(15, 23, 42, 0.92);
+      --proto-muted: rgba(15, 23, 42, 0.64);
+      --proto-soft: rgba(15, 23, 42, 0.42);
+      --proto-blue: #2f6fed;
+      --proto-red: #c91d3b;
+      --proto-amber: #b36a00;
+      --proto-green: #1f8f5f;
+      --proto-shadow: 0 16px 40px rgba(15, 23, 42, 0.06);
+    }
+
+    .proto-shell {
+      min-height: 100vh;
+      height: auto;
+    }
+    .proto-shell .body {
+      min-height: calc(100vh - 72px);
+      grid-template-columns: minmax(260px, 320px) 8px minmax(0, 1fr) minmax(320px, 360px);
+    }
+    .proto-note {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      border: 1px solid rgba(47, 111, 237, 0.14);
+      background: rgba(239, 246, 255, 0.9);
+      color: #1d4ed8;
+      font-size: 11px;
+      font-weight: 700;
+    }
+    .proto-aside-stack,
+    .proto-detail-stack,
+    .proto-main {
+      display: grid;
+      gap: 14px;
+    }
+    .proto-aside-stack,
+    .proto-detail-stack {
+      padding: 16px;
+    }
+    .proto-main {
+      padding: 18px 18px 28px;
+    }
+    .proto-card,
+    .proto-hero-card,
+    .proto-boundary-card,
+    .proto-result-card {
+      border-radius: 20px;
+      border: 1px solid var(--proto-line);
+      background: var(--proto-panel);
+      box-shadow: var(--proto-shadow);
+    }
+    .proto-card,
+    .proto-boundary-card {
+      padding: 14px;
+      display: grid;
+      gap: 10px;
+    }
+    .proto-kicker {
+      font-family: var(--mono);
+      font-size: 10px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--proto-soft);
+    }
+    .proto-card-title,
+    .proto-hero-title,
+    .proto-boundary-title,
+    .proto-result-title,
+    .proto-detail-title {
+      font-size: 14px;
+      line-height: 1.46;
+      font-weight: 900;
+      color: var(--proto-ink);
+    }
+    .proto-card-copy,
+    .proto-hero-copy,
+    .proto-boundary-copy,
+    .proto-list li,
+    .proto-note-list li,
+    .proto-step-note {
+      font-size: 13px;
+      line-height: 1.72;
+      color: var(--proto-muted);
+    }
+    .proto-list,
+    .proto-note-list {
+      margin: 0;
+      padding-left: 18px;
+      display: grid;
+      gap: 8px;
+    }
+    .proto-scene-buttons,
+    .proto-stepper,
+    .proto-chip-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .proto-scene-btn,
+    .proto-step-btn,
+    .proto-toggle-btn {
+      appearance: none;
+      border: 1px solid rgba(15, 23, 42, 0.08);
+      background: rgba(255, 255, 255, 0.96);
+      color: var(--proto-muted);
+      border-radius: 999px;
+      padding: 8px 12px;
+      font-size: 12px;
+      font-weight: 800;
+      cursor: pointer;
+      transition: transform 140ms ease, border-color 140ms ease, background 140ms ease, color 140ms ease;
+    }
+    .proto-scene-btn:hover,
+    .proto-step-btn:hover,
+    .proto-toggle-btn:hover {
+      transform: translateY(-1px);
+      border-color: rgba(47, 111, 237, 0.18);
+      color: var(--proto-ink);
+    }
+    .proto-scene-btn.is-active,
+    .proto-step-btn.is-active,
+    .proto-toggle-btn.is-active {
+      border-color: rgba(47, 111, 237, 0.22);
+      background: rgba(239, 246, 255, 0.98);
+      color: #1d4ed8;
+    }
+    .proto-hero-grid {
+      display: grid;
+      grid-template-columns: 1.2fr 1fr;
+      gap: 12px;
+    }
+    .proto-hero-card {
+      padding: 16px;
+      display: grid;
+      gap: 10px;
+    }
+    .proto-hero-title {
+      font-size: 21px;
+      line-height: 1.4;
+    }
+    .proto-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 10px;
+      border-radius: 999px;
+      border: 1px solid rgba(15, 23, 42, 0.08);
+      background: rgba(255, 255, 255, 0.94);
+      color: var(--proto-muted);
+      font-size: 11px;
+      font-weight: 700;
+    }
+    .proto-chip.is-blue {
+      border-color: rgba(47, 111, 237, 0.14);
+      background: rgba(239, 246, 255, 0.95);
+      color: #1d4ed8;
+    }
+    .proto-chip.is-good {
+      border-color: rgba(31, 143, 95, 0.14);
+      background: rgba(236, 253, 245, 0.95);
+      color: var(--proto-green);
+    }
+    .proto-chip.is-warn {
+      border-color: rgba(179, 106, 0, 0.14);
+      background: rgba(255, 247, 225, 0.94);
+      color: var(--proto-amber);
+    }
+    .proto-chip.is-danger {
+      border-color: rgba(201, 29, 59, 0.14);
+      background: rgba(255, 241, 244, 0.95);
+      color: var(--proto-red);
+    }
+    .proto-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+      padding: 4px 2px;
+    }
+    .proto-toolbar-copy {
+      font-size: 12px;
+      color: var(--proto-muted);
+      line-height: 1.65;
+    }
+    .proto-result-card {
+      padding: 16px;
+      display: grid;
+      gap: 14px;
+      background: linear-gradient(180deg, rgba(247, 250, 255, 0.98), rgba(240, 246, 255, 0.95));
+    }
+    .proto-result-head {
+      display: grid;
+      gap: 10px;
+    }
+    .proto-result-title {
+      font-size: 18px;
+    }
+    .proto-result-copy {
+      font-size: 13px;
+      line-height: 1.7;
+      color: var(--proto-muted);
+    }
+    .proto-result-shell {
+      border-radius: 22px;
+      border: 1px solid rgba(15, 23, 42, 0.08);
+      background: rgba(255, 255, 255, 0.84);
+      padding: 14px;
+      display: grid;
+      gap: 12px;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
+    }
+    .proto-result-meta {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .proto-result-stream {
+      display: grid;
+      gap: 10px;
+    }
+    .proto-message {
+      border-radius: 18px;
+      border: 1px solid rgba(15, 23, 42, 0.08);
+      background: rgba(255, 255, 255, 0.98);
+      padding: 12px;
+      display: grid;
+      gap: 8px;
+      box-shadow: 0 10px 24px rgba(15, 23, 42, 0.04);
+    }
+    .proto-message.is-primary {
+      background: linear-gradient(180deg, rgba(245, 249, 255, 0.98), rgba(236, 244, 255, 0.94));
+      border-color: rgba(47, 111, 237, 0.14);
+    }
+    .proto-message.is-summary {
+      background: linear-gradient(180deg, rgba(255, 249, 238, 0.98), rgba(255, 245, 225, 0.94));
+      border-color: rgba(179, 106, 0, 0.14);
+    }
+    .proto-message.is-secondary {
+      background: linear-gradient(180deg, rgba(248, 249, 252, 0.98), rgba(242, 244, 247, 0.95));
+    }
+    .proto-message-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .proto-message-title {
+      font-size: 13px;
+      font-weight: 900;
+      color: var(--proto-ink);
+    }
+    .proto-message-body {
+      font-size: 13px;
+      line-height: 1.72;
+      color: var(--proto-ink);
+    }
+    .proto-message-rows,
+    .proto-message-secondary {
+      display: grid;
+      gap: 6px;
+      padding-top: 8px;
+      border-top: 1px dashed rgba(15, 23, 42, 0.09);
+    }
+    .proto-message-row {
+      display: flex;
+      gap: 8px;
+      font-size: 12px;
+      line-height: 1.65;
+      color: var(--proto-muted);
+    }
+    .proto-message-row strong {
+      min-width: 74px;
+      color: var(--proto-ink);
+      font-weight: 800;
+    }
+    .proto-message-secondary[hidden] {
+      display: none;
+    }
+    .proto-kpi-grid,
+    .proto-diff-grid {
+      display: grid;
+      gap: 12px;
+    }
+    .proto-kpi-grid {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+    .proto-diff-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .proto-kpi {
+      border-radius: 16px;
+      border: 1px solid rgba(15, 23, 42, 0.08);
+      background: rgba(255, 255, 255, 0.94);
+      padding: 12px;
+      display: grid;
+      gap: 6px;
+    }
+    .proto-kpi-label {
+      font-size: 11px;
+      color: var(--proto-soft);
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+    .proto-kpi-value {
+      font-size: 18px;
+      font-weight: 900;
+      color: var(--proto-ink);
+    }
+    .proto-kpi-copy {
+      font-size: 11px;
+      line-height: 1.55;
+      color: var(--proto-muted);
+    }
+    .proto-kpi.is-good .proto-kpi-value { color: var(--proto-green); }
+    .proto-kpi.is-warn .proto-kpi-value { color: var(--proto-amber); }
+    .proto-kpi.is-bad .proto-kpi-value { color: var(--proto-red); }
+    .proto-diff-card {
+      border-radius: 18px;
+      border: 1px solid rgba(15, 23, 42, 0.08);
+      background: rgba(255, 255, 255, 0.9);
+      padding: 14px;
+      display: grid;
+      gap: 8px;
+    }
+    .proto-diff-card strong {
+      font-size: 13px;
+      color: var(--proto-ink);
+    }
+    .proto-boundary-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+    .proto-boundary-title {
+      font-size: 15px;
+    }
+    .proto-detail-card {
+      border-radius: 18px;
+      border: 1px solid rgba(15, 23, 42, 0.08);
+      background: rgba(255, 255, 255, 0.92);
+      padding: 14px;
+      display: grid;
+      gap: 10px;
+    }
+    .proto-detail-title {
+      font-size: 15px;
+    }
+    .proto-detail-kv {
+      display: grid;
+      gap: 8px;
+    }
+    .proto-detail-row {
+      display: grid;
+      grid-template-columns: 92px minmax(0, 1fr);
+      gap: 12px;
+      align-items: start;
+    }
+    .proto-detail-row .k {
+      font-size: 12px;
+      color: var(--proto-soft);
+      line-height: 1.55;
+    }
+    .proto-detail-row .v {
+      font-size: 13px;
+      line-height: 1.68;
+      color: var(--proto-ink);
+    }
+    @media (max-width: 1460px) {
+      .proto-shell .body {
+        grid-template-columns: minmax(240px, 280px) 8px minmax(0, 1fr);
+      }
+      .detail-view {
+        display: none;
+      }
+      .proto-hero-grid,
+      .proto-kpi-grid,
+      .proto-diff-grid,
+      .proto-boundary-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+    @media (max-width: 980px) {
+      .proto-shell .body {
+        grid-template-columns: 1fr;
+      }
+      aside,
+      .conv-resize-handle,
+      .detail-view {
+        display: none;
+      }
+      .proto-main {
+        padding: 16px 14px 26px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="ambient-bg">
+    <div class="blob blob-1"></div>
+    <div class="blob blob-2"></div>
+    <div class="blob blob-3"></div>
+    <div class="blob blob-4"></div>
+    <div class="blob blob-5"></div>
+    <div class="blob blob-6"></div>
+    <div class="blob blob-7"></div>
+    <div class="blob blob-8"></div>
+  </div>
+
+  <div class="shell proto-shell">
+    <header>
+      <div class="header-main">
+        <a class="back-link" href="/share/page-previews-index.html" title="返回预览入口">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" width="18" height="18">
+            <path d="M15 19l-7-7 7-7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <span>预览入口</span>
+        </a>
+        <div class="project-info">
+          <h1 class="project-title">聊天区结果态原型直出页 v1</h1>
+          <div class="project-meta-row">
+            <span class="project-desc">delivery_state: 结果态原型 · 右侧直接看最终聊天区界面，只用于拍板输入，不改 live 聊天区。</span>
+          </div>
+        </div>
+      </div>
+      <div class="header-nav">
+        <div class="header-mode-tabs" role="tablist" aria-label="页面分组">
+          <button class="header-mode-btn">现状问题</button>
+          <button class="header-mode-btn active">结果原型</button>
+          <button class="header-mode-btn">拍板输入</button>
+        </div>
+      </div>
+      <div class="hctrl">
+        <span class="proto-note">这不是说明页，而是“结果态原型 + 拍板输入页”</span>
+      </div>
+    </header>
+
+    <div class="body">
+      <aside id="channelAside">
+        <div class="aside-scroll">
+          <div class="asideh">
+            <div class="asideleft">
+              <h2 class="at">现状问题</h2>
+            </div>
+          </div>
+          <div class="list proto-aside-stack">
+            <article class="proto-card">
+              <div class="proto-kicker">使用方式</div>
+              <div class="proto-card-title">先在这里选一个问题场景，再直接看右侧“改完之后会长什么样”。</div>
+              <div class="proto-card-copy">左侧只讲问题如何发生、当前界面先让用户看到什么；中间直接给结果态原型；右侧只承接交互过程、状态变化和拍板点。</div>
+            </article>
+
+            <article class="proto-card">
+              <div class="proto-kicker">推荐场景</div>
+              <div class="proto-scene-buttons" id="sceneButtons"></div>
+            </article>
+
+            <article class="proto-card">
+              <div class="proto-kicker">问题如何发生</div>
+              <div class="proto-card-title" id="sceneIssueTitle"></div>
+              <div class="proto-card-copy" id="sceneIssueCopy"></div>
+              <ul class="proto-list" id="sceneIssueList"></ul>
+            </article>
+
+            <article class="proto-card">
+              <div class="proto-kicker">当前界面先看到什么</div>
+              <ul class="proto-note-list" id="sceneCurrentFirstList"></ul>
+            </article>
+          </div>
+        </div>
+      </aside>
+
+      <div class="conv-resize-handle" aria-hidden="true"></div>
+
+      <main class="list-view" id="listView">
+        <div class="proto-main">
+          <section class="proto-hero-grid">
+            <article class="proto-hero-card">
+              <div class="proto-kicker">一句话结论</div>
+              <div class="proto-hero-title">用户进来第一眼直接看到最终聊天区会怎么表达，而不是继续读“方案为什么这样改”。</div>
+              <div class="proto-hero-copy">这轮页面把“结果态原型”顶到首屏中心：原消息主语、当前结论、当前状态、下一动作直接同层出现；反馈、过程、调试继续保留，但默认退回第二层入口。</div>
+            </article>
+            <article class="proto-hero-card">
+              <div class="proto-kicker">本轮边界</div>
+              <div class="proto-chip-row">
+                <span class="proto-chip is-danger">不改 live 聊天区</span>
+                <span class="proto-chip is-warn">不回流运行时与契约</span>
+                <span class="proto-chip is-good">只做结果态原型</span>
+                <span class="proto-chip is-blue">用于拍板输入</span>
+              </div>
+            </article>
+          </section>
+
+          <section class="proto-toolbar">
+            <div>
+              <div class="proto-stepper" id="stepButtons"></div>
+            </div>
+            <div style="display:grid; gap:8px; justify-items:end;">
+              <div class="proto-toolbar-copy">每一步都展示“当前界面先看到什么”如何被改成“结果态首屏先看到什么”。</div>
+              <button class="proto-toggle-btn" id="toggleSecondary" type="button">显示第二层</button>
+            </div>
+          </section>
+
+          <section class="proto-result-card">
+            <div class="proto-result-head">
+              <div class="proto-chip-row" id="resultMetaChips"></div>
+              <div class="proto-result-title" id="resultTitle"></div>
+              <div class="proto-result-copy" id="resultCopy"></div>
+            </div>
+
+            <div class="proto-result-shell">
+              <div class="proto-result-meta">
+                <div class="proto-chip-row" id="resultShellChips"></div>
+                <div class="proto-step-note" id="resultShellNote"></div>
+              </div>
+              <div class="proto-result-stream" id="resultStream"></div>
+            </div>
+
+            <div class="proto-kpi-grid" id="resultKpiGrid"></div>
+
+            <div class="proto-diff-grid">
+              <article class="proto-diff-card">
+                <strong>当前界面先让用户看到什么</strong>
+                <ul class="proto-note-list" id="resultCurrentFirst"></ul>
+              </article>
+              <article class="proto-diff-card">
+                <strong>改良后用户能更快判断什么</strong>
+                <ul class="proto-note-list" id="resultJudgementList"></ul>
+              </article>
+            </div>
+          </section>
+
+          <section class="proto-boundary-grid">
+            <article class="proto-boundary-card">
+              <div class="proto-kicker">不改变什么</div>
+              <div class="proto-boundary-title">不改消息体系，不新造 viewer</div>
+              <div class="proto-boundary-copy">这轮只改表达顺序和首屏权重，不补新卡片体系，也不把聊天区做成第二个任务中心。</div>
+            </article>
+            <article class="proto-boundary-card">
+              <div class="proto-kicker">风险控制</div>
+              <div class="proto-boundary-title">反馈 / 过程 / 调试全部继续存在</div>
+              <div class="proto-boundary-copy">它们不是删除，而是退到第二层。用户需要证据时仍可看见，只是不再抢首屏主语和下一动作。</div>
+            </article>
+            <article class="proto-boundary-card">
+              <div class="proto-kicker">仍需拍板的点</div>
+              <div class="proto-boundary-title" id="decisionTitle"></div>
+              <div class="proto-boundary-copy" id="decisionCopy"></div>
+            </article>
+          </section>
+        </div>
+      </main>
+
+      <section class="detail-view" id="detailView">
+        <div class="detailh">
+          <div class="detailh-main">
+            <div class="dt" id="detailSceneTitle">交互过程</div>
+            <div class="dsub">这一栏只承接改良后的交互过程、状态变化和拍板输入，不展开实现细节。</div>
+          </div>
+        </div>
+        <div class="detailb">
+          <div class="proto-detail-stack">
+            <article class="proto-detail-card">
+              <div class="proto-kicker">改良后的交互过程</div>
+              <div class="proto-detail-title">用户会怎样走完这一段</div>
+              <ul class="proto-note-list" id="detailProcessList"></ul>
+            </article>
+
+            <article class="proto-detail-card">
+              <div class="proto-kicker">状态 / 数据如何变化</div>
+              <div class="proto-detail-title">拍板时只看这些变化是否成立</div>
+              <div class="proto-detail-kv" id="detailChangeList"></div>
+            </article>
+
+            <article class="proto-detail-card">
+              <div class="proto-kicker">用户最终能更快判断什么</div>
+              <ul class="proto-note-list" id="detailJudgementList"></ul>
+            </article>
+
+            <article class="proto-detail-card">
+              <div class="proto-kicker">拍板提醒</div>
+              <ul class="proto-list">
+                <li>当前只确认“结果态表达是否成立”，不视为已经进入真实实现批。</li>
+                <li>如果这页通过，后续 live 修复只需按这条表达规则落到真实聊天区。</li>
+                <li>若仍不通过，应继续修原型页，不回流到运行时或契约扩题。</li>
+              </ul>
+            </article>
+          </div>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      var scenes = [
+        {
+          key: "anchor",
+          label: "首屏主语",
+          issueTitle: "首屏主语被状态条与摘要收纳压住",
+          issueCopy: "当前不是没有显示，而是第一眼先给了摘要结果、回执入口和技术状态条；用户要先理解“这是一个处理视图”，才能回推业务到底在推进什么。",
+          issueList: [
+            "摘要结果、处理回执、技术状态条同时在前，原消息主语退到第二层。",
+            "原协作对象存在，但不稳定成为首屏第一读点。",
+            "用户需要继续翻层，才能知道这轮协作到底在说什么。"
+          ],
+          currentFirst: [
+            "先看到业务摘要句，而不是原协作对象。",
+            "处理回执 / 查看过程入口和主消息同层竞争。",
+            "技术状态条在视觉上比原消息更像当前主语。"
+          ],
+          resultTitle: "结果态原型：原消息主语、当前结论、状态、下一动作同层直出",
+          resultCopy: "右侧直接模拟“改完之后”的聊天区：第一张卡不再先讲摘要，而是先给原消息主语；摘要和技术承接退回第二层。",
+          decisionTitle: "是否认可“原消息主语 + 当前结论 + 当前状态 + 下一动作”成为首屏固定槽位",
+          decisionCopy: "只要确认这四项同层直出，后续真实实现就不需要再靠解释页脑补最终界面。",
+          judgement: [
+            "这轮协作现在在推进什么。",
+            "当前状态是否已经到自己接手。",
+            "下一棒应该交给谁，而不必先读技术层。"
+          ],
+          process: [
+            "收到协作消息后，首屏第一张卡直接显示原协作对象，不再先给摘要结果。",
+            "同一张卡固定补上 `当前结论 / 当前状态 / 下一动作`，用户无需跨块拼装。",
+            "处理回执、查看过程和技术状态继续保留，但统一退回第二层入口。"
+          ],
+          steps: [
+            {
+              label: "收到消息",
+              shellNote: "第一眼先看到业务主语，不再先看到摘要收纳。",
+              metaChips: ["结果态原型", "首屏主语", "第一层直显"],
+              shellChips: ["当前状态: 待确认", "下一责任: 总控-项目经理"],
+              cards: [
+                {
+                  kind: "primary",
+                  title: "原协作对象",
+                  chips: ["首屏主语"],
+                  body: "前端实施残项进度回收：请只回当前结论 / 是否放行 / 唯一阻塞 / 下一步动作。",
+                  rows: [["当前结论", "首轮实现已完成"], ["下一动作", "请确认是否放行进入验收"]],
+                  secondary: ["处理回执入口仍保留，但默认退到第二层。", "查看过程与调试信息只在需要查证据时再看。"]
+                },
+                {
+                  kind: "summary",
+                  title: "首层固定槽位",
+                  chips: ["当前状态", "下一动作"],
+                  body: "当前状态：待确认；下一责任：总控-项目经理；请给出是否放行的单一结论。",
+                  rows: [["反馈入口", "查看反馈"], ["过程入口", "查看过程"]],
+                  secondary: ["状态说明仍可展开，但不再压住原消息主语。"]
+                }
+              ],
+              kpis: [
+                { label: "首屏业务锚点", value: "4/4", note: "主语 / 结论 / 状态 / 下一动作同层", tone: "good" },
+                { label: "判定下一步", value: "0 次点击", note: "首屏即可判断", tone: "good" },
+                { label: "技术入口权重", value: "降层", note: "只做次级入口", tone: "good" },
+                { label: "首屏感受", value: "先像协作", note: "再按需看技术承接", tone: "good" }
+              ],
+              changes: [
+                ["首屏锚点", "摘要 / 回执前置 -> 原消息主语前置"],
+                ["阅读顺序", "技术先行 -> 业务先行"],
+                ["下一动作", "需翻层寻找 -> 同层直显"],
+                ["数据感知", "技术状态占主位 -> 业务状态占主位"]
+              ]
+            },
+            {
+              label: "形成结论",
+              shellNote: "生成结论后，仍然维持业务主语在第一层，而不是被处理回执替代。",
+              metaChips: ["结果态原型", "形成结论", "拍板前"],
+              shellChips: ["当前状态: 待拍板", "下一责任: 总控-项目经理"],
+              cards: [
+                {
+                  kind: "primary",
+                  title: "原协作对象 + 当前结论",
+                  chips: ["当前结论", "当前状态"],
+                  body: "前端侧当前结论：聊天区首屏表达已收敛；当前状态：等待总控拍板是否放行进入验收。",
+                  rows: [["下一动作", "请确认是否通过"], ["当前责任", "总控-项目经理"]],
+                  secondary: ["反馈细节继续保留在第二层，不再重新定义首屏主语。", "过程记录仍可展开查看。"]
+                },
+                {
+                  kind: "secondary",
+                  title: "证据入口",
+                  chips: ["反馈", "过程", "调试"],
+                  body: "需要查证据时再进入第二层，不影响第一眼的业务判断。",
+                  rows: [["默认层级", "第二层"], ["作用", "补充说明而不是重写主线"]],
+                  secondary: ["首屏与下钻后的第一层仍然保持同一条业务主线。"]
+                }
+              ],
+              kpis: [
+                { label: "结论可见", value: "首层直显", note: "不再靠摘要句外推", tone: "good" },
+                { label: "当前状态", value: "同层标签", note: "紧跟结论显示", tone: "good" },
+                { label: "责任链", value: "同层可见", note: "不再进回执正文找", tone: "good" },
+                { label: "业务理解", value: "快", note: "读完一张卡即可判断", tone: "good" }
+              ],
+              changes: [
+                ["结论层级", "摘要结果单独占位 -> 主卡内同层直显"],
+                ["责任链", "分散在回执 / 角标 -> 同层固定槽位"],
+                ["技术层", "并排竞争 -> 次级证据入口"],
+                ["用户动作", "先翻层 -> 先判断、后下钻"]
+              ]
+            },
+            {
+              label: "进入拍板",
+              shellNote: "进入拍板时，页面仍先表达业务结论，再让用户决定是否展开技术证据。",
+              metaChips: ["结果态原型", "进入拍板", "待放行"],
+              shellChips: ["当前状态: 待放行", "下一责任: 总控-项目经理"],
+              cards: [
+                {
+                  kind: "primary",
+                  title: "拍板输入主卡",
+                  chips: ["当前结论", "下一动作"],
+                  body: "首轮实现已完成；请总控给出是否放行进入验收的单一结论。",
+                  rows: [["当前状态", "待放行"], ["下一动作", "给出通过 / 不通过"]],
+                  secondary: ["如果需要查证据，再进入反馈与过程。"]
+                },
+                {
+                  kind: "summary",
+                  title: "第二层技术承接",
+                  chips: ["反馈", "过程"],
+                  body: "反馈、过程、调试都还在，但已经不再抢拍板输入页的第一句话。",
+                  rows: [["默认状态", "收起"], ["使用场景", "补证据 / 复盘 / 排障"]],
+                  secondary: ["用户能把注意力放回“是否通过”而不是“先看哪个技术入口”。"]
+                }
+              ],
+              kpis: [
+                { label: "拍板主语", value: "稳定", note: "始终先给业务结论", tone: "good" },
+                { label: "放行动作", value: "直显", note: "不再掉到细节层", tone: "good" },
+                { label: "证据层", value: "可达", note: "需要时再看", tone: "good" },
+                { label: "页面气质", value: "像协作流", note: "不再像技术回单", tone: "good" }
+              ],
+              changes: [
+                ["拍板输入", "先看技术承接 -> 先看是否放行"],
+                ["用户判断", "要回推主语 -> 首屏直接判断"],
+                ["反馈作用", "占主位 -> 补证据"],
+                ["风险", "脑补最终界面 -> 直接看到结果态原型"]
+              ]
+            }
+          ]
+        },
+        {
+          key: "feedback",
+          label: "反馈降层",
+          issueTitle: "反馈与过程收纳过早抢占主链路",
+          issueCopy: "当前反馈入口、处理回执和过程条目常和主消息并排，用户会先被技术承接层吸走注意力，首屏更像在处理系统回单，而不是在推进业务协作。",
+          issueList: [
+            "处理回执入口常比原消息更像当前主语。",
+            "过程 / 调试入口与业务结论同层竞争，用户先看技术件。",
+            "反馈有价值，但不该默认在第一层表达。"
+          ],
+          currentFirst: [
+            "先看到“查看回执 / 查看过程”等入口。",
+            "技术状态或处理说明和业务消息并列。",
+            "原协作对象被读成附件，而不是主链路。"
+          ],
+          resultTitle: "结果态原型：反馈、过程、调试都保留，但统一退回第二层入口",
+          resultCopy: "改良后首屏只表达业务推进；反馈、过程、调试作为证据层继续存在，用户需要时再进入。",
+          decisionTitle: "是否认可“反馈 / 过程 / 调试只做第二层证据入口”",
+          decisionCopy: "如果这一条成立，聊天区就会重新像业务协作流，而不是系统流水或排障面板。",
+          judgement: [
+            "首屏应该先读业务消息还是技术承接。",
+            "什么时候需要进入反馈 / 过程层，什么时候不需要。",
+            "当前协作是否已经具备继续推进的业务信息。"
+          ],
+          process: [
+            "首屏仍先给业务主线卡，不让反馈入口与主消息并排竞争。",
+            "反馈、过程、调试统一收进第二层证据入口，需要时再展开。",
+            "用户先完成业务判断，再决定是否下钻看证据。"
+          ],
+          steps: [
+            {
+              label: "收到反馈",
+              shellNote: "反馈先退回第二层，首屏仍保持业务消息为主。",
+              metaChips: ["结果态原型", "反馈降层", "业务先行"],
+              shellChips: ["当前状态: 已收到反馈", "下一责任: 前端页面-规范策划"],
+              cards: [
+                {
+                  kind: "primary",
+                  title: "业务主线卡",
+                  chips: ["当前结论", "当前状态"],
+                  body: "当前结论：结果态原型页已可供拍板；当前状态：等待确认是否继续进入真实修复评估。",
+                  rows: [["下一动作", "请确认是否采纳这条表达规则"], ["当前责任", "产品 / 总控拍板"]],
+                  secondary: ["反馈细节已收到，但默认不占第一层。"]
+                },
+                {
+                  kind: "secondary",
+                  title: "反馈入口",
+                  chips: ["反馈", "证据"],
+                  body: "需要时可查看反馈原文与处理过程，但它们不再重新定义首屏主语。",
+                  rows: [["默认层级", "第二层"], ["查看时机", "需要补证据时"]],
+                  secondary: ["过程与调试同样退回第二层入口。"]
+                }
+              ],
+              kpis: [
+                { label: "反馈权重", value: "中", note: "保留但不抢主位", tone: "good" },
+                { label: "业务主线", value: "稳定", note: "持续占首屏", tone: "good" },
+                { label: "用户分心点", value: "减少", note: "不再先看技术入口", tone: "good" },
+                { label: "页面气质", value: "先协作", note: "再技术承接", tone: "good" }
+              ],
+              changes: [
+                ["反馈层级", "首层并排 -> 第二层入口"],
+                ["过程层级", "首层竞争 -> 第二层入口"],
+                ["首屏判断", "先看技术件 -> 先看业务推进"],
+                ["数据感知", "证据主导 -> 结论主导"]
+              ]
+            },
+            {
+              label: "补充证据",
+              shellNote: "用户主动需要证据时，再进入反馈和过程，但主线不丢。",
+              metaChips: ["结果态原型", "补充证据", "次级入口"],
+              shellChips: ["当前状态: 证据可查", "下一责任: 当前责任人判断是否需要展开"],
+              cards: [
+                {
+                  kind: "primary",
+                  title: "业务结论仍在第一层",
+                  chips: ["主线不丢"],
+                  body: "即使补证据，主卡仍保留在上层，用户不会在下钻后重新迷路。",
+                  rows: [["当前结论", "可继续拍板"], ["下一动作", "如需证据再展开反馈与过程"]],
+                  secondary: ["展开后第一层仍然是业务主线，而不是反馈本身。"]
+                },
+                {
+                  kind: "summary",
+                  title: "证据层内容",
+                  chips: ["反馈", "过程", "调试"],
+                  body: "这一层只补充“为什么这样判断”，不再承担“这轮在推进什么”的职责。",
+                  rows: [["默认位置", "第二层"], ["作用", "查证据 / 复盘 / 排障"]],
+                  secondary: ["反馈和过程的价值被保留，但权重被纠正。"]
+                }
+              ],
+              kpis: [
+                { label: "证据可达", value: "直接", note: "需要时仍可查看", tone: "good" },
+                { label: "主线稳定", value: "不丢", note: "下钻后仍看得到", tone: "good" },
+                { label: "阅读顺序", value: "正向", note: "业务先于技术", tone: "good" },
+                { label: "理解成本", value: "降低", note: "不用先分辨技术块", tone: "good" }
+              ],
+              changes: [
+                ["下钻路径", "点开后仍绕路 -> 点开后仍先回主线"],
+                ["反馈作用", "重新夺权 -> 只补证据"],
+                ["过程作用", "占主位 -> 辅助理解"],
+                ["用户感受", "像拆套娃 -> 像查证据"]
+              ]
+            },
+            {
+              label: "形成拍板",
+              shellNote: "拍板时仍先表达业务推进，反馈只作为需要时再看的证据层。",
+              metaChips: ["结果态原型", "形成拍板", "证据降层"],
+              shellChips: ["当前状态: 待确认", "下一责任: 总控 / 产品"],
+              cards: [
+                {
+                  kind: "primary",
+                  title: "拍板结论主卡",
+                  chips: ["当前结论", "下一动作"],
+                  body: "当前结论：反馈与过程已经降层，不再抢主位；下一动作：确认是否采纳为真实聊天区表达规则。",
+                  rows: [["当前状态", "待确认"], ["证据入口", "查看反馈 / 查看过程"]],
+                  secondary: ["技术层仍可达，但不再主导拍板页首屏。"]
+                },
+                {
+                  kind: "secondary",
+                  title: "证据入口保持只读",
+                  chips: ["反馈", "过程"],
+                  body: "证据层只用于说明为什么判断，不再替代当前结论。",
+                  rows: [["默认状态", "收起"], ["使用方式", "查证据时再进入"]],
+                  secondary: ["拍板页从“技术驱动”切回“业务驱动”。"]
+                }
+              ],
+              kpis: [
+                { label: "首屏主语", value: "业务主线", note: "不再先看反馈收纳", tone: "good" },
+                { label: "反馈权重", value: "纠正", note: "只作证据层", tone: "good" },
+                { label: "拍板焦点", value: "是否采纳", note: "而不是先读过程", tone: "good" },
+                { label: "风险", value: "可控", note: "技术层未被删除", tone: "good" }
+              ],
+              changes: [
+                ["拍板关注点", "反馈内容 -> 表达规则是否成立"],
+                ["页面首层", "证据抢位 -> 结论抢位"],
+                ["技术层", "主导阅读 -> 支撑阅读"],
+                ["后续实现", "继续脑补 -> 直接参考结果态原型"]
+              ]
+            }
+          ]
+        },
+        {
+          key: "handoff",
+          label: "下一棒",
+          issueTitle: "用户很难在首屏判断“谁接下一棒”",
+          issueCopy: "当前责任、当前状态和下一动作常分散在摘要句、回执正文或角标里；用户看完首屏后，仍要自己拼装“现在轮到谁”。",
+          issueList: [
+            "下一责任人常掉进回执正文或详情里，首屏不稳定。",
+            "当前状态和下一动作不是固定共层，读完一屏后仍可能不知道自己要不要接手。",
+            "责任链需要自己反推，导致协作推进速度变慢。"
+          ],
+          currentFirst: [
+            "先看到摘要或技术状态，责任链不稳。",
+            "下一动作要继续翻正文或详情才能确定。",
+            "读完第一屏后仍可能不知道现在轮到谁。"
+          ],
+          resultTitle: "结果态原型：首屏直接告诉用户当前状态与下一动作，下一责任人稳定同层出现",
+          resultCopy: "这轮结果态原型的关键不是多一个按钮，而是让用户一眼判断“现在是不是轮到我、我需要做什么”。",
+          decisionTitle: "是否认可“下一责任人 + 下一动作”必须稳定同层直出",
+          decisionCopy: "如果这一条不成立，用户仍会继续靠翻层和脑补来判断责任链，这页就不够支撑进入真实修复批。",
+          judgement: [
+            "现在是不是轮到自己接手。",
+            "如果不是自己，下一棒明确交给谁。",
+            "当前状态是否已经达到拍板 / 验收 / 继续推进。"
+          ],
+          process: [
+            "首屏主卡固定出现 `当前状态 / 下一动作 / 下一责任人` 三项。",
+            "进入拍板时，这三项不会再掉到回执正文或详情层。",
+            "用户先完成责任判断，再决定是否查反馈和过程证据。"
+          ],
+          steps: [
+            {
+              label: "识别责任",
+              shellNote: "责任链不再散落在正文和角标里，首屏直接判断现在轮到谁。",
+              metaChips: ["结果态原型", "责任直显", "首屏判断"],
+              shellChips: ["当前状态: 待确认", "下一责任: 产品策划-任务派发"],
+              cards: [
+                {
+                  kind: "primary",
+                  title: "责任判断主卡",
+                  chips: ["当前状态", "下一责任"],
+                  body: "当前状态：待产品确认；下一责任：产品策划-任务派发；下一动作：确认是否采纳当前结果态原型。",
+                  rows: [["当前结论", "页面已具备拍板输入能力"], ["下一动作", "请给出通过 / 不通过"]],
+                  secondary: ["责任链不再后移到回执正文。"]
+                },
+                {
+                  kind: "summary",
+                  title: "证据入口",
+                  chips: ["反馈", "过程"],
+                  body: "若需核对证据，再进入反馈与过程层；责任判断不依赖这些入口。",
+                  rows: [["默认层级", "第二层"], ["作用", "补证据"]],
+                  secondary: ["用户先知道该不该自己接手。"]
+                }
+              ],
+              kpis: [
+                { label: "责任直显", value: "同层可见", note: "不再后移", tone: "good" },
+                { label: "下一动作", value: "一句话", note: "首屏即可判断", tone: "good" },
+                { label: "当前状态", value: "主卡内", note: "不再藏进角标", tone: "good" },
+                { label: "用户停顿", value: "更少", note: "不再反推责任链", tone: "good" }
+              ],
+              changes: [
+                ["下一责任人", "详情层寻找 -> 首屏同层直显"],
+                ["下一动作", "回执正文补看 -> 主卡一句话给出"],
+                ["当前状态", "角标副文案 -> 同层标签"],
+                ["用户判断", "先猜测 -> 先明确"]
+              ]
+            },
+            {
+              label: "推进协作",
+              shellNote: "协作推进时，当前状态和下一动作继续稳定，不会因消息类型变化而漂移。",
+              metaChips: ["结果态原型", "推进协作", "责任稳定"],
+              shellChips: ["当前状态: 等待拍板", "下一责任: 总控-项目经理"],
+              cards: [
+                {
+                  kind: "primary",
+                  title: "协作推进卡",
+                  chips: ["当前结论", "当前状态", "下一动作"],
+                  body: "当前结论：结果态原型已重制完成；当前状态：等待总控拍板；下一动作：给出是否放行进入真实修复评估。",
+                  rows: [["下一责任", "总控-项目经理"], ["当前责任", "前端页面-规范策划已完成直出页交付"]],
+                  secondary: ["责任链由首屏直接承接，不再靠多个模块拼装。"]
+                },
+                {
+                  kind: "secondary",
+                  title: "补充证据层",
+                  chips: ["反馈", "过程", "调试"],
+                  body: "需要核对时再看证据，不影响首屏对责任链的判断。",
+                  rows: [["默认状态", "收起"], ["查看时机", "补证据 / 复盘"]],
+                  secondary: ["技术层存在，但不再决定“谁接下一棒”。"]
+                }
+              ],
+              kpis: [
+                { label: "责任链连续性", value: "高", note: "切换状态时仍稳定", tone: "good" },
+                { label: "协作摩擦", value: "降低", note: "不再靠脑补接棒", tone: "good" },
+                { label: "状态理解", value: "快", note: "一句话完成判断", tone: "good" },
+                { label: "拍板可用性", value: "可直接看", note: "不必再解释最终界面", tone: "good" }
+              ],
+              changes: [
+                ["协作推进", "多块拼装 -> 主卡连续承接"],
+                ["责任链", "依赖理解摘要 -> 依赖主卡槽位"],
+                ["页面角色", "继续说明方案 -> 直接呈现最终样式"],
+                ["用户体验", "难判断是否轮到自己 -> 一眼可判"]
+              ]
+            },
+            {
+              label: "等待拍板",
+              shellNote: "进入拍板阶段时，首屏仍继续表达责任链，不会退回成说明文档。",
+              metaChips: ["结果态原型", "等待拍板", "责任清晰"],
+              shellChips: ["当前状态: 待放行", "下一责任: 总控-项目经理"],
+              cards: [
+                {
+                  kind: "primary",
+                  title: "拍板责任卡",
+                  chips: ["当前状态", "下一责任", "下一动作"],
+                  body: "当前状态：待放行；下一责任：总控-项目经理；下一动作：确认是否采纳这条聊天区表达规则。",
+                  rows: [["当前结论", "结果态原型已具备拍板输入条件"], ["证据入口", "查看反馈 / 查看过程"]],
+                  secondary: ["用户不需要继续阅读说明卡，首屏已经是最终界面。"]
+                },
+                {
+                  kind: "summary",
+                  title: "证据与补充",
+                  chips: ["第二层"],
+                  body: "反馈与过程继续存在，但已经不参与“谁接下一棒”的第一层判断。",
+                  rows: [["默认层级", "第二层"], ["作用", "补充说明"]],
+                  secondary: ["拍板页从“解释方案”变成“直接看结果态”。"]
+                }
+              ],
+              kpis: [
+                { label: "拍板输入", value: "直出", note: "首屏就是最终样式", tone: "good" },
+                { label: "责任判断", value: "稳定", note: "不再依赖下钻", tone: "good" },
+                { label: "页面说明量", value: "降低", note: "不再长文拍板", tone: "good" },
+                { label: "进入实现前", value: "更明确", note: "可直接对着结果态评估", tone: "good" }
+              ],
+              changes: [
+                ["拍板方式", "继续脑补最终界面 -> 直接看结果态原型"],
+                ["责任判断", "翻层后才能确定 -> 首屏直接确定"],
+                ["说明文案", "长文解释 -> 结果态直出"],
+                ["实现前评估", "方向不稳 -> 目标态明确"]
+              ]
+            }
+          ]
+        }
+      ];
+
+      var activeSceneIndex = 0;
+      var activeStepIndex = 0;
+      var showSecondary = false;
+
+      var sceneButtons = document.getElementById("sceneButtons");
+      var stepButtons = document.getElementById("stepButtons");
+      var toggleSecondary = document.getElementById("toggleSecondary");
+      var sceneIssueTitle = document.getElementById("sceneIssueTitle");
+      var sceneIssueCopy = document.getElementById("sceneIssueCopy");
+      var sceneIssueList = document.getElementById("sceneIssueList");
+      var sceneCurrentFirstList = document.getElementById("sceneCurrentFirstList");
+      var resultMetaChips = document.getElementById("resultMetaChips");
+      var resultTitle = document.getElementById("resultTitle");
+      var resultCopy = document.getElementById("resultCopy");
+      var resultShellChips = document.getElementById("resultShellChips");
+      var resultShellNote = document.getElementById("resultShellNote");
+      var resultStream = document.getElementById("resultStream");
+      var resultKpiGrid = document.getElementById("resultKpiGrid");
+      var resultCurrentFirst = document.getElementById("resultCurrentFirst");
+      var resultJudgementList = document.getElementById("resultJudgementList");
+      var detailSceneTitle = document.getElementById("detailSceneTitle");
+      var detailProcessList = document.getElementById("detailProcessList");
+      var detailChangeList = document.getElementById("detailChangeList");
+      var detailJudgementList = document.getElementById("detailJudgementList");
+      var decisionTitle = document.getElementById("decisionTitle");
+      var decisionCopy = document.getElementById("decisionCopy");
+
+      function escapeHtml(text) {
+        return String(text)
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/\"/g, "&quot;")
+          .replace(/'/g, "&#39;");
+      }
+
+      function renderButtons() {
+        sceneButtons.innerHTML = "";
+        scenes.forEach(function (scene, index) {
+          var button = document.createElement("button");
+          button.type = "button";
+          button.className = "proto-scene-btn" + (index === activeSceneIndex ? " is-active" : "");
+          button.textContent = scene.label;
+          button.addEventListener("click", function () {
+            activeSceneIndex = index;
+            activeStepIndex = 0;
+            render();
+          });
+          sceneButtons.appendChild(button);
+        });
+
+        stepButtons.innerHTML = "";
+        activeScene().steps.forEach(function (step, index) {
+          var button = document.createElement("button");
+          button.type = "button";
+          button.className = "proto-step-btn" + (index === activeStepIndex ? " is-active" : "");
+          button.textContent = step.label;
+          button.addEventListener("click", function () {
+            activeStepIndex = index;
+            render();
+          });
+          stepButtons.appendChild(button);
+        });
+
+        toggleSecondary.classList.toggle("is-active", showSecondary);
+        toggleSecondary.textContent = showSecondary ? "隐藏第二层" : "显示第二层";
+      }
+
+      function activeScene() {
+        return scenes[activeSceneIndex] || scenes[0];
+      }
+
+      function activeStep() {
+        var scene = activeScene();
+        return scene.steps[activeStepIndex] || scene.steps[0];
+      }
+
+      function renderList(target, items) {
+        target.innerHTML = "";
+        items.forEach(function (item) {
+          var li = document.createElement("li");
+          li.textContent = item;
+          target.appendChild(li);
+        });
+      }
+
+      function renderChips(target, items, className) {
+        target.innerHTML = "";
+        items.forEach(function (text) {
+          var span = document.createElement("span");
+          span.className = "proto-chip " + (className || "");
+          span.textContent = text;
+          target.appendChild(span);
+        });
+      }
+
+      function renderMessages() {
+        var step = activeStep();
+        resultStream.innerHTML = step.cards.map(function (card) {
+          var secondaryAttrs = showSecondary ? "" : " hidden";
+          return (
+            '<article class="proto-message is-' + card.kind + '">' +
+              '<div class="proto-message-head">' +
+                '<div class="proto-message-title">' + escapeHtml(card.title) + '</div>' +
+                '<div class="proto-chip-row">' +
+                  card.chips.map(function (chip) {
+                    return '<span class="proto-chip">' + escapeHtml(chip) + '</span>';
+                  }).join("") +
+                '</div>' +
+              '</div>' +
+              '<div class="proto-message-body">' + escapeHtml(card.body) + '</div>' +
+              '<div class="proto-message-rows">' +
+                card.rows.map(function (row) {
+                  return '<div class="proto-message-row"><strong>' + escapeHtml(row[0]) + '</strong><span>' + escapeHtml(row[1]) + '</span></div>';
+                }).join("") +
+              '</div>' +
+              '<div class="proto-message-secondary"' + secondaryAttrs + '>' +
+                card.secondary.map(function (item) {
+                  return '<div class="proto-message-row"><strong>第二层</strong><span>' + escapeHtml(item) + '</span></div>';
+                }).join("") +
+              '</div>' +
+            '</article>'
+          );
+        }).join("");
+      }
+
+      function renderKpis() {
+        var step = activeStep();
+        resultKpiGrid.innerHTML = step.kpis.map(function (kpi) {
+          return (
+            '<div class="proto-kpi is-' + kpi.tone + '">' +
+              '<div class="proto-kpi-label">' + escapeHtml(kpi.label) + '</div>' +
+              '<div class="proto-kpi-value">' + escapeHtml(kpi.value) + '</div>' +
+              '<div class="proto-kpi-copy">' + escapeHtml(kpi.note) + '</div>' +
+            '</div>'
+          );
+        }).join("");
+      }
+
+      function renderDetailChanges() {
+        var step = activeStep();
+        detailChangeList.innerHTML = step.changes.map(function (row) {
+          return (
+            '<div class="proto-detail-row">' +
+              '<div class="k">' + escapeHtml(row[0]) + '</div>' +
+              '<div class="v">' + escapeHtml(row[1]) + '</div>' +
+            '</div>'
+          );
+        }).join("");
+      }
+
+      function render() {
+        var scene = activeScene();
+        var step = activeStep();
+
+        renderButtons();
+
+        sceneIssueTitle.textContent = scene.issueTitle;
+        sceneIssueCopy.textContent = scene.issueCopy;
+        renderList(sceneIssueList, scene.issueList);
+        renderList(sceneCurrentFirstList, scene.currentFirst);
+
+        renderChips(resultMetaChips, step.metaChips, "is-blue");
+        renderChips(resultShellChips, step.shellChips, "is-good");
+        resultTitle.textContent = scene.resultTitle;
+        resultCopy.textContent = scene.resultCopy;
+        resultShellNote.textContent = step.shellNote;
+        renderMessages();
+        renderKpis();
+
+        renderList(resultCurrentFirst, scene.currentFirst);
+        renderList(resultJudgementList, scene.judgement);
+
+        detailSceneTitle.textContent = scene.label + " · " + step.label;
+        renderList(detailProcessList, scene.process);
+        renderDetailChanges();
+        renderList(detailJudgementList, scene.judgement);
+
+        decisionTitle.textContent = scene.decisionTitle;
+        decisionCopy.textContent = scene.decisionCopy;
+      }
+
+      toggleSecondary.addEventListener("click", function () {
+        showSecondary = !showSecondary;
+        render();
+      });
+
+      render();
+    })();
+  </script>
+</body>
+</html>

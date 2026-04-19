@@ -6,7 +6,6 @@ import secrets
 import time
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote
 
 from .helpers import atomic_write_text, now_iso, read_json_file
 from .utils import safe_read_text
@@ -38,13 +37,6 @@ def normalize_task_path(value: Any, *, repo_root: Path | None = None) -> str:
     text = text.replace("\\", "/").strip()
     if text.startswith("task:"):
         text = text[5:].strip()
-    if "%" in text:
-        try:
-            text = unquote(text)
-        except Exception:
-            pass
-    if text.startswith("Users/"):
-        text = "/" + text
     if repo_root is not None:
         root = Path(repo_root).expanduser().resolve()
         try:
@@ -125,11 +117,7 @@ def render_task_front_matter(
         if not key_text:
             continue
         payload[key_text] = str(value or "").strip()
-    return _render_front_matter_payload(payload)
-
-
-def _render_front_matter_payload(payload: dict[str, Any]) -> str:
-    ordered_keys = [key for key in _FRONT_MATTER_PRIMARY_KEYS if key in payload]
+    ordered_keys = list(_FRONT_MATTER_PRIMARY_KEYS)
     for key in payload.keys():
         if key not in ordered_keys:
             ordered_keys.append(key)
@@ -169,10 +157,30 @@ def ensure_task_front_matter(
 
 
 def ensure_task_created_at(markdown: str, *, created_at: str) -> str:
+    created_text = str(created_at or "").strip()
+    if not created_text:
+        return str(markdown or "")
     front_matter, body = split_markdown_front_matter(markdown)
-    front_matter = dict(front_matter)
-    front_matter["created_at"] = str(created_at or now_iso()).strip()
-    return _render_front_matter_payload(front_matter) + body.lstrip("\n")
+    next_front_matter = dict(front_matter)
+    if str(next_front_matter.get("created_at") or "").strip() == created_text:
+        return str(markdown or "")
+    next_front_matter["created_at"] = created_text
+    ordered_keys: list[str] = []
+    for key in ("task_id", "parent_task_id"):
+        if str(next_front_matter.get(key) or "").strip():
+            ordered_keys.append(key)
+    ordered_keys.append("created_at")
+    for key in next_front_matter.keys():
+        if key not in ordered_keys:
+            ordered_keys.append(key)
+    lines = [_FRONT_MATTER_BOUNDARY]
+    for key in ordered_keys:
+        value = str(next_front_matter.get(key) or "").strip()
+        if not value:
+            continue
+        lines.append(f"{key}: {value}")
+    lines.append(_FRONT_MATTER_BOUNDARY)
+    return "\n".join(lines) + "\n\n" + str(body or "").lstrip("\n")
 
 
 def runtime_base_dir_for_repo(repo_root: Path) -> Path:
@@ -351,7 +359,6 @@ def _ensure_task_identity_for_file(
         identity = extract_task_identity_from_markdown(updated)
         task_id = normalize_task_id(identity.get("task_id"))
         parent_task_id = normalize_task_id(identity.get("parent_task_id"))
-        created_at = str(identity.get("created_at") or "").strip()
 
     resolved_task_path = normalize_task_path(str(target), repo_root=repo_root)
     if resolved_task_path or task_id:
@@ -367,7 +374,6 @@ def _ensure_task_identity_for_file(
         "task_path": resolved_task_path,
         "task_id": task_id,
         "parent_task_id": parent_task_id,
-        "created_at": created_at,
     }
 
 
@@ -549,18 +555,17 @@ def resolve_task_reference(
             "task_path": found_norm or normalized_path,
             "task_id": resolved_task_id,
             "parent_task_id": resolved_parent_task_id,
-            "created_at": str(identity.get("created_at") or "").strip(),
             "matched_by": matched_by,
         }
-
-    if normalized_path and _resolve_task_file(root, normalized_path) is not None:
-        return _finalize(normalized_path, matched_by="task_path")
 
     if normalized_task_id:
         row = task_ids.get(normalized_task_id) if isinstance(task_ids, dict) else None
         candidate = normalize_task_path((row or {}).get("current_path"), repo_root=root) if isinstance(row, dict) else ""
         if candidate and _resolve_task_file(root, candidate) is not None:
             return _finalize(candidate, matched_by="task_id_state")
+
+    if normalized_path and _resolve_task_file(root, normalized_path) is not None:
+        return _finalize(normalized_path, matched_by="task_path")
 
     if normalized_path:
         candidate = _follow_path_aliases(path_aliases if isinstance(path_aliases, dict) else {}, normalized_path)
@@ -582,13 +587,11 @@ def resolve_task_reference(
             "task_path": normalized_path,
             "task_id": normalized_task_id,
             "parent_task_id": "",
-            "created_at": "",
             "matched_by": "unresolved_path",
         }
     return {
         "task_path": "",
         "task_id": normalized_task_id,
         "parent_task_id": "",
-        "created_at": "",
         "matched_by": "missing",
     }

@@ -5,6 +5,21 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>项目任务看板 · Qoreon</title>
   <style>__INLINE_CSS__</style>
+  <script>
+    (() => {
+      try {
+        const rawHash = String(window.location.hash || "").replace(/^#/, "").trim();
+        if (!rawHash) return;
+        if (!/(?:^|&)(?:tm|mode)=schedule(?:&|$)/.test(rawHash)) return;
+        const params = new URLSearchParams(rawHash);
+        params.delete("tm");
+        params.delete("mode");
+        params.set("pm", "t");
+        const nextHash = params.toString();
+        history.replaceState(null, "", nextHash ? ("#" + nextHash) : (window.location.pathname + window.location.search));
+      } catch (_) {}
+    })();
+  </script>
 </head>
 <body>
   <div class="ambient-bg">
@@ -66,7 +81,7 @@
               <path d="M4 7h16M7 12h10M10 17h4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
             </svg>
             <span>系统设置</span>
-            <span class="system-settings-count">6项</span>
+            <span class="system-settings-count">7项</span>
           </button>
           <div class="system-settings-popover" id="systemSettingsPopover" role="menu" aria-label="系统设置">
             <button class="system-settings-item project-config-btn" id="projectConfigBtn" type="button" title="打开 项目配置">
@@ -75,6 +90,13 @@
                 <span class="system-settings-item-desc">环境、工作树、规则、运行参数</span>
               </div>
               <span class="system-settings-badge">配置</span>
+            </button>
+            <button class="system-settings-item project-config-btn" id="shareProjectBtn" type="button" title="打开 分享项目">
+              <div class="system-settings-item-main">
+                <span class="system-settings-item-title">分享项目</span>
+                <span class="system-settings-item-desc">授权 Agent、生成当前页受限分享链接</span>
+              </div>
+              <span class="system-settings-badge">分享</span>
             </button>
             <button class="system-settings-item" id="projectAgentDirectoryBtn" type="button" title="打开项目通讯录">
               <div class="system-settings-item-main">
@@ -181,7 +203,7 @@
                 <button class="segbtn" id="panelOrgBtn" data-panel-mode="org" role="tab">组织</button>
                 <button class="segbtn" id="panelArchBtn" data-panel-mode="arch" role="tab">架构</button>
               </div>
-              <h2 class="at" id="asideTitle">通道</h2>
+              <h2 class="at" id="asideTitle">知识</h2>
               <div class="conv-layout-bar" id="convLayoutBar">
                 <div class="conv-layout-tabs" id="convLayoutTabs" role="tablist" aria-label="对话列表展示模式">
                   <button class="conv-layout-tab active" id="convLayoutFlatBtn" type="button" data-conv-layout="flat" role="tab" aria-selected="true">对话</button>
@@ -209,9 +231,9 @@
                 <span class="channel-value" id="currentChannelName">-</span>
               </div>
               <div class="org-mode-top-tabs pmseg" id="orgModeTopTabs" role="tablist" aria-label="架构视图模式切换" hidden aria-hidden="true">
-                <button class="segbtn" data-panel-mode="channel" role="tab">通道</button>
-                <button class="segbtn" data-panel-mode="task" role="tab">任务</button>
                 <button class="segbtn" data-panel-mode="conv" role="tab">对话</button>
+                <button class="segbtn" data-panel-mode="task" role="tab">任务</button>
+                <button class="segbtn" data-panel-mode="channel" role="tab">知识</button>
                 <button class="segbtn" data-panel-mode="org" role="tab">组织</button>
                 <button class="segbtn" data-panel-mode="arch" role="tab">架构</button>
               </div>
@@ -294,11 +316,7 @@
                 <path d="M6 16.5h6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
                 <path d="M17.4 15.8 19.6 18l-4.1 4-2.1-2.2 4-4Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
               </svg>
-              <span class="detail-task-counts">
-                <span class="detail-task-count detail-task-count-todo" id="detailTaskTrackingTodo">0</span>
-                <span class="detail-task-count-sep">/</span>
-                <span class="detail-task-count detail-task-count-progress" id="detailTaskTrackingProgress">0</span>
-              </span>
+              <span>任务</span>
             </button>
             <button class="btn icon-text-btn" id="detailTaskPushBtn" title="协作派发" style="display:none;">
               <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" width="14" height="14">
@@ -307,44 +325,7 @@
               </svg>
               <span>协作派发</span>
             </button>
-            <button class="btn icon-text-btn" id="detailTaskScheduleBtn" title="加入排期队列" style="display:none;">
-              <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" width="14" height="14">
-                <rect x="4" y="5" width="16" height="15" rx="2.2" stroke="currentColor" stroke-width="1.7"/>
-                <path d="M8 3.8v3.4M16 3.8v3.4M4 9.5h16" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
-              </svg>
-              <span>排期</span>
-            </button>
           </div>
-        </div>
-        <div class="convcurrenttaskdock" id="convCurrentTaskDock" style="display:none;">
-          <div class="convcurrenttaskrow" id="convCurrentTaskRow">
-            <button class="convcurrenttaskstrip" id="convCurrentTaskStrip" type="button">
-              <span class="convcurrenttaskstrip-label">当前任务</span>
-              <span class="convcurrenttaskstrip-main">
-                <span class="convcurrenttaskstrip-title" id="convCurrentTaskStripTitle"></span>
-                <span class="convcurrenttaskstrip-summary" id="convCurrentTaskStripSummary"></span>
-              </span>
-              <span class="convcurrenttaskstrip-meta">
-                <span class="convcurrenttaskstrip-status" id="convCurrentTaskStripStatus"></span>
-                <span class="convcurrenttaskstrip-updated" id="convCurrentTaskStripUpdated"></span>
-                <span class="convcurrenttaskstrip-arrow" aria-hidden="true">
-                  <svg viewBox="0 0 24 24" fill="none" width="14" height="14">
-                    <path d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-                  </svg>
-                </span>
-              </span>
-            </button>
-            <button class="convcurrenttaskstrip-close" id="convCurrentTaskStripClose" type="button" aria-label="收起当前任务横条" title="收起当前任务横条">
-              <svg viewBox="0 0 24 24" fill="none" width="14" height="14">
-                <path d="M7 14l5-5 5 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-              </svg>
-            </button>
-          </div>
-          <button class="convcurrenttaskpeek" id="convCurrentTaskPeek" type="button" aria-label="展开当前任务横条" title="展开当前任务横条" style="display:none;">
-            <svg viewBox="0 0 24 24" fill="none" width="14" height="14">
-              <path d="M7 10l5 5 5-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-            </svg>
-          </button>
         </div>
         <div class="detailb">
           <div class="chips" id="detailMeta" style="justify-content:flex-start;"></div>
@@ -401,39 +382,12 @@
               </div>
             </div>
             <div class="convcomposer">
-              <div class="convstartuphint" id="convStartupHint" style="display:none;">
-                <div class="convstartuphint-head">
-                  <div class="convstartuphint-titlewrap">
-                    <span class="convstartuphint-title" id="convStartupHintTitle">继续扩建团队并完成初始化</span>
-                    <span class="convstartuphint-state" id="convStartupHintState">建议动作</span>
-                  </div>
-                  <button class="convstartuphint-close" id="convStartupHintCloseBtn" type="button" aria-label="关闭项目初始化提醒" title="关闭">×</button>
-                </div>
-                <div class="convstartuphint-desc" id="convStartupHintDesc">当前项目已完成基础安装，发送下方提示词后，当前 Agent 会按标准模板继续扩团队、补培训并生成启动回执。</div>
-                <div class="convstartuphint-prompt" id="convStartupHintPrompt"></div>
-                <div class="convstartuphint-actions" id="convStartupHintActions">
-                  <button class="btn" id="convStartupHintCopyBtn" type="button">复制提示词</button>
-                  <button class="btn primary" id="convStartupHintSendBtn" type="button">发送给当前 Agent</button>
-                </div>
-              </div>
               <div class="convsenderrow" id="convSenderRow">
                 <div class="convsendermeta">
                   <div class="convsenderhint" id="convSenderHint"></div>
                   <div class="convhint" id="convHint">在该会话下继续发送消息，系统会按 5 秒频率自动刷新处理状态。</div>
                 </div>
                 <div class="convsenderactions">
-                  <button class="convinit-reminder-toggle" id="convTrainingReopenBtn" type="button" title="重新打开Agent培训提醒" aria-label="重新打开Agent培训提醒" aria-pressed="false">
-                    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                      <path d="M4 8.8 12 5l8 3.8-8 3.8L4 8.8Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
-                      <path d="M7 11.4V15c0 .9 2 2.4 5 2.4s5-1.5 5-2.4v-3.6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
-                    </svg>
-                  </button>
-                  <button class="convinit-reminder-toggle" id="convStartupHintReopenBtn" type="button" title="重新打开项目初始化提醒" aria-label="重新打开项目初始化提醒" aria-pressed="false">
-                    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                      <path d="M12 3.8v4.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
-                      <path d="m12 19.8 1.8-3.6 4.1-.6-3-2.9.7-4.1-3.6 1.9-3.6-1.9.7 4.1-3 2.9 4.1.6 1.8 3.6Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
-                    </svg>
-                  </button>
                   <button class="convrecentagents-global-toggle active" id="convRecentAgentsGlobalToggle" type="button" title="已显示最近联系，点击隐藏" aria-label="隐藏最近联系" aria-pressed="true">
                     <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
                       <path d="M8 11.2a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4Z" stroke="currentColor" stroke-width="1.6"/>

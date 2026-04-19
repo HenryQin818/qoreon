@@ -15,6 +15,11 @@
       </div>
       <div class="head-actions">
         <button class="btn btn-primary" id="newProjectBtn" type="button">新增项目</button>
+        <button class="btn btn-ghost" id="agentCurtainBtn" type="button">消息瀑布</button>
+        <button class="btn btn-ghost btn-with-tag" id="agentRelationshipBoardBtn" type="button">
+          <span>组织战略</span>
+          <span class="btn-tag-new">NEW</span>
+        </button>
         <button class="btn btn-ghost" id="worklogBtn" type="button">平台文章</button>
         <button class="btn btn-ghost" id="configBtn" type="button">配置</button>
       </div>
@@ -236,8 +241,8 @@
 
     <section class="cfg-section">
       <h3>项目基础</h3>
-      <p class="cfg-hint">以下路径都相对当前 `task-dashboard` 仓库根目录填写。</p>
-      <div class="project-bootstrap-grid">
+      <p class="cfg-hint">只需填写最少信息即可创建项目，高级配置默认收纳在下方。</p>
+      <div class="project-bootstrap-grid project-bootstrap-grid-basic">
         <label class="cfg-field">
           <span>项目 ID</span>
           <input class="input" id="projectBootstrapProjectId" type="text" placeholder="demo_project" autocomplete="off" />
@@ -246,32 +251,6 @@
           <span>项目名称</span>
           <input class="input" id="projectBootstrapProjectName" type="text" placeholder="演示项目" autocomplete="off" />
         </label>
-        <label class="cfg-field">
-          <span>项目根目录</span>
-          <input class="input" id="projectBootstrapProjectRoot" type="text" placeholder="projects/demo-project" autocomplete="off" />
-        </label>
-        <label class="cfg-field">
-          <span>任务根目录</span>
-          <input class="input" id="projectBootstrapTaskRoot" type="text" placeholder="projects/demo-project/任务规划" autocomplete="off" />
-        </label>
-        <label class="cfg-field">
-          <span>主题色</span>
-          <input class="input" id="projectBootstrapColor" type="text" placeholder="#0F63F2" autocomplete="off" />
-        </label>
-        <label class="cfg-field">
-          <span>执行权限</span>
-          <select class="input" id="projectBootstrapProfile">
-            <option value="project_privileged_full">project_privileged_full</option>
-            <option value="sandboxed">sandboxed</option>
-          </select>
-        </label>
-        <label class="cfg-field">
-          <span>环境</span>
-          <select class="input" id="projectBootstrapEnvironment">
-            <option value="stable">stable</option>
-            <option value="dev">dev</option>
-          </select>
-        </label>
       </div>
       <label class="cfg-field">
         <span>项目说明（可选）</span>
@@ -279,31 +258,69 @@
       </label>
     </section>
 
-    <section class="cfg-section">
-      <div class="project-bootstrap-toolbar">
-        <div>
-          <h3>通道定义</h3>
-          <p class="cfg-hint">至少保留 1 条通道；仅勾选需要初始化主会话的通道。</p>
-        </div>
-        <button class="btn btn-ghost cfg-btn" id="projectBootstrapAddChannelBtn" type="button">新增通道</button>
-      </div>
-      <div class="project-bootstrap-channel-list" id="projectBootstrapChannelList"></div>
-    </section>
+    <section class="cfg-section project-bootstrap-advanced-wrap">
+      <details class="project-bootstrap-advanced" id="projectBootstrapAdvanced">
+        <summary class="project-bootstrap-advanced-summary">
+          <span>高级配置（可选）</span>
+          <span class="project-bootstrap-advanced-summary-hint">目录、分工与执行选项</span>
+        </summary>
+        <div class="project-bootstrap-advanced-body">
+          <div class="project-bootstrap-advanced-block">
+            <h3>目录与环境</h3>
+            <p class="cfg-hint">以下路径都相对当前 `task-dashboard` 仓库根目录填写，默认按项目 ID 自动生成。</p>
+            <div class="project-bootstrap-grid">
+              <label class="cfg-field">
+                <span>项目根目录（自动）</span>
+                <input class="input" id="projectBootstrapProjectRoot" type="text" placeholder="projects/demo_project" autocomplete="off" readonly />
+              </label>
+              <label class="cfg-field">
+                <span>任务根目录（自动）</span>
+                <input class="input" id="projectBootstrapTaskRoot" type="text" placeholder="projects/demo_project/任务规划" autocomplete="off" readonly />
+              </label>
+              <label class="cfg-field">
+                <span>主题色</span>
+                <input class="input" id="projectBootstrapColor" type="text" placeholder="#0F63F2" autocomplete="off" />
+              </label>
+              <label class="cfg-field">
+                <span>执行权限</span>
+                <select class="input" id="projectBootstrapProfile">
+                  <option value="project_privileged_full">project_privileged_full</option>
+                  <option value="sandboxed">sandboxed</option>
+                </select>
+              </label>
+              <label class="cfg-field">
+                <span>环境</span>
+                <select class="input" id="projectBootstrapEnvironment">
+                  <option value="stable">stable</option>
+                  <option value="dev">dev</option>
+                </select>
+              </label>
+            </div>
+          </div>
 
-    <section class="cfg-section">
-      <h3>执行选项</h3>
-      <label class="cfg-check">
-        <input id="projectBootstrapCreatePrimarySessions" type="checkbox" checked />
-        自动初始化主会话
-      </label>
-      <label class="cfg-check">
-        <input id="projectBootstrapGenerateRegistry" type="checkbox" checked />
-        生成通讯录与目录产物
-      </label>
-      <label class="cfg-check">
-        <input id="projectBootstrapRunVisibilityCheck" type="checkbox" checked />
-        执行可见性校验
-      </label>
+          <div class="project-bootstrap-advanced-block">
+            <h3>默认分工（固定）</h3>
+            <p class="cfg-hint">创建后固定仅保留 1 条总控分工，不支持新增、移除或改名。</p>
+            <div class="project-bootstrap-channel-list" id="projectBootstrapChannelList"></div>
+          </div>
+
+          <div class="project-bootstrap-advanced-block">
+            <h3>执行选项</h3>
+            <label class="cfg-check">
+              <input id="projectBootstrapCreatePrimarySessions" type="checkbox" checked />
+              自动初始化主会话
+            </label>
+            <label class="cfg-check">
+              <input id="projectBootstrapGenerateRegistry" type="checkbox" checked />
+              生成通讯录与目录产物
+            </label>
+            <label class="cfg-check">
+              <input id="projectBootstrapRunVisibilityCheck" type="checkbox" checked />
+              执行可见性校验
+            </label>
+          </div>
+        </div>
+      </details>
     </section>
 
     <section class="cfg-section">
@@ -326,7 +343,55 @@
     </div>
   </aside>
 
+  <div class="cfg-mask project-cover-mask" id="projectCoverMask" hidden></div>
+  <aside class="cfg-drawer project-cover-drawer" id="projectCoverDrawer" aria-hidden="true" aria-label="项目配图">
+    <header class="cfg-head">
+      <div>
+        <h2 class="cfg-title">项目配图库</h2>
+        <p class="cfg-subtitle" id="projectCoverSubtitle">为项目选择封面配图，默认按项目随机稳定分配。</p>
+      </div>
+      <button class="btn btn-ghost" id="projectCoverCloseBtn" type="button">关闭</button>
+    </header>
+    <section class="cfg-section">
+      <h3 id="projectCoverProjectName">-</h3>
+      <p class="cfg-hint">点击任一配图立即应用。你也可以上传办公类图片，上传后会自动加入图库并可随时切换。</p>
+      <div class="project-cover-grid" id="projectCoverGrid"></div>
+      <div class="project-cover-actions">
+        <div class="project-cover-actions-left">
+          <input id="projectCoverUploadInput" type="file" accept="image/*" hidden />
+          <button class="btn btn-ghost" id="projectCoverUploadBtn" type="button">上传自定义图片</button>
+        </div>
+        <div class="project-cover-actions-right">
+          <button class="btn btn-ghost" id="projectCoverResetBtn" type="button">恢复默认随机</button>
+        </div>
+      </div>
+    </section>
+    <p class="cfg-message" id="projectCoverMessage"></p>
+  </aside>
+
   <script id="data" type="application/json">__PAYLOAD__</script>
   <script>__INLINE_JS__</script>
+  <script>
+    (() => {
+      const btn = document.getElementById("agentRelationshipBoardBtn");
+      const payload = JSON.parse(document.getElementById("data")?.textContent || "{}");
+      const links = (payload && payload.links && typeof payload.links === "object") ? payload.links : {};
+      if (!btn) return;
+      btn.addEventListener("click", () => {
+        const base = String(payload.agent_relationship_board_page || links.agent_relationship_board_page || "/share/project-agent-relationship-board.html").trim();
+        if (!base) return;
+        try {
+          const url = new URL(base, window.location.href);
+          const hash = new URLSearchParams((url.hash || "").replace(/^#/, ""));
+          hash.set("mode", "platform");
+          url.hash = hash.toString();
+          window.open(url.toString(), "_blank", "noopener,noreferrer");
+        } catch (_) {
+          const suffix = base.includes("#") ? "&mode=platform" : "#mode=platform";
+          window.open(base + suffix, "_blank", "noopener,noreferrer");
+        }
+      });
+    })();
+  </script>
 </body>
 </html>

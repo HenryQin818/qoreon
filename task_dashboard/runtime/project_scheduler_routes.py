@@ -537,7 +537,7 @@ def update_project_config_response(
     store: Any,
     default_inspection_targets: list[str],
     clear_dashboard_cfg_cache: Callable[[], None] | None = None,
-    invalidate_sessions_payload_cache: Callable[[str], None] | None = None,
+    invalidate_sessions_payload_cache: Callable[..., None] | None = None,
 ) -> tuple[int, dict[str, Any]]:
     pid = str(project_id or "").strip()
     if not pid:

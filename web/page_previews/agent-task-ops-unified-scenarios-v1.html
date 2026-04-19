@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>B/C 场景包 · Agent 可见性与任务数量标记 v1</title>
+  <link rel="stylesheet" href="./task-shell-preview-base.css" />
+  <link rel="stylesheet" href="./agent-task-ops-preview-v1.css" />
+</head>
+<body class="agent-ops-preview">
+  <div class="ambient-bg">
+    <div class="blob blob-1"></div>
+    <div class="blob blob-2"></div>
+    <div class="blob blob-3"></div>
+    <div class="blob blob-4"></div>
+    <div class="blob blob-5"></div>
+    <div class="blob blob-6"></div>
+    <div class="blob blob-7"></div>
+    <div class="blob blob-8"></div>
+  </div>
+  <div class="shell">
+    <header>
+      <div class="header-main">
+        <a class="back-link" href="/share/page-previews-index.html" title="返回预演页索引">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" width="18" height="18">
+            <path d="M15 19l-7-7 7-7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <span>预演页索引</span>
+        </a>
+        <div class="project-info">
+          <h1 class="project-title">task_dashboard</h1>
+          <div class="project-meta-row">
+            <span class="project-desc">B/C 静态确认稿场景包 · Agent 维度任务可见性与进程列表任务数量标记</span>
+            <span class="env-chip is-stable">stable</span>
+            <span class="source-chip is-fixtures">静态 demo</span>
+            <span class="project-mode-chip is-privileged">scenarios</span>
+          </div>
+        </div>
+      </div>
+      <div class="header-nav">
+        <div class="header-mode-tabs" role="tablist" aria-label="场景页切换">
+          <button class="header-mode-btn active" type="button" role="tab" aria-selected="true">场景包</button>
+          <button class="header-mode-btn" type="button" role="tab" aria-selected="false">任务页</button>
+          <button class="header-mode-btn" type="button" role="tab" aria-selected="false">overview</button>
+        </div>
+      </div>
+      <div class="hctrl">
+        <span class="pill is-active">B/C</span>
+      </div>
+    </header>
+
+    <main class="scenario-page">
+      <section class="banner">
+        <h2 class="banner-title">B/C 统一场景包 v1</h2>
+        <div class="banner-copy">这版只用于产品确认和前端可实施性评审，不进入真实研发实施。B 批验证任务页内的 Agent 轻量过滤 / 定位，C 批验证 overview 卡片区里的 `处理中 / 待处理` 任务负载 badge。两处都继续依附现网页壳，不单开新页面结构。</div>
+        <div class="banner-row">
+          <span class="pill is-active">不改页面级结构</span>
+          <span class="pill">B：任务页内 Agent 过滤</span>
+          <span class="pill">C：overview 卡片任务 badge</span>
+          <span class="pill">默认不新增接口</span>
+        </div>
+      </section>
+
+      <section class="assessment-grid">
+        <article class="assessment-card">
+          <div class="assessment-card-title">B 批静态判断</div>
+          <div class="assessment-card-copy">任务页里最稳的形态是：顶部控制区新增 Agent 轻入口，中区任务关系和右侧详情承接继续保持原样。</div>
+          <ul class="assessment-card-list">
+            <li><strong>落点：</strong>`web/task.html.tpl`、`web/task.css`、`web/task_parts/77-project-modes.js`。</li>
+            <li><strong>字段：</strong>直接复用稳定角色字段与正式状态字段。</li>
+            <li><strong>复杂度：</strong>中，主要是过滤状态、结果降级和卡片回填。</li>
+          </ul>
+        </article>
+
+        <article class="assessment-card">
+          <div class="assessment-card-title">C 批静态判断</div>
+          <div class="assessment-card-copy">overview 最稳的承接是继续用当前卡片区，只在卡片内容层补一行轻量 badge，不扩成新的任务总览页。</div>
+          <ul class="assessment-card-list">
+            <li><strong>落点：</strong>`web/overview.html.tpl`、`web/overview.css`、`web/overview.js`。</li>
+            <li><strong>字段：</strong>继续认强关联责任位与正式状态，不引入启发式真源。</li>
+            <li><strong>复杂度：</strong>中低，主要是 badge 组合、零值降级和读模型映射。</li>
+          </ul>
+        </article>
+
+        <article class="assessment-card">
+          <div class="assessment-card-title">当前前端正式判断</div>
+          <div class="assessment-card-copy">本轮按现有文档口径，B/C 都可直接进入产品确认；就当前理解，不存在必须先补新字段或新接口的前置阻塞。</div>
+          <ul class="assessment-card-list">
+            <li><strong>唯一注意点：</strong>若后续产品把 C 批的落点改成 task 页左侧会话行，而不是 overview 卡片区，前端实施文件会从 `overview.*` 改成 `task.css` 与会话列表渲染文件。</li>
+            <li><strong>当前结论：</strong>不是阻塞，先按现有冻结边界做产品确认即可。</li>
+          </ul>
+        </article>
+      </section>
+
+      <section class="scenario-grid">
+        <article class="overview-card">
+          <h3>任务页 Agent 可见性静态镜像</h3>
+          <div class="muted-copy">保留当前任务页三栏关系，只在控制区补 Agent 轻量过滤，右侧继续走已有详情承接位。</div>
+          <iframe class="scenario-frame" src="./agent-task-visibility-in-task-shell-v1.html" title="任务页 Agent 可见性静态镜像"></iframe>
+          <div class="overview-links">
+            <a href="/share/agent-task-visibility-in-task-shell-v1.html">打开 B 批页面</a>
+          </div>
+        </article>
+
+        <article class="overview-card">
+          <h3>overview 进程列表数量标记静态镜像</h3>
+          <div class="muted-copy">继续用 overview 头部、控制栏和卡片区，只在卡片内容里补 `处理中 / 待处理` badge 和零值降级文案。</div>
+          <iframe class="scenario-frame" src="./agent-task-counts-in-overview-shell-v1.html" title="overview 进程列表数量标记静态镜像"></iframe>
+          <div class="overview-links">
+            <a href="/share/agent-task-counts-in-overview-shell-v1.html">打开 C 批页面</a>
+          </div>
+        </article>
+      </section>
+    </main>
+  </div>
+</body>
+</html>

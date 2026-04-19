@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import mimetypes
+import os
 import secrets
 import subprocess
 import threading
@@ -27,7 +28,7 @@ from dataclasses import dataclass, field
 from http import HTTPStatus
 from pathlib import Path
 from typing import Any, Callable, Optional, TYPE_CHECKING
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlencode, urlparse
 
 from task_dashboard.runtime.request_parsing import (
     _normalize_reasoning_effort_local as _normalize_reasoning_effort,
@@ -54,6 +55,7 @@ from task_dashboard.runtime.project_execution_context import build_project_execu
 from task_dashboard.runtime.project_admin import (
     bootstrap_project_response as runtime_bootstrap_project_response,
 )
+from task_dashboard.performance_diagnostics import build_runtime_perf_snapshot
 from task_dashboard.runtime.execution_profiles import (
     normalize_execution_profile as runtime_normalize_execution_profile,
 )
@@ -83,11 +85,6 @@ from task_dashboard.runtime.scheduler_helpers import (
     _build_session_binding_required_payload as runtime_build_session_binding_required_payload,
     _enqueue_run_for_dispatch as runtime_enqueue_run_for_dispatch,
     _validate_announce_session_binding as runtime_validate_announce_session_binding,
-    _build_project_schedule_queue_payload as runtime_build_project_schedule_queue_payload,
-    _canonicalize_project_schedule_task_path as runtime_canonicalize_project_schedule_task_path,
-    _load_project_schedule_queue as runtime_load_project_schedule_queue,
-    _normalize_project_schedule_task_paths as runtime_normalize_project_schedule_task_paths,
-    _save_project_schedule_queue as runtime_save_project_schedule_queue,
 )
 from task_dashboard.runtime.session_admin import (
     create_session_response as runtime_create_session_response,
@@ -100,6 +97,24 @@ from task_dashboard.runtime.session_admin import (
 from task_dashboard.runtime.session_routes import (
     dedup_session_channel_response as runtime_dedup_session_channel_response,
 )
+from task_dashboard.runtime.share_space import (
+    build_share_announce_request as runtime_build_share_announce_request,
+    build_share_bootstrap_response as runtime_build_share_bootstrap_response,
+    build_share_session_response as runtime_build_share_session_response,
+    load_project_share_space_config as runtime_load_project_share_space_config,
+    update_project_share_space_config_response as runtime_update_project_share_space_config_response,
+)
+from task_dashboard.runtime.project_id_aliases import (
+    canonicalize_runtime_project_id,
+    rewrite_payload_project_id_fields,
+)
+from task_dashboard.runtime.task_assistant_runtime import (
+    build_task_assistant_summary,
+    delete_task_assistant_response,
+    get_task_assistant_response,
+    put_task_assistant_response,
+    run_task_assistant_now_response,
+)
 from task_dashboard.runtime.task_plan_registry import (
     activate_task_plan_response,
     upsert_task_plan_response,
@@ -107,6 +122,7 @@ from task_dashboard.runtime.task_plan_registry import (
 from task_dashboard.runtime.task_push_registry import (
     handle_task_push_action_response,
 )
+from task_dashboard.task_identity import runtime_base_dir_for_repo
 
 if TYPE_CHECKING:
     from http.server import BaseHTTPRequestHandler
@@ -235,7 +251,6 @@ class RouteContext:
     normalize_heartbeat_task_id: Callable[..., str] = field(repr=False)
     heartbeat_task_history_limit: int = field(repr=False)
     build_runtime_bubbles_payload: Callable[..., dict[str, Any]] = field(repr=False)
-    build_project_schedule_queue_payload: Callable[..., dict[str, Any]] = field(repr=False)
     list_task_plans_response: Callable[..., tuple[int, dict[str, Any]]] = field(repr=False)
     list_assist_requests_response: Callable[..., tuple[int, dict[str, Any]]] = field(repr=False)
     get_assist_request_response: Callable[..., tuple[int, dict[str, Any]]] = field(repr=False)
@@ -266,7 +281,7 @@ class RouteContext:
     set_project_scheduler_enabled_in_config: Callable[[str, bool], Any] = field(repr=False)
     update_project_config_response: Callable[..., tuple[int, dict[str, Any]]] = field(repr=False)
     clear_dashboard_cfg_cache: Callable[[], None] = field(repr=False)
-    invalidate_sessions_payload_cache: Callable[[str], None] = field(repr=False)
+    invalidate_sessions_payload_cache: Callable[..., None] = field(repr=False)
     load_project_scheduler_contract_config: Callable[[str], dict[str, Any]] = field(repr=False)
     load_project_auto_dispatch_config: Callable[[str], dict[str, Any]] = field(repr=False)
     load_project_heartbeat_config: Callable[[str], dict[str, Any]] = field(repr=False)
@@ -366,6 +381,155 @@ class RouteDispatcher:
     def __init__(self, context: RouteContext):
         self.ctx = context
 
+    def _task_runtime_base_dir(self) -> Path:
+        return runtime_base_dir_for_repo(self.ctx.worktree_root)
+
+    def _alias_project_query_string(
+        self,
+        query_string: str,
+        *,
+        param_names: tuple[str, ...] = ("project_id", "projectId"),
+    ) -> tuple[str, str]:
+        qs = parse_qs(query_string or "", keep_blank_values=True)
+        requested_project_id = ""
+        for name in param_names:
+            values = qs.get(name) or []
+            if values:
+                requested_project_id = str(values[0] or "").strip()
+                if requested_project_id:
+                    break
+        canonical_project_id = canonicalize_runtime_project_id(requested_project_id)
+        if requested_project_id and canonical_project_id and canonical_project_id != requested_project_id:
+            for name in param_names:
+                if name in qs:
+                    qs[name] = [canonical_project_id]
+            return urlencode(qs, doseq=True), requested_project_id
+        return query_string, requested_project_id
+
+    def _qs_first(
+        self,
+        qs: dict[str, list[str]],
+        names: tuple[str, ...],
+        *,
+        max_len: int = 4000,
+    ) -> str:
+        for name in names:
+            values = qs.get(name) or []
+            if not values:
+                continue
+            value = self.ctx.safe_text(values[0], max_len).strip()
+            if value:
+                return value
+        return ""
+
+    def _share_project_id(self, qs: dict[str, list[str]], body: dict[str, Any] | None = None) -> str:
+        if isinstance(body, dict):
+            value = self.ctx.safe_text(
+                body.get("project_id") if "project_id" in body else body.get("projectId"),
+                160,
+            ).strip()
+            if value:
+                return value
+        return self._qs_first(qs, ("project_id", "projectId"), max_len=160)
+
+    def _extract_share_credentials(
+        self,
+        handler: "BaseHTTPRequestHandler",
+        qs: dict[str, list[str]],
+        body: dict[str, Any] | None = None,
+    ) -> tuple[str, str]:
+        token = self._qs_first(qs, ("token", "access_token", "accessToken"), max_len=240)
+        passcode = self._qs_first(qs, ("passcode",), max_len=120)
+        if isinstance(body, dict):
+            if not token:
+                token = self.ctx.safe_text(
+                    body.get("token") if "token" in body else body.get("access_token", body.get("accessToken")),
+                    240,
+                ).strip()
+            if not passcode:
+                passcode = self.ctx.safe_text(body.get("passcode"), 120).strip()
+        if not token:
+            token = self.ctx.safe_text(handler.headers.get("X-Share-Token"), 240).strip()
+        if not token:
+            auth = self.ctx.safe_text(handler.headers.get("Authorization"), 400).strip()
+            if auth.lower().startswith("bearer "):
+                token = auth[7:].strip()
+        if not passcode:
+            passcode = self.ctx.safe_text(handler.headers.get("X-Share-Passcode"), 120).strip()
+        return token, passcode
+
+    def _rewrite_alias_payload(
+        self,
+        payload: dict[str, Any],
+        *,
+        requested_project_id: str,
+        row_keys: tuple[str, ...] = (),
+        nested_row_keys: tuple[str, ...] = (),
+    ) -> dict[str, Any]:
+        requested = str(requested_project_id or "").strip()
+        if not requested or not isinstance(payload, dict):
+            return payload
+        return rewrite_payload_project_id_fields(
+            payload,
+            project_id=requested,
+            row_keys=row_keys,
+            nested_row_keys=nested_row_keys,
+        )
+
+    def _attach_task_assistant_to_session_rows(
+        self,
+        payload: dict[str, Any],
+        *,
+        fallback_project_id: str = "",
+    ) -> dict[str, Any]:
+        if not isinstance(payload, dict):
+            return payload
+        rows = payload.get("sessions")
+        if not isinstance(rows, list) or not rows:
+            return payload
+        runtime_base_dir = self._task_runtime_base_dir()
+        next_rows: list[dict[str, Any]] = []
+        for raw in rows:
+            row = dict(raw) if isinstance(raw, dict) else {}
+            tracking = row.get("task_tracking") if isinstance(row.get("task_tracking"), dict) else None
+            current_task_ref = (tracking.get("current_task_ref") or {}) if isinstance(tracking, dict) else {}
+            if not isinstance(current_task_ref, dict):
+                next_rows.append(row)
+                continue
+            task_id = str(current_task_ref.get("task_id") or "").strip()
+            if not task_id:
+                next_rows.append(row)
+                continue
+            project_id = canonicalize_runtime_project_id(
+                str(
+                    row.get("project_id")
+                    or row.get("projectId")
+                    or payload.get("project_id")
+                    or payload.get("projectId")
+                    or fallback_project_id
+                    or ""
+                ).strip()
+            )
+            if not project_id:
+                next_rows.append(row)
+                continue
+            summary = build_task_assistant_summary(
+                runtime_base_dir=runtime_base_dir,
+                project_id=project_id,
+                task_id=task_id,
+                session_store=self.ctx.session_store,
+                heartbeat_runtime=self.ctx.heartbeat_runtime,
+            )
+            next_tracking = dict(tracking or {})
+            next_current = dict(current_task_ref)
+            next_current["task_assistant"] = summary
+            next_tracking["current_task_ref"] = next_current
+            row["task_tracking"] = next_tracking
+            next_rows.append(row)
+        next_payload = dict(payload)
+        next_payload["sessions"] = next_rows
+        return next_payload
+
     def dispatch_head(self, handler: "BaseHTTPRequestHandler") -> bool:
         """
         Dispatch HEAD requests. Returns True if handled, False to fall through.
@@ -397,6 +561,7 @@ class RouteDispatcher:
         u = urlparse(handler.path)
         path = u.path
         qs = parse_qs(u.query or "")
+        parts = [seg for seg in path.split("/") if seg]
 
         # /__health - health check with full details
         if path == "/__health":
@@ -408,8 +573,8 @@ class RouteDispatcher:
             self._handle_cli_types_get(handler)
             return True
 
-        if path == "/api/projects/catalog":
-            self._handle_projects_catalog_get(handler)
+        if path == "/api/runtime/perf-snapshot":
+            self._handle_runtime_perf_snapshot_get(handler)
             return True
 
         if path == "/api/conversation-memos":
@@ -422,6 +587,14 @@ class RouteDispatcher:
 
         if path == "/api/agent-candidates":
             self._handle_agent_candidates_get(handler, u.query or "")
+            return True
+
+        if len(parts) == 4 and parts[:2] == ["api", "share-spaces"] and parts[3] == "bootstrap":
+            self._handle_share_space_bootstrap_get(handler, parts[2], qs)
+            return True
+
+        if len(parts) == 5 and parts[:2] == ["api", "share-spaces"] and parts[3] == "sessions":
+            self._handle_share_space_session_get(handler, parts[2], parts[4], qs)
             return True
 
         if path == "/api/sessions/bindings":
@@ -464,6 +637,10 @@ class RouteDispatcher:
             self._handle_sessions_list_get(handler, u.query or "")
             return True
 
+        if len(parts) == 4 and parts[:2] == ["api", "tasks"] and parts[3] == "assistant-config":
+            self._handle_task_assistant_get(handler, parts[2], qs)
+            return True
+
         if path == "/api/codex/runs":
             self._handle_runs_list_get(handler, u.query or "")
             return True
@@ -472,7 +649,6 @@ class RouteDispatcher:
             self._handle_run_detail_get(handler, path)
             return True
 
-        parts = [seg for seg in path.split("/") if seg]
         if self._dispatch_project_routes_get(handler, path, parts, qs):
             return True
 
@@ -488,6 +664,7 @@ class RouteDispatcher:
         """
         u = urlparse(handler.path)
         path = u.path
+        qs = parse_qs(u.query or "")
         parts = [seg for seg in path.split("/") if seg]
 
         if path == "/api/sessions":
@@ -516,6 +693,14 @@ class RouteDispatcher:
 
         if path == "/api/codex/announce":
             self._handle_codex_announce_post(handler)
+            return True
+
+        if len(parts) == 4 and parts[:2] == ["api", "share-spaces"] and parts[3] == "announce":
+            self._handle_share_space_announce_post(handler, parts[2], qs)
+            return True
+
+        if len(parts) == 5 and parts[:2] == ["api", "tasks"] and parts[3] == "assistant-config" and parts[4] == "run-now":
+            self._handle_task_assistant_run_now_post(handler, parts[2])
             return True
 
         if (
@@ -605,8 +790,13 @@ class RouteDispatcher:
         This will be enabled incrementally as routes are migrated.
         """
         path = urlparse(handler.path).path
+        parts = [seg for seg in path.split("/") if seg]
         if path.startswith("/api/sessions/") and path.count("/") == 3:
             self._handle_session_update_put(handler, path)
+            return True
+
+        if len(parts) == 4 and parts[:2] == ["api", "tasks"] and parts[3] == "assistant-config":
+            self._handle_task_assistant_put(handler, parts[2])
             return True
 
         return False
@@ -619,8 +809,13 @@ class RouteDispatcher:
         This will be enabled incrementally as routes are migrated.
         """
         path = urlparse(handler.path).path
+        parts = [seg for seg in path.split("/") if seg]
         if path.startswith("/api/sessions/") and path.count("/") == 3:
             self._handle_session_delete(handler, path)
+            return True
+
+        if len(parts) == 4 and parts[:2] == ["api", "tasks"] and parts[3] == "assistant-config":
+            self._handle_task_assistant_delete(handler, parts[2], parse_qs(urlparse(handler.path).query or ""))
             return True
 
         return False
@@ -640,7 +835,7 @@ class RouteDispatcher:
             "/api/codex/runs",
             "/api/communication/audit",
             "/api/cli/types",
-            "/api/projects/catalog",
+            "/api/runtime/perf-snapshot",
             "/api/board/global-resource-graph",
             "/api/conversation-memos",
         ]
@@ -667,11 +862,18 @@ class RouteDispatcher:
         project_id = str(getattr(handler.server, "project_id", "") or "").strip()
         runtime_role = str(getattr(handler.server, "runtime_role", "") or "").strip()
         sessions_file = str(getattr(handler.server, "sessions_file", "") or "").strip()
+        bind_host = ""
+        try:
+            bind_host = str(handler.server.server_address[0] or "").strip()
+        except Exception:
+            bind_host = ""
         runtime_identity = build_health_runtime_identity(
             project_id=project_id,
             runtime_role=runtime_role,
             environment=self.ctx.environment_name,
             port=self.ctx.server_port,
+            bind_host=bind_host,
+            public_origin=str(os.environ.get("TASK_DASHBOARD_PUBLIC_ORIGIN") or "").strip(),
             runs_dir=self.ctx.runs_dir,
             sessions_file=sessions_file,
             static_root=self.ctx.static_root,
@@ -805,50 +1007,29 @@ class RouteDispatcher:
             {"types": [{"id": t.id, "name": t.name, "enabled": t.enabled} for t in types]},
         )
 
-    def _handle_projects_catalog_get(self, handler: "BaseHTTPRequestHandler") -> None:
-        """Handle GET /api/projects/catalog."""
-        cfg = self.ctx.load_dashboard_cfg_current()
-        projects_raw = cfg.get("projects") if isinstance(cfg, dict) else []
-        projects: list[dict[str, Any]] = []
-        if isinstance(projects_raw, list):
-            for raw_project in projects_raw:
-                if not isinstance(raw_project, dict):
-                    continue
-                project_id = self.ctx.safe_text(raw_project.get("id"), 160).strip()
-                if not project_id:
-                    continue
-                channels_raw = raw_project.get("channels") if isinstance(raw_project.get("channels"), list) else []
-                channels: list[dict[str, str]] = []
-                for raw_channel in channels_raw:
-                    if not isinstance(raw_channel, dict):
-                        continue
-                    channel_name = self.ctx.safe_text(raw_channel.get("name"), 240).strip()
-                    if not channel_name:
-                        continue
-                    channels.append(
-                        {
-                            "name": channel_name,
-                            "desc": self.ctx.safe_text(raw_channel.get("desc"), 600).strip(),
-                        }
-                    )
-                projects.append(
-                    {
-                        "id": project_id,
-                        "name": self.ctx.safe_text(raw_project.get("name"), 240).strip() or project_id,
-                        "color": self.ctx.safe_text(raw_project.get("color"), 64).strip(),
-                        "description": self.ctx.safe_text(raw_project.get("description"), 1000).strip(),
-                        "channels": channels,
-                    }
-                )
-        self.ctx.json_response(
-            handler,
-            200,
-            {
-                "ok": True,
-                "generated_at": self.ctx.now_iso(),
-                "projects": projects,
-            },
+    def _handle_runtime_perf_snapshot_get(self, handler: "BaseHTTPRequestHandler") -> None:
+        """Handle GET /api/runtime/perf-snapshot."""
+        project_id = str(getattr(handler.server, "project_id", "") or "").strip()
+        if not project_id:
+            cfg = self.ctx.load_dashboard_cfg_current()
+            project_id = self.ctx.default_project_id_from_cfg(cfg)
+
+        http_log_value = getattr(handler.server, "http_log", None)
+        http_log_path: Path | None = None
+        if http_log_value:
+            try:
+                http_log_path = Path(str(http_log_value)).expanduser()
+            except Exception:
+                http_log_path = None
+
+        payload = build_runtime_perf_snapshot(
+            repo_root=self.ctx.worktree_root,
+            environment_name=self.ctx.environment_name,
+            port=self.ctx.server_port,
+            project_id=project_id,
+            http_log_path=http_log_path,
         )
+        self.ctx.json_response(handler, 200, payload)
 
     def _handle_config_effective_get(
         self, handler: "BaseHTTPRequestHandler", qs: dict[str, list[str]]
@@ -1151,10 +1332,6 @@ class RouteDispatcher:
             self._handle_project_runtime_bubbles_get(handler, parts[2], qs)
             return True
 
-        if len(parts) == 4 and parts[:2] == ["api", "projects"] and parts[3] == "schedule-queue":
-            self._handle_project_schedule_queue_get(handler, parts[2])
-            return True
-
         if len(parts) == 4 and parts[:2] == ["api", "projects"] and parts[3] == "task-push":
             self._handle_project_task_push_get(handler, parts[2], handler.path)
             return True
@@ -1281,21 +1458,6 @@ class RouteDispatcher:
         )
         self.ctx.json_response(handler, 200, payload)
 
-    def _handle_project_schedule_queue_get(
-        self,
-        handler: "BaseHTTPRequestHandler",
-        project_id: str,
-    ) -> None:
-        """Handle GET /api/projects/{project_id}/schedule-queue."""
-        pid = str(project_id or "").strip()
-        if not pid:
-            self.ctx.json_response(handler, 400, {"error": "missing project_id"})
-            return
-        if not self.ctx.find_project_cfg(pid):
-            self.ctx.json_response(handler, 404, {"error": "project not found"})
-            return
-        self.ctx.json_response(handler, 200, self.ctx.build_project_schedule_queue_payload(self.ctx.store, pid))
-
     def _handle_project_task_plans_get(
         self,
         handler: "BaseHTTPRequestHandler",
@@ -1383,12 +1545,10 @@ class RouteDispatcher:
         )
         self.ctx.json_response(handler, code, payload)
 
-    def _handle_project_config_get(
+    def _project_config_response_with_share_space(
         self,
-        handler: "BaseHTTPRequestHandler",
         project_id: str,
-    ) -> None:
-        """Handle GET /api/projects/{project_id}/config."""
+    ) -> tuple[int, dict[str, Any]]:
         code, payload = self.ctx.get_project_config_response(
             project_id=project_id,
             store=self.ctx.store,
@@ -1408,6 +1568,67 @@ class RouteDispatcher:
             default_inspection_targets=self.ctx.default_inspection_targets,
             config_path_getter=self.ctx.config_toml_path,
         )
+        if code == 200 and isinstance(payload, dict):
+            response_project_id = str(payload.get("project_id") or project_id)
+            project = payload.get("project")
+            if not isinstance(project, dict):
+                project = {}
+                payload["project"] = project
+            project["share_space"] = runtime_load_project_share_space_config(
+                worktree_root=self.ctx.worktree_root,
+                environment_name=self.ctx.environment_name,
+                project_id=response_project_id,
+            )
+        return code, payload
+
+    def _update_project_config_response_without_share_space(
+        self,
+        project_id: str,
+        body: dict[str, Any],
+    ) -> tuple[int, dict[str, Any]]:
+        return self.ctx.update_project_config_response(
+            project_id=project_id,
+            body=body,
+            find_project_cfg=self.ctx.find_project_cfg,
+            safe_text=self.ctx.safe_text,
+            coerce_bool=self.ctx.coerce_bool,
+            looks_like_uuid=self.ctx.looks_like_uuid,
+            load_project_scheduler_contract_config=self.ctx.load_project_scheduler_contract_config,
+            load_project_auto_dispatch_config=self.ctx.load_project_auto_dispatch_config,
+            load_project_auto_inspection_config=self.ctx.load_project_auto_inspection_config,
+            load_project_heartbeat_config=self.ctx.load_project_heartbeat_config,
+            build_default_auto_inspection_task=self.ctx.build_default_auto_inspection_task,
+            normalize_inspection_targets=self.ctx.normalize_inspection_targets,
+            normalize_auto_inspections=self.ctx.normalize_auto_inspections,
+            normalize_auto_inspection_task=self.ctx.normalize_auto_inspection_task,
+            normalize_auto_inspection_tasks=self.ctx.normalize_auto_inspection_tasks,
+            normalize_auto_inspection_object=self.ctx.normalize_auto_inspection_object,
+            auto_inspection_targets_from_objects=self.ctx.auto_inspection_targets_from_objects,
+            inspection_target_tokens=self.ctx.inspection_target_tokens,
+            inspection_target_set=self.ctx.inspection_target_set,
+            build_auto_inspection_patch_with_tasks=self.ctx.build_auto_inspection_patch_with_tasks,
+            normalize_inspection_task_id=self.ctx.normalize_inspection_task_id,
+            heartbeat_tasks_for_write=self.ctx.heartbeat_tasks_for_write,
+            normalize_heartbeat_task=self.ctx.normalize_heartbeat_task,
+            normalize_heartbeat_tasks=self.ctx.normalize_heartbeat_tasks,
+            set_project_scheduler_contract_in_config=self.ctx.set_project_scheduler_contract_in_config,
+            build_project_scheduler_status=self.ctx.build_project_scheduler_status,
+            ensure_auto_scheduler_status_shape=self.ctx.ensure_auto_scheduler_status_shape,
+            project_scheduler_runtime=self.ctx.project_scheduler_runtime,
+            heartbeat_runtime=self.ctx.heartbeat_runtime,
+            store=self.ctx.store,
+            default_inspection_targets=self.ctx.default_inspection_targets,
+            clear_dashboard_cfg_cache=self.ctx.clear_dashboard_cfg_cache,
+            invalidate_sessions_payload_cache=self.ctx.invalidate_sessions_payload_cache,
+        )
+
+    def _handle_project_config_get(
+        self,
+        handler: "BaseHTTPRequestHandler",
+        project_id: str,
+    ) -> None:
+        """Handle GET /api/projects/{project_id}/config."""
+        code, payload = self._project_config_response_with_share_space(project_id)
         self.ctx.json_response(handler, code, payload)
 
     def _handle_project_inspection_tasks_get(
@@ -1453,6 +1674,7 @@ class RouteDispatcher:
         """Handle GET /api/sessions."""
         project_id = str(getattr(handler.server, "project_id", "") or "").strip()
         runtime_role = str(getattr(handler.server, "runtime_role", "") or "").strip()
+        query_string, requested_project_id = self._alias_project_query_string(query_string)
         code, payload = self.ctx.runtime_list_sessions_response(
             query_string=query_string,
             session_store=self.ctx.session_store,
@@ -1475,6 +1697,11 @@ class RouteDispatcher:
                 "compat_shell",
                 runtime_role == "compat_shell" or project_id == "task_dashboard",
             )
+            payload = self._attach_task_assistant_to_session_rows(
+                payload,
+                fallback_project_id=requested_project_id,
+            )
+            payload = self._rewrite_alias_payload(payload, requested_project_id=requested_project_id, row_keys=("sessions",))
         self.ctx.json_response(handler, code, payload)
 
     def _handle_channel_sessions_get(
@@ -1491,7 +1718,6 @@ class RouteDispatcher:
             decorate_sessions_display_fields=self.ctx.decorate_sessions_display_fields,
             apply_session_context_rows=self.ctx.apply_session_context_rows,
             apply_session_work_context=self.ctx.apply_session_work_context,
-            attach_runtime_state_to_sessions=self.ctx.attach_runtime_state_to_sessions,
             resolve_channel_primary_session_id=self.ctx.resolve_channel_primary_session_id,
             heartbeat_runtime=self.ctx.heartbeat_runtime,
             load_session_heartbeat_config=self.ctx.load_session_heartbeat_config,
@@ -1503,6 +1729,7 @@ class RouteDispatcher:
         self, handler: "BaseHTTPRequestHandler", query_string: str
     ) -> None:
         """Handle GET /api/agent-candidates."""
+        query_string, requested_project_id = self._alias_project_query_string(query_string)
         code, payload = runtime_list_agent_candidates_response(
             query_string=query_string,
             session_store=self.ctx.session_store,
@@ -1518,13 +1745,16 @@ class RouteDispatcher:
             load_session_heartbeat_config=self.ctx.load_session_heartbeat_config,
             heartbeat_summary_payload=self.ctx.heartbeat_summary_payload,
         )
+        if isinstance(payload, dict):
+            payload = self._rewrite_alias_payload(payload, requested_project_id=requested_project_id, row_keys=("agent_targets",))
         self.ctx.json_response(handler, code, payload)
 
     def _handle_session_bindings_get(
         self, handler: "BaseHTTPRequestHandler", qs: dict[str, list[str]]
     ) -> None:
         """Handle GET /api/sessions/bindings."""
-        project_id = (qs.get("projectId") or [""])[0]
+        requested_project_id = str((qs.get("projectId") or [""])[0] or "").strip()
+        project_id = canonicalize_runtime_project_id(requested_project_id)
         compat_meta = {
             "compatibility_entry": True,
             "entry_role": "compatibility_management",
@@ -1539,14 +1769,7 @@ class RouteDispatcher:
             item = dict(row if isinstance(row, dict) else {})
             item.update(compat_meta)
             session_id = str(item.get("sessionId") or "").strip()
-            session = (
-                self.ctx.session_store.get_session(
-                    session_id,
-                    project_id=str(item.get("projectId") or "").strip(),
-                )
-                if session_id
-                else None
-            )
+            session = self.ctx.session_store.get_session(session_id) if session_id else None
             if isinstance(session, dict):
                 enriched = self.ctx.apply_session_work_context(
                     session,
@@ -1558,7 +1781,9 @@ class RouteDispatcher:
                     (enriched.get("project_execution_context") or {}) if isinstance(enriched, dict) else {}
                 )
             out_bindings.append(item)
-        self.ctx.json_response(handler, 200, {"bindings": out_bindings, **compat_meta})
+        payload = {"bindings": out_bindings, **compat_meta}
+        payload = self._rewrite_alias_payload(payload, requested_project_id=requested_project_id, row_keys=("bindings",))
+        self.ctx.json_response(handler, 200, payload)
 
     def _handle_session_binding_get(
         self, handler: "BaseHTTPRequestHandler", path: str
@@ -1570,14 +1795,7 @@ class RouteDispatcher:
         )
         if code == 200 and isinstance(payload, dict):
             session_id = str(payload.get("sessionId") or "").strip()
-            session = (
-                self.ctx.session_store.get_session(
-                    session_id,
-                    project_id=str(payload.get("projectId") or "").strip(),
-                )
-                if session_id
-                else None
-            )
+            session = self.ctx.session_store.get_session(session_id) if session_id else None
             if isinstance(session, dict):
                 enriched = self.ctx.apply_session_work_context(
                     session,
@@ -1634,6 +1852,7 @@ class RouteDispatcher:
         """Handle GET /api/codex/runs."""
         project_id = str(getattr(handler.server, "project_id", "") or "").strip()
         runtime_role = str(getattr(handler.server, "runtime_role", "") or "").strip()
+        query_string, requested_project_id = self._alias_project_query_string(query_string, param_names=("projectId", "project_id"))
         code, payload = self.ctx.runtime_list_runs_response(
             query_string=query_string,
             store=self.ctx.store,
@@ -1652,6 +1871,7 @@ class RouteDispatcher:
                 "compat_shell",
                 runtime_role == "compat_shell" or project_id == "task_dashboard",
             )
+            payload = self._rewrite_alias_payload(payload, requested_project_id=requested_project_id, row_keys=("runs",))
         self.ctx.json_response(handler, code, payload)
 
     def _handle_run_detail_get(
@@ -1667,6 +1887,88 @@ class RouteDispatcher:
             maybe_trigger_queued_recovery_lazy=self.ctx.maybe_trigger_queued_recovery_lazy,
             build_run_observability_fields=self.ctx.build_run_observability_fields,
             error_hint=self.ctx.error_hint,
+        )
+        self.ctx.json_response(handler, code, payload)
+
+    def _handle_task_assistant_get(
+        self,
+        handler: "BaseHTTPRequestHandler",
+        task_id: str,
+        qs: dict[str, list[str]],
+    ) -> None:
+        """Handle GET /api/tasks/{task_id}/assistant-config."""
+        project_id = str((qs.get("project_id") or qs.get("projectId") or [""])[0] or "").strip()
+        code, payload = get_task_assistant_response(
+            runtime_base_dir=self._task_runtime_base_dir(),
+            project_id=project_id,
+            task_id=task_id,
+            session_store=self.ctx.session_store,
+            heartbeat_runtime=self.ctx.heartbeat_runtime,
+        )
+        self.ctx.json_response(handler, code, payload)
+
+    def _handle_task_assistant_put(
+        self,
+        handler: "BaseHTTPRequestHandler",
+        task_id: str,
+    ) -> None:
+        """Handle PUT /api/tasks/{task_id}/assistant-config."""
+        if not self.ctx.require_token():
+            return
+        try:
+            body = self.ctx.read_body_json(handler, max_bytes=32_000)
+        except Exception as e:
+            self.ctx.json_response(handler, 400, {"error": f"bad json: {e}"})
+            return
+        project_id = str((body.get("project_id") or body.get("projectId") or "")).strip()
+        code, payload = put_task_assistant_response(
+            runtime_base_dir=self._task_runtime_base_dir(),
+            project_id=project_id,
+            task_id=task_id,
+            body=body,
+            session_store=self.ctx.session_store,
+            heartbeat_runtime=self.ctx.heartbeat_runtime,
+        )
+        self.ctx.json_response(handler, code, payload)
+
+    def _handle_task_assistant_delete(
+        self,
+        handler: "BaseHTTPRequestHandler",
+        task_id: str,
+        qs: dict[str, list[str]],
+    ) -> None:
+        """Handle DELETE /api/tasks/{task_id}/assistant-config."""
+        if not self.ctx.require_token():
+            return
+        project_id = str((qs.get("project_id") or qs.get("projectId") or [""])[0] or "").strip()
+        code, payload = delete_task_assistant_response(
+            runtime_base_dir=self._task_runtime_base_dir(),
+            project_id=project_id,
+            task_id=task_id,
+            session_store=self.ctx.session_store,
+            heartbeat_runtime=self.ctx.heartbeat_runtime,
+        )
+        self.ctx.json_response(handler, code, payload)
+
+    def _handle_task_assistant_run_now_post(
+        self,
+        handler: "BaseHTTPRequestHandler",
+        task_id: str,
+    ) -> None:
+        """Handle POST /api/tasks/{task_id}/assistant-config/run-now."""
+        if not self.ctx.require_token():
+            return
+        try:
+            body = self.ctx.read_body_json(handler, max_bytes=16_000)
+        except Exception:
+            body = {}
+        project_id = str(((body or {}).get("project_id") or (body or {}).get("projectId") or "")).strip()
+        code, payload = run_task_assistant_now_response(
+            runtime_base_dir=self._task_runtime_base_dir(),
+            project_id=project_id,
+            task_id=task_id,
+            session_store=self.ctx.session_store,
+            heartbeat_runtime=self.ctx.heartbeat_runtime,
         )
         self.ctx.json_response(handler, code, payload)
 
@@ -1862,10 +2164,6 @@ class RouteDispatcher:
             self._handle_project_auto_scheduler_post(handler, parts[2])
             return True
 
-        if len(parts) == 4 and parts[:2] == ["api", "projects"] and parts[3] == "schedule-queue":
-            self._handle_project_schedule_queue_post(handler, parts[2])
-            return True
-
         if len(parts) == 4 and parts[:2] == ["api", "projects"] and parts[3] == "heartbeat-tasks":
             self._handle_project_heartbeat_tasks_post(handler, parts[2])
             return True
@@ -1949,135 +2247,6 @@ class RouteDispatcher:
             heartbeat_session_payload_for_write=self.ctx.heartbeat_session_payload_for_write,
         )
         self.ctx.json_response(handler, code, payload)
-
-    def _handle_project_schedule_queue_post(
-        self,
-        handler: "BaseHTTPRequestHandler",
-        project_id: str,
-    ) -> None:
-        """Handle POST /api/projects/{project_id}/schedule-queue."""
-        if not self.ctx.require_token():
-            return
-        pid = str(project_id or "").strip()
-        if not pid:
-            self.ctx.json_response(handler, 400, {"error": "missing project_id"})
-            return
-        if not self.ctx.find_project_cfg(pid):
-            self.ctx.json_response(handler, 404, {"error": "project not found"})
-            return
-        try:
-            body = self.ctx.read_body_json(handler, max_bytes=200_000)
-        except Exception as e:
-            self.ctx.json_response(handler, 400, {"error": f"bad json: {e}"})
-            return
-        if not isinstance(body, dict):
-            self.ctx.json_response(handler, 400, {"error": "bad json: object required"})
-            return
-
-        action = self.ctx.safe_text(body.get("action"), 40).strip().lower() or "replace"
-        current = runtime_load_project_schedule_queue(self.ctx.store, pid)
-        task_paths = list(current.get("task_paths") or [])
-
-        def _payload_list() -> list[Any]:
-            if isinstance(body.get("task_paths"), list):
-                return list(body.get("task_paths") or [])
-            if isinstance(body.get("taskPaths"), list):
-                return list(body.get("taskPaths") or [])
-            if isinstance(body.get("items"), list):
-                return list(body.get("items") or [])
-            return []
-
-        if action in {"replace", "set"}:
-            task_paths = runtime_normalize_project_schedule_task_paths(pid, _payload_list())
-        elif action in {"append", "add"}:
-            add_path = runtime_canonicalize_project_schedule_task_path(
-                pid,
-                self.ctx.safe_text(
-                    body.get("task_path") if "task_path" in body else body.get("taskPath"),
-                    1600,
-                ).strip(),
-            )
-            merged = list(task_paths)
-            if add_path:
-                merged.append(add_path)
-            task_paths = runtime_normalize_project_schedule_task_paths(pid, merged)
-        elif action == "remove":
-            remove_path = runtime_canonicalize_project_schedule_task_path(
-                pid,
-                self.ctx.safe_text(
-                    body.get("task_path") if "task_path" in body else body.get("taskPath"),
-                    1600,
-                ).strip(),
-            )
-            task_paths = [
-                path
-                for path in task_paths
-                if runtime_canonicalize_project_schedule_task_path(pid, path) != remove_path
-            ]
-        elif action == "move":
-            move_path = runtime_canonicalize_project_schedule_task_path(
-                pid,
-                self.ctx.safe_text(
-                    body.get("task_path") if "task_path" in body else body.get("taskPath"),
-                    1600,
-                ).strip(),
-            )
-            if not move_path:
-                self.ctx.json_response(handler, 400, {"error": "missing task_path"})
-                return
-            if move_path not in task_paths:
-                self.ctx.json_response(handler, 404, {"error": "task_path not in queue"})
-                return
-            rest = [
-                path
-                for path in task_paths
-                if runtime_canonicalize_project_schedule_task_path(pid, path) != move_path
-            ]
-            to_index_raw = body.get("to_index") if "to_index" in body else body.get("toIndex")
-            before_path = runtime_canonicalize_project_schedule_task_path(
-                pid,
-                self.ctx.safe_text(
-                    body.get("before_path") if "before_path" in body else body.get("beforePath"),
-                    1600,
-                ).strip(),
-            )
-            after_path = runtime_canonicalize_project_schedule_task_path(
-                pid,
-                self.ctx.safe_text(
-                    body.get("after_path") if "after_path" in body else body.get("afterPath"),
-                    1600,
-                ).strip(),
-            )
-            idx = len(rest)
-            if before_path and before_path in rest:
-                idx = rest.index(before_path)
-            elif after_path and after_path in rest:
-                idx = rest.index(after_path) + 1
-            elif to_index_raw is not None:
-                try:
-                    idx = int(to_index_raw)
-                except Exception:
-                    self.ctx.json_response(handler, 400, {"error": "invalid to_index"})
-                    return
-            idx = max(0, min(len(rest), idx))
-            rest.insert(idx, move_path)
-            task_paths = runtime_normalize_project_schedule_task_paths(pid, rest)
-        else:
-            self.ctx.json_response(handler, 400, {"error": "unsupported action"})
-            return
-
-        saved = runtime_save_project_schedule_queue(self.ctx.store, pid, task_paths)
-        payload = runtime_build_project_schedule_queue_payload(self.ctx.store, pid)
-        self.ctx.json_response(
-            handler,
-            200,
-            {
-                "ok": True,
-                "project_id": pid,
-                "saved": saved,
-                "queue": payload,
-            },
-        )
 
     def _handle_project_task_push_action_post(
         self,
@@ -2351,45 +2520,44 @@ class RouteDispatcher:
         if not self.ctx.require_token():
             return
         try:
-            body = self.ctx.read_body_json(handler, max_bytes=20_000)
+            body = self.ctx.read_body_json(handler, max_bytes=80_000)
         except Exception as e:
             self.ctx.json_response(handler, 400, {"error": f"bad json: {e}"})
             return
-        code, payload = self.ctx.update_project_config_response(
-            project_id=project_id,
-            body=body if isinstance(body, dict) else {},
-            find_project_cfg=self.ctx.find_project_cfg,
-            safe_text=self.ctx.safe_text,
-            coerce_bool=self.ctx.coerce_bool,
-            looks_like_uuid=self.ctx.looks_like_uuid,
-            load_project_scheduler_contract_config=self.ctx.load_project_scheduler_contract_config,
-            load_project_auto_dispatch_config=self.ctx.load_project_auto_dispatch_config,
-            load_project_auto_inspection_config=self.ctx.load_project_auto_inspection_config,
-            load_project_heartbeat_config=self.ctx.load_project_heartbeat_config,
-            build_default_auto_inspection_task=self.ctx.build_default_auto_inspection_task,
-            normalize_inspection_targets=self.ctx.normalize_inspection_targets,
-            normalize_auto_inspections=self.ctx.normalize_auto_inspections,
-            normalize_auto_inspection_task=self.ctx.normalize_auto_inspection_task,
-            normalize_auto_inspection_tasks=self.ctx.normalize_auto_inspection_tasks,
-            normalize_auto_inspection_object=self.ctx.normalize_auto_inspection_object,
-            auto_inspection_targets_from_objects=self.ctx.auto_inspection_targets_from_objects,
-            inspection_target_tokens=self.ctx.inspection_target_tokens,
-            inspection_target_set=self.ctx.inspection_target_set,
-            build_auto_inspection_patch_with_tasks=self.ctx.build_auto_inspection_patch_with_tasks,
-            normalize_inspection_task_id=self.ctx.normalize_inspection_task_id,
-            heartbeat_tasks_for_write=self.ctx.heartbeat_tasks_for_write,
-            normalize_heartbeat_task=self.ctx.normalize_heartbeat_task,
-            normalize_heartbeat_tasks=self.ctx.normalize_heartbeat_tasks,
-            set_project_scheduler_contract_in_config=self.ctx.set_project_scheduler_contract_in_config,
-            build_project_scheduler_status=self.ctx.build_project_scheduler_status,
-            ensure_auto_scheduler_status_shape=self.ctx.ensure_auto_scheduler_status_shape,
-            project_scheduler_runtime=self.ctx.project_scheduler_runtime,
-            heartbeat_runtime=self.ctx.heartbeat_runtime,
-            store=self.ctx.store,
-            default_inspection_targets=self.ctx.default_inspection_targets,
-            clear_dashboard_cfg_cache=self.ctx.clear_dashboard_cfg_cache,
-            invalidate_sessions_payload_cache=self.ctx.invalidate_sessions_payload_cache,
-        )
+
+        body_dict = body if isinstance(body, dict) else {}
+        has_share_space = "share_space" in body_dict or "shareSpace" in body_dict
+        raw_share_space = body_dict.get("share_space") if "share_space" in body_dict else body_dict.get("shareSpace")
+        config_body = {k: v for k, v in body_dict.items() if k not in {"share_space", "shareSpace"}}
+
+        if config_body:
+            code, payload = self._update_project_config_response_without_share_space(project_id, config_body)
+            if code >= 400:
+                self.ctx.json_response(handler, code, payload)
+                return
+        else:
+            code, payload = self._project_config_response_with_share_space(project_id)
+            if code >= 400:
+                self.ctx.json_response(handler, code, payload)
+                return
+
+        if has_share_space:
+            share_code, share_payload = runtime_update_project_share_space_config_response(
+                worktree_root=self.ctx.worktree_root,
+                environment_name=self.ctx.environment_name,
+                project_id=str(payload.get("project_id") or project_id),
+                raw_share_space=raw_share_space,
+            )
+            if share_code >= 400:
+                self.ctx.json_response(handler, share_code, share_payload)
+                return
+            project = payload.get("project")
+            if not isinstance(project, dict):
+                project = {}
+                payload["project"] = project
+            project["share_space"] = share_payload.get("share_space") or {}
+            payload["share_space_path"] = share_payload.get("share_space_path") or ""
+
         self.ctx.json_response(handler, code, payload)
 
     def _handle_project_bootstrap_post(self, handler: "BaseHTTPRequestHandler") -> None:
@@ -2615,6 +2783,168 @@ class RouteDispatcher:
         except Exception as e:
             self.ctx.json_response(handler, 400, {"error": str(e)})
 
+    def _handle_share_space_bootstrap_get(
+        self,
+        handler: "BaseHTTPRequestHandler",
+        share_id: str,
+        qs: dict[str, list[str]],
+    ) -> None:
+        project_id = self._share_project_id(qs)
+        if not project_id:
+            self.ctx.json_response(handler, 400, {"error": "missing project_id"})
+            return
+        access_token, passcode = self._extract_share_credentials(handler, qs)
+        code, payload = runtime_build_share_bootstrap_response(
+            worktree_root=self.ctx.worktree_root,
+            environment_name=self.ctx.environment_name,
+            project_id=project_id,
+            share_id=share_id,
+            access_token=access_token,
+            passcode=passcode,
+            session_store=self.ctx.session_store,
+            decorate_session_display_fields=self.ctx.decorate_session_display_fields,
+        )
+        self.ctx.json_response(handler, code, payload)
+
+    def _handle_share_space_session_get(
+        self,
+        handler: "BaseHTTPRequestHandler",
+        share_id: str,
+        session_id: str,
+        qs: dict[str, list[str]],
+    ) -> None:
+        project_id = self._share_project_id(qs)
+        if not project_id:
+            self.ctx.json_response(handler, 400, {"error": "missing project_id"})
+            return
+        access_token, passcode = self._extract_share_credentials(handler, qs)
+        limit_s = self._qs_first(qs, ("limit",), max_len=20)
+        try:
+            limit = max(1, min(100, int(limit_s or "30")))
+        except Exception:
+            limit = 30
+        code, payload = runtime_build_share_session_response(
+            worktree_root=self.ctx.worktree_root,
+            environment_name=self.ctx.environment_name,
+            project_id=project_id,
+            share_id=share_id,
+            session_id=session_id,
+            access_token=access_token,
+            passcode=passcode,
+            session_store=self.ctx.session_store,
+            store=self.ctx.store,
+            decorate_session_display_fields=self.ctx.decorate_session_display_fields,
+            limit=limit,
+        )
+        self.ctx.json_response(handler, code, payload)
+
+    def _handle_share_space_announce_post(
+        self,
+        handler: "BaseHTTPRequestHandler",
+        share_id: str,
+        qs: dict[str, list[str]],
+    ) -> None:
+        try:
+            body = self.ctx.read_body_json(handler, max_bytes=40_000)
+        except Exception as e:
+            self.ctx.json_response(handler, 400, {"error": f"bad json: {e}"})
+            return
+        body_dict = body if isinstance(body, dict) else {}
+        project_id = self._share_project_id(qs, body_dict)
+        if not project_id:
+            self.ctx.json_response(handler, 400, {"error": "missing project_id"})
+            return
+
+        access_token, passcode = self._extract_share_credentials(handler, qs, body_dict)
+        code, payload = runtime_build_share_announce_request(
+            worktree_root=self.ctx.worktree_root,
+            environment_name=self.ctx.environment_name,
+            project_id=project_id,
+            share_id=share_id,
+            access_token=access_token,
+            passcode=passcode,
+            body=body_dict,
+            session_store=self.ctx.session_store,
+            decorate_session_display_fields=self.ctx.decorate_session_display_fields,
+        )
+        if code >= 400:
+            self.ctx.json_response(handler, code, payload)
+            return
+
+        session_id = str(payload.get("session_id") or "")
+        session_data = self.ctx.session_store.get_session(session_id)
+        channel_name = str(payload.get("channel_name") or "")
+        binding_reason = runtime_validate_announce_session_binding(
+            session_data,
+            project_id=project_id,
+            channel_name=channel_name,
+        )
+        if binding_reason:
+            self.ctx.json_response(
+                handler,
+                409,
+                runtime_build_session_binding_required_payload(
+                    project_id,
+                    channel_name,
+                    session_id,
+                    session_data=session_data,
+                    binding_reason=binding_reason,
+                ),
+            )
+            return
+
+        message = str(payload.get("message") or "")
+        run_extra_fields = payload.get("extra_meta") if isinstance(payload.get("extra_meta"), dict) else {}
+        message, run_extra_fields = runtime_apply_plan_first_to_message(message, run_extra_fields)
+        _hydrate_reply_to_fields_from_store(self.ctx.store, run_extra_fields)
+        attachments: list[dict[str, Any]] = []
+        raw_attachments = body_dict.get("attachments")
+        if isinstance(raw_attachments, list):
+            for att in raw_attachments:
+                if not isinstance(att, dict):
+                    continue
+                item = {
+                    "filename": str(att.get("filename", "")),
+                    "originalName": str(att.get("originalName", "")),
+                    "url": str(att.get("url", "")),
+                }
+                target = self.ctx.resolve_attachment_local_path(self.ctx.store.runs_dir, item)
+                if target is not None:
+                    item["path"] = str(target)
+                attachments.append(item)
+        self.ctx.session_store.touch_session(session_id)
+        run = self.ctx.store.create_run(
+            project_id,
+            channel_name,
+            session_id,
+            message,
+            model=str(payload.get("model") or ""),
+            cli_type=str(payload.get("cli_type") or "codex"),
+            attachments=attachments if attachments else None,
+            sender_type=str(payload.get("sender_type") or "user"),
+            sender_id=str(payload.get("sender_id") or ""),
+            sender_name=str(payload.get("sender_name") or ""),
+            extra_meta=run_extra_fields,
+            reasoning_effort=str(payload.get("reasoning_effort") or ""),
+        )
+        runtime_enqueue_run_for_dispatch(
+            self.ctx.store,
+            str(run.get("id") or ""),
+            session_id,
+            str(payload.get("cli_type") or "codex"),
+            self.ctx.scheduler,
+        )
+        self.ctx.json_response(
+            handler,
+            200,
+            {
+                "ok": True,
+                "project_id": project_id,
+                "share_id": str(payload.get("share_id") or share_id),
+                "run": run,
+            },
+        )
+
     def _handle_codex_announce_post(self, handler: "BaseHTTPRequestHandler") -> None:
         """Handle POST /api/codex/announce."""
         if not self.ctx.require_token():
@@ -2628,17 +2958,13 @@ class RouteDispatcher:
 
         cli_type = ""
         session_data: dict[str, Any] | None = None
-        raw_project_id = self.ctx.safe_text(
-            body.get("projectId") if "projectId" in body else body.get("project_id"),
-            120,
-        ).strip()
         raw_session_id = self.ctx.safe_text(body.get("sessionId"), 80).strip()
         session_id = raw_session_id
         if session_id:
-            session_data = self.ctx.session_store.get_session(session_id, project_id=raw_project_id)
+            session_data = self.ctx.session_store.get_session(session_id)
             if session_data:
                 cli_type = str(session_data.get("cli_type") or "").strip()
-                self.ctx.session_store.touch_session(session_id, project_id=raw_project_id)
+                self.ctx.session_store.touch_session(session_id)
 
         local_host = str(getattr(handler.server, "server_address", ("127.0.0.1", 0))[0] or "")
         parsed_announce = runtime_parse_announce_request(
@@ -3218,7 +3544,7 @@ class RouteDispatcher:
 
         target_session: dict[str, Any] | None = None
         if mode == "agent_assist":
-            resolved_target = self.ctx.session_store.get_session(target_session_id, project_id=project_id)
+            resolved_target = self.ctx.session_store.get_session(target_session_id)
             if not isinstance(resolved_target, dict):
                 self.ctx.json_response(
                     handler,
@@ -3424,7 +3750,7 @@ class RouteDispatcher:
             )
             return
 
-        resolved_target = self.ctx.session_store.get_session(target_session_id, project_id=project_id)
+        resolved_target = self.ctx.session_store.get_session(target_session_id)
         if not isinstance(resolved_target, dict):
             self.ctx.json_response(
                 handler,
@@ -4037,6 +4363,7 @@ class RouteDispatcher:
             payload = runtime_delete_session_response(
                 session_store=self.ctx.session_store,
                 session_id=session_id,
+                session_binding_store=self.ctx.session_binding_store,
             )
         except LookupError:
             self.ctx.json_response(handler, 404, {"error": "session not found"})

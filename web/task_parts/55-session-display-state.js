@@ -2,6 +2,254 @@
       return normalizeDisplayState(raw, fallback);
     }
 
+    function normalizeAgentNameState(raw, fallback = "identity_unresolved") {
+      const s = String(raw || "").trim().toLowerCase();
+      if (
+        s === "resolved"
+        || s === "polluted"
+        || s === "name_missing"
+        || s === "identity_unresolved"
+        || s === "identity_pending"
+      ) {
+        return s;
+      }
+      return String(fallback || "").trim().toLowerCase();
+    }
+
+    function agentNameStateLabel(rawState, issue = "") {
+      const state = normalizeAgentNameState(rawState, "");
+      if (state === "resolved") return "";
+      if (state === "polluted") return "名称异常";
+      if (state === "identity_pending") return "身份解析中";
+      if (state === "name_missing" || state === "identity_unresolved") return "身份未解析";
+      const issueText = String(issue || "").trim().toLowerCase();
+      if (issueText.indexOf("polluted") >= 0) return "名称异常";
+      return "";
+    }
+
+    function compactAgentDisplayId(value) {
+      const text = String(value || "").trim();
+      if (!text) return "";
+      return text.replace(/[^0-9a-z]/ig, "").slice(0, 8).toLowerCase();
+    }
+
+    function isSessionDerivedAgentDisplayName(value, session) {
+      const text = String(value || "").trim();
+      if (!text) return false;
+      if (/^(?:会话|session)\s*[0-9a-f-]{4,}$/i.test(text)) return true;
+      if (looksLikeSessionId(text)) return true;
+      const sid = String(getSessionId(session) || "").trim();
+      if (!sid) return false;
+      const compactSid = compactAgentDisplayId(sid);
+      const compactText = compactAgentDisplayId(text);
+      if (text === sid) return true;
+      if (compactText && compactSid && compactText === compactSid) return true;
+      if (compactText && compactText.length >= 4 && compactSid.indexOf(compactText) >= 0) return true;
+      return false;
+    }
+
+    function hasAgentDisplayContractFields(session) {
+      const s = (session && typeof session === "object") ? session : {};
+      return [
+        "agent_display_name",
+        "agentDisplayName",
+        "agent_display_name_source",
+        "agentDisplayNameSource",
+        "agent_name_state",
+        "agentNameState",
+        "agent_display_issue",
+        "agentDisplayIssue",
+      ].some((key) => Object.prototype.hasOwnProperty.call(s, key));
+    }
+
+    function readAgentDisplayContract(session) {
+      const s = (session && typeof session === "object") ? session : {};
+      const registry = (s.agent_registry && typeof s.agent_registry === "object") ? s.agent_registry : {};
+      const rawName = String(firstNonEmptyText([
+        s.agent_display_name,
+        s.agentDisplayName,
+        s.agent_name,
+        s.agentName,
+        registry.alias,
+        registry.agent_name,
+        registry.agentName,
+        registry.name,
+      ]) || "").trim();
+      const issue = String(firstNonEmptyText([
+        s.agent_display_issue,
+        s.agentDisplayIssue,
+      ]) || "").trim().toLowerCase();
+      let state = normalizeAgentNameState(firstNonEmptyText([
+        s.agent_name_state,
+        s.agentNameState,
+      ]), "");
+      if (!state) {
+        if (issue.indexOf("polluted") >= 0) state = "polluted";
+        else if (rawName && !isSessionDerivedAgentDisplayName(rawName, s)) state = "resolved";
+        else if (hasAgentDisplayContractFields(s)) state = "identity_unresolved";
+      }
+      const name = state === "resolved" && !isSessionDerivedAgentDisplayName(rawName, s) ? rawName : "";
+      return {
+        name,
+        source: String(firstNonEmptyText([
+          s.agent_display_name_source,
+          s.agentDisplayNameSource,
+        ]) || "").trim(),
+        state,
+        issue,
+        hasContractFields: hasAgentDisplayContractFields(s),
+      };
+    }
+
+    function fallbackAgentIdentityName(session) {
+      const s = (session && typeof session === "object") ? session : {};
+      const registry = (s.agent_registry && typeof s.agent_registry === "object") ? s.agent_registry : {};
+      const candidates = [
+        registry.alias,
+        registry.agent_name,
+        registry.agentName,
+        registry.name,
+        s.agent_name,
+        s.agentName,
+        s.alias,
+      ];
+      for (const candidate of candidates) {
+        const text = String(candidate || "").trim();
+        if (!text) continue;
+        if (text === String(getSessionChannelName(s) || "").trim()) continue;
+        if (isSessionDerivedAgentDisplayName(text, s)) continue;
+        return text;
+      }
+      return "";
+    }
+
+    function resolveAgentDisplayName(session) {
+      const contract = readAgentDisplayContract(session);
+      if (contract.state === "resolved" && contract.name) return contract.name;
+      return fallbackAgentIdentityName(session);
+    }
+
+    function getConversationListMetrics(session) {
+      const s = (session && typeof session === "object") ? session : {};
+      const raw = s.conversation_list_metrics || s.conversationListMetrics || null;
+      return (raw && typeof raw === "object") ? raw : null;
+    }
+
+    function getConversationListTaskCounts(session) {
+      const metrics = getConversationListMetrics(session);
+      const counts = (metrics && typeof metrics.task_counts === "object") ? metrics.task_counts : {};
+      const total = Math.max(0, Number(firstNonEmptyText([counts.total, 0])) || 0);
+      const current = Math.max(0, Number(firstNonEmptyText([counts.current, 0])) || 0);
+      const inProgress = Math.max(0, Number(firstNonEmptyText([counts.in_progress, counts.inProgress, 0])) || 0);
+      const pending = Math.max(0, Number(firstNonEmptyText([counts.pending, 0])) || 0);
+      if (!total && !current && !inProgress && !pending) return null;
+      return {
+        total,
+        current,
+        in_progress: inProgress,
+        pending,
+      };
+    }
+
+    function getConversationListCurrentTaskSummary(session) {
+      const metrics = getConversationListMetrics(session);
+      const summary = (metrics && typeof metrics.current_task_summary === "object") ? metrics.current_task_summary : {};
+      const statusText = String(summary.task_primary_status || "").trim();
+      const bucketText = String(summary.status_bucket || summary.statusBucket || "").trim();
+      const resolveStatus = (typeof resolveTaskPrimaryStatusText === "function")
+        ? resolveTaskPrimaryStatusText
+        : ((value, fallback = "") => {
+          const raw = String(value || "").trim();
+          if (!raw) return String(fallback || "").trim();
+          if (/(?:进行中|处理中|running|in[_-]?progress)/i.test(raw)) return "进行中";
+          if (/(?:待办|待开始|待处理|todo|pending|queued)/i.test(raw)) return "待办";
+          if (/(?:已完成|完成|done|success)/i.test(raw)) return "已完成";
+          return String(fallback || raw).trim();
+        });
+      const taskPrimaryStatus = resolveStatus(statusText || bucketText, statusText || bucketText);
+      if (
+        !String(summary.task_id || summary.taskId || "").trim()
+        && !String(summary.task_title || summary.taskTitle || "").trim()
+        && !taskPrimaryStatus
+      ) {
+        return null;
+      }
+      return {
+        task_id: String(firstNonEmptyText([summary.task_id, summary.taskId]) || "").trim(),
+        task_title: String(firstNonEmptyText([summary.task_title, summary.taskTitle]) || "").trim(),
+        task_path: String(firstNonEmptyText([summary.task_path, summary.taskPath]) || "").trim(),
+        task_primary_status: taskPrimaryStatus,
+        status_bucket: bucketText,
+      };
+    }
+
+    function normalizeConversationListMetricBadge(raw) {
+      const src = (raw && typeof raw === "object") ? raw : {};
+      const state = String(firstNonEmptyText([src.state, src.status_bucket, src.statusBucket]) || "").trim();
+      const resolveStatus = (typeof resolveTaskPrimaryStatusText === "function")
+        ? resolveTaskPrimaryStatusText
+        : ((value, fallback = "") => String(value || fallback || "").trim());
+      const normalizedLabel = resolveStatus(firstNonEmptyText([src.label, state]), firstNonEmptyText([src.label, state]));
+      return {
+        kind: String(src.kind || "").trim(),
+        state,
+        label: String(normalizedLabel || "").trim(),
+        severity: String(firstNonEmptyText([src.severity, src.tone]) || "").trim().toLowerCase(),
+        count: Math.max(0, Number(firstNonEmptyText([src.count, 0])) || 0),
+      };
+    }
+
+    function conversationListMetricBadges(session) {
+      const metrics = getConversationListMetrics(session);
+      const badges = Array.isArray(metrics && metrics.status_badges) ? metrics.status_badges : [];
+      return badges.map(normalizeConversationListMetricBadge).filter((item) => item && item.label);
+    }
+
+    function conversationListMetricBadgeTone(badge) {
+      const item = normalizeConversationListMetricBadge(badge);
+      if (item.severity === "danger" || item.severity === "error") return "error";
+      if (item.severity === "warning" || item.severity === "warn") return "warning";
+      if (item.severity === "success") return "success";
+      if (item.state === "in_progress") return "running";
+      if (item.state === "pending") return "queued";
+      if (item.state === "done") return "success";
+      return "info";
+    }
+
+    function pickConversationListPrimaryStatusBadge(session) {
+      const badges = conversationListMetricBadges(session);
+      if (!badges.length) return null;
+      return badges.find((item) => item.kind === "current_task") || badges[0];
+    }
+
+    function conversationListMetricBadgeStatusMeta(session) {
+      const badge = pickConversationListPrimaryStatusBadge(session);
+      if (!badge) return null;
+      return {
+        text: String(badge.label || "").trim(),
+        tone: conversationListMetricBadgeTone(badge),
+        title: String(badge.label || "").trim(),
+        source: "conversation_list_metrics",
+      };
+    }
+
+    function conversationListCurrentTaskSummaryMeta(session) {
+      const summary = getConversationListCurrentTaskSummary(session);
+      if (!summary || !summary.task_primary_status) return null;
+      return {
+        text: String(summary.task_primary_status || "").trim(),
+        tone: /已完成/.test(String(summary.task_primary_status || "")) ? "success" : "info",
+        title: String(firstNonEmptyText([summary.task_title, summary.task_path, summary.task_primary_status]) || "").trim(),
+        source: "conversation_list_metrics",
+      };
+    }
+
+    function conversationListDetailHydrationCanSkip(session) {
+      const metrics = getConversationListMetrics(session);
+      const detail = (metrics && typeof metrics.detail_hydration === "object") ? metrics.detail_hydration : {};
+      return !!detail.can_skip_detail_for_list;
+    }
+
     function normalizeLatestRunSummary(raw) {
       const src = (raw && typeof raw === "object") ? raw : {};
       return {
@@ -89,16 +337,15 @@
 
     function getSessionPrimaryPreviewText(session) {
       const s = (session && typeof session === "object") ? session : {};
+      const displayState = String(getSessionDisplayState(s) || "").trim().toLowerCase();
       const latestEffectiveRunSummary = getSessionLatestEffectiveRunSummary(s);
       const latestRunSummary = getSessionLatestRunSummary(s);
-      const displayState = normalizeSessionDisplayState(getSessionDisplayState(s), "idle");
-      const isActiveLike = (
+      if (
         displayState === "running"
         || displayState === "queued"
         || displayState === "retry_waiting"
         || displayState === "external_busy"
-      );
-      if (isActiveLike) {
+      ) {
         return String(firstNonEmptyText([
           latestRunSummary.preview,
           s.lastPreview,
@@ -152,6 +399,8 @@
 
       // 运行时显式态优先，避免旧的 session_display_state 把已恢复/已中断会话继续显示成处理中。
       if (runtimeDisplay === "error" || isActiveLike(runtimeDisplay)) return runtimeDisplay;
+      if (runtimeState.active_run_id) return "running";
+      if (runtimeState.queued_run_id) return "queued";
       if (sessionHealthState === "busy") {
         if (isActiveLike(latestStatus)) return latestStatus;
         return "running";

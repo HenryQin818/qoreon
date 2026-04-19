@@ -124,25 +124,6 @@
     .callback-event.compact-receipt {
       gap: 7px;
     }
-    .callback-event.compact-receipt.is-processing {
-      position: relative;
-      overflow: hidden;
-      border-color: rgba(179,106,0,0.26);
-      background: rgba(179,106,0,0.10);
-    }
-    .callback-event.compact-receipt.is-processing::after {
-      content: "";
-      position: absolute;
-      inset: 0;
-      background: linear-gradient(105deg, transparent 35%, rgba(255,255,255,0.48) 50%, transparent 65%);
-      transform: translateX(-100%);
-      animation: runFlow 1.8s linear infinite;
-      pointer-events: none;
-    }
-    .callback-event.compact-receipt.is-processing > * {
-      position: relative;
-      z-index: 1;
-    }
     .msgrow.system .callback-event {
       border-color: rgba(94,110,138,0.16);
       background: rgba(246,248,251,0.94);
@@ -327,38 +308,6 @@
       line-height: 1.45;
       color: rgba(15,23,42,0.72);
     }
-    .msg-inbound-card-facts {
-      display: grid;
-      gap: 6px;
-      padding: 8px 9px;
-      border-radius: 10px;
-      border: 1px solid rgba(15,23,42,0.06);
-      background: rgba(248,250,252,0.74);
-    }
-    .msg-inbound-card-fact {
-      display: grid;
-      grid-template-columns: 56px minmax(0, 1fr);
-      gap: 8px;
-      align-items: start;
-    }
-    .msg-inbound-card-fact-k {
-      font-size: 11px;
-      line-height: 1.45;
-      color: rgba(61,72,84,0.62);
-      font-weight: 700;
-    }
-    .msg-inbound-card-fact-v {
-      min-width: 0;
-      font-size: 12px;
-      line-height: 1.5;
-      color: rgba(15,23,42,0.82);
-      white-space: pre-wrap;
-      overflow-wrap: anywhere;
-    }
-    .msg-inbound-card-fact.is-emphasis .msg-inbound-card-fact-v {
-      font-weight: 700;
-      color: rgba(15,23,42,0.92);
-    }
     .msg-inbound-card-ops {
       margin-top: 0;
     }
@@ -508,25 +457,6 @@
     .conv-receipt-card.has-pending {
       border-color: rgba(179,106,0,0.16);
       background: rgba(252,248,241,0.94);
-    }
-    .conv-receipt-card.is-processing {
-      position: relative;
-      overflow: hidden;
-      border-color: rgba(179,106,0,0.26);
-      background: rgba(252,248,241,0.96);
-    }
-    .conv-receipt-card.is-processing::after {
-      content: "";
-      position: absolute;
-      inset: 0;
-      background: linear-gradient(105deg, transparent 35%, rgba(255,255,255,0.44) 50%, transparent 65%);
-      transform: translateX(-100%);
-      animation: runFlow 1.8s linear infinite;
-      pointer-events: none;
-    }
-    .conv-receipt-card.is-processing > * {
-      position: relative;
-      z-index: 1;
     }
     .conv-receipt-card.todo {
       border-color: rgba(154,52,18,0.12);
@@ -821,32 +751,11 @@
       border: 1px solid rgba(15,23,42,0.06);
       background: rgba(248,250,252,0.72);
     }
-    .msg-collab-summary-title {
-      font-size: 11px;
-      line-height: 1.4;
-      color: rgba(61,72,84,0.62);
-      font-weight: 700;
-      display: -webkit-box;
-      -webkit-line-clamp: 1;
-      -webkit-box-orient: vertical;
-      overflow: hidden;
-      word-break: break-word;
-    }
     .msg-collab-summary-main {
       font-size: 12px;
       font-weight: 700;
       line-height: 1.45;
       color: rgba(0,0,0,0.78);
-      display: -webkit-box;
-      -webkit-line-clamp: 1;
-      -webkit-box-orient: vertical;
-      overflow: hidden;
-      word-break: break-word;
-    }
-    .msg-collab-summary-state {
-      font-size: 11px;
-      line-height: 1.4;
-      color: rgba(15,23,42,0.72);
       display: -webkit-box;
       -webkit-line-clamp: 1;
       -webkit-box-orient: vertical;

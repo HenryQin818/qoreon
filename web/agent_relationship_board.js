@@ -8,14 +8,15 @@
   const CARD_WIDTH = 228;
   const CARD_HEIGHT = 116;
   const GROUP_PADDING = 24;
+  const PROJECT_LAYOUT_VERSION = "project-layout-v4";
   const STAGE_MIN = {
-    project: { width: 3800, height: 2280 },
-    platform: { width: 11200, height: 6800 },
+    project: { width: 5600, height: 3400 },
+    platform: { width: 14800, height: 9200 },
   };
   const ROWS = {
     master: { label: "总管", y: 120, accent: "#63dac8" },
     assist: { label: "营运（辅助）", y: 470, accent: "#7db7ff" },
-    dev: { label: "业务执行", y: 1030, accent: "#f4c86d" },
+    dev: { label: "开发（子级）", y: 1030, accent: "#f4c86d" },
     other: { label: "新业务（其他）", y: 1590, accent: "#ba9cff" },
   };
   const WINDOW_MS = {
@@ -26,16 +27,12 @@
   const PLATFORM_HIGH_FREQ_COUNT = 5;
   const PLATFORM_RUNS_PAGE_LIMIT = 200;
   const PLATFORM_RUNS_MAX_PAGES = 12;
-  const PLATFORM_PROJECT_LAYOUT_BASE_SCALE = 0.42;
-  const PLATFORM_PROJECT_LAYOUT_MAX_WIDTH = 1260;
-  const PLATFORM_PROJECT_LAYOUT_MAX_HEIGHT = 860;
-  const PLATFORM_PROJECT_LAYOUT_COMPACT_SCALE = 0.86;
-  const RELATION_TYPES = {
-    business: { label: "主责", color: "rgba(99,218,200,0.92)" },
-    support: { label: "支撑", color: "rgba(125,183,255,0.9)" },
-    dependency: { label: "依赖", color: "rgba(244,200,109,0.92)" },
-  };
+  const PLATFORM_PROJECT_LAYOUT_BASE_SCALE = 0.58;
+  const PLATFORM_PROJECT_LAYOUT_MAX_WIDTH = 2600;
+  const PLATFORM_PROJECT_LAYOUT_MAX_HEIGHT = 1720;
+  const PLATFORM_PROJECT_LAYOUT_COMPACT_SCALE = 1;
   const AVATAR_CATALOG = [
+    ["user", "用户", "🙋", "#fde7f3", "#f9c7dd"],
     ["chief", "总控指挥", "🧭", "#dbeafe", "#bfdbfe"],
     ["pmo", "督办PMO", "📣", "#fef3c7", "#fde68a"],
     ["planner", "需求规划", "🗺️", "#e0e7ff", "#c7d2fe"],
@@ -97,17 +94,28 @@
     ["script", "自动脚本", "📟", "#e0f2fe", "#bae6fd"],
   ].map(([id, name, emoji, c1, c2]) => ({ id, name, emoji, c1, c2 }));
   const AVATAR_MAP = new Map(AVATAR_CATALOG.map((item) => [String(item.id), item]));
+  const USER_NODE_ID = "user::global";
+  const USER_NODE_LABEL = "用户";
   const STATE = {
     projectId: "",
     projectName: "",
     viewMode: "project",
     platformLayoutMode: "project",
-    platformCommScope: "all",
-    platformLineCountMin: 0,
+    commLineCountMin: 0,
+    commVisibility: {
+      user: true,
+      agent: true,
+    },
     platformProjects: [],
+    platformProjectFilterInitialized: false,
+    platformProjectFilterSelected: [],
+    platformProjectFilterDraft: [],
+    platformProjectFilterDraftDirty: false,
+    platformProjectFilterOpen: false,
     platformCommLinks: [],
     channelHint: "",
     sessionHint: "",
+    projectRowLayout: {},
     windowKey: "24h",
     customRange: { startMs: 0, endMs: 0 },
     sessions: [],
@@ -116,24 +124,13 @@
     channelSections: [],
     nodes: [],
     commLinks: [],
-    manualRelations: [],
-    activeRelationType: "business",
-    visibleRelations: {
-      business: true,
-      support: true,
-      dependency: true,
-      message: true,
-      labels: true,
-    },
     selectedGroupId: "",
     selectedSessionId: "",
-    selectedRelationId: "",
     selectedPlatformCommLinkId: "",
     dragNode: null,
     dragGroup: null,
     resizeGroup: null,
     dragLayerGroupId: "",
-    relationDraft: null,
     pan: null,
     zoom: 1,
     platformLoadToken: 0,
@@ -141,29 +138,27 @@
   };
 
   const dom = {
-    taskLink: document.getElementById("taskLink"),
-    curtainLink: document.getElementById("curtainLink"),
-    refreshBtn: document.getElementById("refreshBtn"),
-    saveLayoutBtn: document.getElementById("saveLayoutBtn"),
-    exportConfigBtn: document.getElementById("exportConfigBtn"),
-    copyConfigBtn: document.getElementById("copyConfigBtn"),
-    envBadge: document.getElementById("envBadge"),
     platformModeTabsWrap: document.getElementById("platformModeTabs"),
     platformModeButtons: Array.from(document.querySelectorAll("[data-platform-layout]")),
-    platformCommScopeFilters: document.getElementById("platformCommScopeFilters"),
-    platformScopeButtons: Array.from(document.querySelectorAll("[data-comm-scope]")),
+    platformProjectFilterWrap: document.getElementById("platformProjectFilterWrap"),
+    platformProjectFilterBtn: document.getElementById("platformProjectFilterBtn"),
+    platformProjectFilterPanel: document.getElementById("platformProjectFilterPanel"),
+    platformProjectFilterList: document.getElementById("platformProjectFilterList"),
+    platformProjectFilterSummary: document.getElementById("platformProjectFilterSummary"),
+    platformProjectSelectAllBtn: document.getElementById("platformProjectSelectAllBtn"),
+    platformProjectInvertBtn: document.getElementById("platformProjectInvertBtn"),
+    platformProjectClearBtn: document.getElementById("platformProjectClearBtn"),
+    platformProjectCancelBtn: document.getElementById("platformProjectCancelBtn"),
+    platformProjectApplyBtn: document.getElementById("platformProjectApplyBtn"),
+    commTypeFilters: document.getElementById("commTypeFilters"),
+    commTypeButtons: Array.from(document.querySelectorAll("[data-comm-kind]")),
     timeTabs: Array.from(document.querySelectorAll("[data-window]")),
     customRange: document.getElementById("customRange"),
     customStartInput: document.getElementById("customStartInput"),
     customEndInput: document.getElementById("customEndInput"),
     customApplyBtn: document.getElementById("customApplyBtn"),
-    relationToolbarStack: document.getElementById("relationToolbarStack"),
-    relationTypeButtons: Array.from(document.querySelectorAll("[data-relation-type]")),
-    visibilityButtons: Array.from(document.querySelectorAll("[data-visibility]")),
     platformCommCountFilters: document.getElementById("platformCommCountFilters"),
     platformCountButtons: Array.from(document.querySelectorAll("[data-comm-count-min]")),
-    toggleLayersBtn: document.getElementById("toggleLayersBtn"),
-    toggleDetailBtn: document.getElementById("toggleDetailBtn"),
     boardMeta: document.getElementById("boardMeta"),
     summaryMeta: document.getElementById("summaryMeta"),
     statusBanner: document.getElementById("statusBanner"),
@@ -386,6 +381,16 @@
   }
 
   function avatarMeta(sessionLike) {
+    if (safeText(sessionLike && sessionLike.kind) === "user" && AVATAR_MAP.has("user")) {
+      const meta = AVATAR_MAP.get("user");
+      return {
+        text: String(meta.emoji || "🙋"),
+        title: USER_NODE_LABEL,
+        c1: String(meta.c1 || "#fde7f3"),
+        c2: String(meta.c2 || "#f9c7dd"),
+        fallback: false,
+      };
+    }
     const avatarId = getAssignedAvatarId(sessionLike);
     if (avatarId && AVATAR_MAP.has(avatarId)) {
       const meta = AVATAR_MAP.get(avatarId);
@@ -519,10 +524,118 @@
     return Array.from(map.values());
   }
 
+  function platformProjectIds() {
+    return sortProjects(STATE.platformProjects).map((item) => safeText(item.project_id)).filter(Boolean);
+  }
+
+  function normalizePlatformProjectSelection() {
+    const allIds = platformProjectIds();
+    if (!allIds.length) {
+      STATE.platformProjectFilterInitialized = false;
+      STATE.platformProjectFilterSelected = [];
+      STATE.platformProjectFilterDraft = [];
+      STATE.platformProjectFilterDraftDirty = false;
+      return;
+    }
+    if (!STATE.platformProjectFilterInitialized) {
+      const stored = loadLayoutStore();
+      STATE.platformProjectFilterInitialized = Boolean(stored.platform_project_filter_initialized);
+      const persisted = Array.isArray(stored.platform_project_selected)
+        ? stored.platform_project_selected.map((item) => safeText(item)).filter(Boolean)
+        : [];
+      if (STATE.platformProjectFilterInitialized) {
+        STATE.platformProjectFilterSelected = [...persisted];
+      } else if (persisted.length) {
+        STATE.platformProjectFilterSelected = [...persisted];
+      }
+    }
+    const current = new Set((Array.isArray(STATE.platformProjectFilterSelected) ? STATE.platformProjectFilterSelected : []).map((item) => safeText(item)).filter(Boolean));
+    const next = allIds.filter((id) => current.has(id));
+    STATE.platformProjectFilterSelected = STATE.platformProjectFilterInitialized
+      ? next
+      : (next.length ? next : [...allIds]);
+    if (!STATE.platformProjectFilterInitialized && STATE.platformProjectFilterSelected.length) {
+      STATE.platformProjectFilterInitialized = true;
+    }
+    const draft = new Set((Array.isArray(STATE.platformProjectFilterDraft) ? STATE.platformProjectFilterDraft : []).map((item) => safeText(item)).filter(Boolean));
+    const nextDraft = allIds.filter((id) => draft.has(id));
+    STATE.platformProjectFilterDraft = STATE.platformProjectFilterDraftDirty
+      ? nextDraft
+      : [...STATE.platformProjectFilterSelected];
+  }
+
+  function selectedPlatformProjectIds() {
+    normalizePlatformProjectSelection();
+    return new Set((STATE.platformProjectFilterSelected || []).map((item) => safeText(item)).filter(Boolean));
+  }
+
+  function visiblePlatformProjects() {
+    const selected = selectedPlatformProjectIds();
+    return sortProjects(STATE.platformProjects).filter((item) => selected.has(safeText(item.project_id)));
+  }
+
   function projectMetaById(projectId) {
     const pid = safeText(projectId);
     if (!pid) return null;
     return projectCatalog().find((item) => safeText(item.project_id) === pid) || null;
+  }
+
+  function projectPayloadById(projectId) {
+    const pid = safeText(projectId);
+    if (!pid) return null;
+    const projects = Array.isArray(DATA.projects) ? DATA.projects : [];
+    return projects.find((item) => safeText(item && (item.id || item.project_id)) === pid) || null;
+  }
+
+  function buildProjectSessionsFromRegistry(project) {
+    if (!project || typeof project !== "object") return [];
+    const registry = (project.registry && typeof project.registry === "object") ? project.registry : {};
+    const channels = Array.isArray(registry.channels) ? registry.channels : [];
+    const projectId = safeText(project.project_id || project.id);
+    const projectName = firstText([project.project_name, project.name], projectId);
+    const rows = [];
+    const seen = new Set();
+    channels.forEach((channel, index) => {
+      const channelName = firstText([channel.channel_name, channel.name], `未命名通道${index + 1}`);
+      const candidates = Array.isArray(channel.session_candidates) ? channel.session_candidates : [];
+      candidates.forEach((item) => {
+        const session = normalizeSession({
+          ...item,
+          id: firstText([item.id, item.session_id, item.sessionId]),
+          session_id: firstText([item.session_id, item.sessionId, item.id]),
+          channel_name: channelName,
+          alias: firstText([item.alias, item.display_name, item.displayName]),
+          display_name: firstText([item.display_name, item.displayName, item.alias]),
+          project_id: projectId,
+          project_name: projectName,
+          status: firstText([item.session_display_state, item.display_state, item.status], "active"),
+          desc: firstText([item.session_role, channel.channel_desc, item.cli_type], "协作Agent"),
+        });
+        if (!session || seen.has(session.session_id)) return;
+        seen.add(session.session_id);
+        rows.push(session);
+      });
+    });
+    return rows;
+  }
+
+  function buildProjectSessionsFromPayload(projectId) {
+    const project = projectPayloadById(projectId);
+    if (!project) return [];
+    const registrySessions = buildProjectSessionsFromRegistry(project);
+    if (registrySessions.length) return registrySessions;
+    const rows = Array.isArray(project.channel_sessions) ? project.channel_sessions : [];
+    return rows
+      .map((item) => normalizeSession({
+        ...item,
+        channel_name: firstText([item.channel_name, item.channelName, item.name]),
+        alias: sessionDisplayName(item),
+        project_id: projectId,
+        project_name: firstText([project.name, project.project_name], projectId),
+        status: firstText([item.status], "active"),
+        desc: firstText([item.desc, item.session_role, item.cli_type], "协作Agent"),
+      }))
+      .filter(Boolean);
   }
 
   function normalizeSession(raw) {
@@ -551,6 +664,20 @@
     (Array.isArray(projects) ? projects : []).forEach((project) => {
       const projectId = safeText(project.project_id || project.id);
       const projectName = firstText([project.project_name, project.name], projectId);
+      const registrySessions = buildProjectSessionsFromRegistry(project);
+      if (registrySessions.length) {
+        registrySessions.forEach((session) => {
+          const sessionId = safeText(session.session_id);
+          if (!sessionId || seen.has(sessionId)) return;
+          seen.add(sessionId);
+          sessions.push({
+            ...session,
+            project_id: projectId,
+            project_name: projectName,
+          });
+        });
+        return;
+      }
       const rows = Array.isArray(project.channel_sessions) ? project.channel_sessions : [];
       rows.forEach((row, index) => {
         const channelName = firstText([row.name, row.channel_name, row.channelName], `未命名通道${index + 1}`);
@@ -774,33 +901,106 @@
       const version = mode === "agent" ? "v5" : "v3";
       scope = `platform:${mode}:${version}`;
     } else {
-      scope = safeText(STATE.projectId || "global");
+      scope = `${safeText(STATE.projectId || "global")}:${PROJECT_LAYOUT_VERSION}`;
     }
     return `${STORAGE_PREFIX}:${scope}`;
   }
 
   function projectLayoutStorageKey(projectId) {
-    return `${STORAGE_PREFIX}:${safeText(projectId || "global")}`;
+    return `${STORAGE_PREFIX}:${safeText(projectId || "global")}:${PROJECT_LAYOUT_VERSION}`;
   }
 
   function compactNodeCardSize(alias, mode = "project") {
     const length = safeText(alias, "Agent").length;
-    const baseWidth = mode === "platform" ? 136 : 148;
-    const extraWidth = Math.min(84, Math.max(0, length - 3) * 10);
+    const baseWidth = mode === "platform" ? 136 : 188;
+    const extraWidth = mode === "platform"
+      ? Math.min(84, Math.max(0, length - 3) * 10)
+      : Math.min(168, Math.max(0, length - 4) * 11);
     return {
       w: baseWidth + extraWidth,
-      h: mode === "platform" ? 52 : 56,
+      h: mode === "platform" ? 52 : 68,
     };
   }
 
+  function projectGroupColumns(count) {
+    const total = Math.max(0, Number(count) || 0);
+    if (total <= 2) return 1;
+    if (total <= 4) return 2;
+    if (total <= 8) return 3;
+    return 4;
+  }
+
+  function projectGroupSpec(group) {
+    const sessions = Array.isArray(group && group.sessions) ? group.sessions : [];
+    const sizes = sessions.map((session) => compactNodeCardSize(safeText(session.alias, session.session_id), "project"));
+    const count = Math.max(1, sessions.length);
+    const columns = projectGroupColumns(count);
+    const rows = Math.max(1, Math.ceil(count / columns));
+    const nodeGapX = 18;
+    const nodeGapY = 16;
+    const headerH = 96;
+    const footerH = 26;
+    const innerPadX = 28;
+    const innerPadY = 22;
+    const cellW = Math.max(212, ...sizes.map((item) => Number(item.w || 212)));
+    const cellH = Math.max(68, ...sizes.map((item) => Number(item.h || 68)));
+    const width = Math.max(312, innerPadX * 2 + columns * cellW + Math.max(0, columns - 1) * nodeGapX);
+    const height = Math.max(188, headerH + footerH + innerPadY * 2 + rows * cellH + Math.max(0, rows - 1) * nodeGapY);
+    return {
+      columns,
+      rows,
+      headerH,
+      footerH,
+      innerPadX,
+      innerPadY,
+      nodeGapX,
+      nodeGapY,
+      cellW,
+      cellH,
+      width,
+      height,
+      sizes,
+    };
+  }
+
+  function buildProjectRowLanes(items, maxWidth, gapX) {
+    const lanes = [];
+    let lane = [];
+    let laneWidth = 0;
+    items.forEach((group) => {
+      const spec = group.spec || projectGroupSpec(group);
+      const groupWidth = Number(spec.width || 0);
+      const nextWidth = lane.length ? (laneWidth + gapX + groupWidth) : groupWidth;
+      if (lane.length && nextWidth > maxWidth) {
+        lanes.push({ items: lane, width: laneWidth });
+        lane = [group];
+        laneWidth = groupWidth;
+      } else {
+        lane.push(group);
+        laneWidth = nextWidth;
+      }
+    });
+    if (lane.length) lanes.push({ items: lane, width: laneWidth });
+    return lanes;
+  }
+
   function loadLayoutStoreByKey(key) {
+    const fallback = {
+      groups: [],
+      nodes: [],
+      zoom: 1,
+      platform_project_selected: [],
+      platform_project_filter_initialized: false,
+      comm_kind_visibility: { user: true, agent: true },
+      comm_count_min: 0,
+    };
     try {
       const raw = localStorage.getItem(safeText(key));
-      if (!raw) return { groups: [], relations: [], nodes: [], zoom: 1 };
+      if (!raw) return fallback;
       const parsed = JSON.parse(raw);
-      return parsed && typeof parsed === "object" ? parsed : { groups: [], relations: [], nodes: [], zoom: 1 };
+      return parsed && typeof parsed === "object" ? parsed : fallback;
     } catch (_) {
-      return { groups: [], relations: [], nodes: [], zoom: 1 };
+      return fallback;
     }
   }
 
@@ -810,20 +1010,30 @@
 
   function persistLayoutStore() {
     try {
-      const groups = isPlatformMode()
-        ? STATE.groups.filter((group) => safeText(group.kind) === "project-shell")
-        : STATE.groups;
+      const groups = isPlatformMode() ? [] : STATE.groups;
       localStorage.setItem(layoutStorageKey(), JSON.stringify({
         groups,
-        relations: isPlatformMode() ? [] : STATE.manualRelations,
         nodes: isPlatformMode() ? [] : STATE.nodes.map((node) => ({ session_id: node.session_id, x: node.x, y: node.y })),
         zoom: STATE.zoom,
+        platform_project_selected: isPlatformMode() ? [...(STATE.platformProjectFilterSelected || [])] : [],
+        platform_project_filter_initialized: isPlatformMode() ? Boolean(STATE.platformProjectFilterInitialized) : false,
+        comm_kind_visibility: {
+          user: STATE.commVisibility.user !== false,
+          agent: STATE.commVisibility.agent !== false,
+        },
+        comm_count_min: Math.max(0, Number(STATE.commLineCountMin) || 0),
       }));
     } catch (_) {}
   }
 
-  function relationTone(type) {
-    return RELATION_TYPES[type] || RELATION_TYPES.business;
+  function restoreCommFilterStateFromStore() {
+    const stored = loadLayoutStore();
+    const visibility = (stored && stored.comm_kind_visibility && typeof stored.comm_kind_visibility === "object")
+      ? stored.comm_kind_visibility
+      : {};
+    STATE.commVisibility.user = visibility.user !== false;
+    STATE.commVisibility.agent = visibility.agent !== false;
+    STATE.commLineCountMin = Math.max(0, Number(stored && stored.comm_count_min) || 0);
   }
 
   function currentWindowRange() {
@@ -846,6 +1056,23 @@
 
   function totalCommCount(links) {
     return (Array.isArray(links) ? links : []).reduce((sum, link) => sum + Number(link.count || 0), 0);
+  }
+
+  function isUserCommLink(link) {
+    return safeText(link && link.from_id) === USER_NODE_ID || safeText(link && link.to_id) === USER_NODE_ID;
+  }
+
+  function filteredCommLinks(links) {
+    const min = Math.max(0, Number(STATE.commLineCountMin) || 0);
+    const showUser = STATE.commVisibility.user !== false;
+    const showAgent = STATE.commVisibility.agent !== false;
+    return (Array.isArray(links) ? links : []).filter((link) => {
+      const count = Number(link.count || 0);
+      if (count < min) return false;
+      const isUserLink = isUserCommLink(link);
+      if (isUserLink) return showUser;
+      return showAgent;
+    });
   }
 
   function groupActivityStats(group) {
@@ -898,6 +1125,77 @@
     return `M ${start.x} ${start.y} C ${c1x} ${start.y + mid}, ${c2x} ${end.y - mid}, ${end.x} ${end.y}`;
   }
 
+  function stableHash(input) {
+    const source = safeText(input);
+    let hash = 0;
+    for (let index = 0; index < source.length; index += 1) {
+      hash = ((hash << 5) - hash) + source.charCodeAt(index);
+      hash |= 0;
+    }
+    return Math.abs(hash);
+  }
+
+  function communicationGeometry(start, end, link, mode = "project") {
+    const userLink = safeText(link && link.from_id) === USER_NODE_ID || safeText(link && link.to_id) === USER_NODE_ID;
+    const dx = end.x - start.x;
+    const dy = end.y - start.y;
+    const absDx = Math.abs(dx);
+    const absDy = Math.abs(dy);
+    const horizontal = absDx >= absDy * 0.9;
+    const signX = dx === 0 ? 1 : Math.sign(dx);
+    const signY = dy === 0 ? 1 : Math.sign(dy);
+    const seed = `${safeText(link && link.id)}:${safeText(link && link.from_id)}:${safeText(link && link.to_id)}:${mode}`;
+    const laneIndex = (stableHash(seed) % 5) - 2;
+    const laneOffset = laneIndex * (horizontal ? 22 : 18);
+    const centerX = (start.x + end.x) / 2;
+    const centerY = (start.y + end.y) / 2;
+    if (userLink) {
+      const userIsStart = safeText(link && link.from_id) === USER_NODE_ID;
+      const userPoint = userIsStart ? start : end;
+      const peerPoint = userIsStart ? end : start;
+      const spanX = peerPoint.x - userPoint.x;
+      const spanY = peerPoint.y - userPoint.y;
+      const signX = spanX === 0 ? 1 : Math.sign(spanX);
+      const fanX = userPoint.x + signX * Math.max(96, Math.min(260, Math.abs(spanX) * 0.22 + 44)) + laneOffset;
+      const dropY = userPoint.y + Math.max(68, Math.min(156, Math.abs(spanY) * 0.22 + 26));
+      const approachY = peerPoint.y - Math.max(48, Math.min(132, Math.abs(spanY) * 0.16 + 18));
+      const path = `M ${userPoint.x} ${userPoint.y} C ${userPoint.x} ${dropY}, ${fanX} ${dropY}, ${fanX} ${(dropY + approachY) / 2} C ${fanX} ${approachY}, ${peerPoint.x} ${approachY}, ${peerPoint.x} ${peerPoint.y}`;
+      return {
+        path: userIsStart ? path : `M ${peerPoint.x} ${peerPoint.y} C ${peerPoint.x} ${approachY}, ${fanX} ${approachY}, ${fanX} ${(dropY + approachY) / 2} C ${fanX} ${dropY}, ${userPoint.x} ${dropY}, ${userPoint.x} ${userPoint.y}`,
+        labelPoint: {
+          x: Math.round((fanX + peerPoint.x) / 2),
+          y: Math.round((dropY + approachY) / 2 - 16),
+        },
+      };
+    }
+    if (horizontal) {
+      const reach = Math.max(84, Math.min(220, absDx * 0.28 + absDy * 0.12));
+      const bow = Math.max(42, Math.min(170, absDx * 0.12 + absDy * 0.16));
+      const bendY = centerY - signY * bow + laneOffset;
+      const midLeftX = centerX - Math.max(46, Math.min(140, absDx * 0.16));
+      const midRightX = centerX + Math.max(46, Math.min(140, absDx * 0.16));
+      return {
+        path: `M ${start.x} ${start.y} C ${start.x + signX * reach} ${start.y}, ${midLeftX} ${bendY}, ${centerX} ${bendY} C ${midRightX} ${bendY}, ${end.x - signX * reach} ${end.y}, ${end.x} ${end.y}`,
+        labelPoint: {
+          x: Math.round(centerX),
+          y: Math.round(bendY - (signY >= 0 ? 14 : -14)),
+        },
+      };
+    }
+    const reach = Math.max(84, Math.min(220, absDy * 0.28 + absDx * 0.12));
+    const bow = Math.max(52, Math.min(180, absDy * 0.14 + absDx * 0.18));
+    const bendX = centerX - signX * bow + laneOffset;
+    const midTopY = centerY - Math.max(52, Math.min(150, absDy * 0.16));
+    const midBottomY = centerY + Math.max(52, Math.min(150, absDy * 0.16));
+    return {
+      path: `M ${start.x} ${start.y} C ${start.x} ${start.y + signY * reach}, ${bendX} ${midTopY}, ${bendX} ${centerY} C ${bendX} ${midBottomY}, ${end.x} ${end.y - signY * reach}, ${end.x} ${end.y}`,
+      labelPoint: {
+        x: Math.round(bendX + (signX >= 0 ? 16 : -16)),
+        y: Math.round(centerY - 10),
+      },
+    };
+  }
+
   function parseBracketValues(text, label) {
     const results = [];
     const source = safeText(text);
@@ -943,7 +1241,8 @@
     return Array.from(resolved);
   }
 
-  function computeGroupsAndNodes(sessions, layoutStore = loadLayoutStore()) {
+  function computeGroupsAndNodes(sessions, layoutStore = loadLayoutStore(), options = {}) {
+    const includeUserNode = options.includeUserNode !== false;
     const channels = new Map();
     (sessions || []).forEach((session) => {
       const channelName = safeText(session.channel_name, "未分组通道");
@@ -959,54 +1258,101 @@
       }
       channels.get(channelName).sessions.push(session);
     });
+    channels.forEach((group) => {
+      group.sessions.sort((a, b) => safeText(a.alias, a.session_id).localeCompare(safeText(b.alias, b.session_id), "zh-Hans-CN"));
+      group.spec = projectGroupSpec(group);
+    });
     const savedMap = new Map((Array.isArray(layoutStore.groups) ? layoutStore.groups : []).map((group) => [group.id, group]));
     const savedNodeMap = new Map((Array.isArray(layoutStore.nodes) ? layoutStore.nodes : []).map((node) => [safeText(node.session_id || node.sessionId), node]));
     const rows = { master: [], assist: [], dev: [], other: [] };
     Array.from(channels.values())
-      .sort((a, b) => a.label.localeCompare(b.label, "zh-Hans-CN"))
+      .sort((a, b) => {
+        const countDiff = Number(b.sessions.length || 0) - Number(a.sessions.length || 0);
+        if (countDiff !== 0) return countDiff;
+        return a.label.localeCompare(b.label, "zh-Hans-CN");
+      })
       .forEach((group) => rows[group.rowKind].push(group));
 
     const groups = [];
-    Object.entries(rows).forEach(([rowKind, items]) => {
-      let cursorX = 140;
-      items.forEach((group, index) => {
-        const columns = Math.max(1, Math.min(3, Math.ceil(group.sessions.length / 2) || 1));
-        const width = Math.max(320, columns * (CARD_WIDTH + 20) + GROUP_PADDING * 2 - 20);
-        const height = Math.max(250, Math.ceil(group.sessions.length / columns) * (CARD_HEIGHT + 20) + 116);
-        const saved = savedMap.get(group.id);
-        groups.push({
-          id: group.id,
-          label: group.label,
-          rowKind,
-          accent: group.accent,
-          x: Number(saved && saved.x) || cursorX,
-          y: Number(saved && saved.y) || (ROWS[rowKind].y + (rowKind === "master" ? 0 : 10)),
-          w: Number(saved && saved.w) || width,
-          h: Number(saved && saved.h) || height,
-          z: Number.isFinite(Number(saved && saved.z)) ? Number(saved.z) : index,
-          sessionIds: group.sessions.map((item) => item.session_id),
+    const rowLayout = {};
+    const layoutOrder = ["master", "assist", "dev", "other"];
+    let cursorY = 156;
+    layoutOrder.forEach((rowKind) => {
+      const items = rows[rowKind] || [];
+      if (!items.length) {
+        rowLayout[rowKind] = { top: cursorY, labelY: cursorY - 54, height: 0, empty: true };
+        return;
+      }
+      const boardInnerLeft = 420;
+      const boardInnerRight = 420;
+      const maxRowWidth = Math.max(2200, STAGE_MIN.project.width - boardInnerLeft - boardInnerRight);
+      const groupGapX = rowKind === "master" ? 112 : 96;
+      const groupGapY = rowKind === "master" ? 92 : 84;
+      const bandGap = rowKind === "master" ? 112 : 132;
+      let laneY = cursorY;
+      const rowTop = cursorY;
+      let maxLaneHeight = 0;
+      let runningIndex = 0;
+      buildProjectRowLanes(items, maxRowWidth, groupGapX).forEach((lane) => {
+        const laneWidth = Number(lane.width || 0);
+        const laneStartX = boardInnerLeft + Math.max(0, Math.round((maxRowWidth - laneWidth) / 2));
+        let cursorX = laneStartX;
+        let laneHeight = 0;
+        lane.items.forEach((group) => {
+          const spec = group.spec || projectGroupSpec(group);
+          const width = spec.width;
+          const height = spec.height;
+          const saved = savedMap.get(group.id);
+          groups.push({
+            id: group.id,
+            label: group.label,
+            rowKind,
+            accent: group.accent,
+            x: Number(saved && saved.x) || cursorX,
+            y: Number(saved && saved.y) || laneY,
+            w: Number(saved && saved.w) || width,
+            h: Number(saved && saved.h) || height,
+            z: Number.isFinite(Number(saved && saved.z)) ? Number(saved.z) : runningIndex,
+            sessionIds: group.sessions.map((item) => item.session_id),
+            layout: spec,
+          });
+          cursorX += width + groupGapX;
+          laneHeight = Math.max(laneHeight, height);
+          runningIndex += 1;
         });
-        cursorX += width + 40;
+        maxLaneHeight = Math.max(maxLaneHeight, laneHeight);
+        laneY += laneHeight + groupGapY;
       });
+      const rowHeight = Math.max(0, laneY - rowTop - groupGapY) || maxLaneHeight;
+      rowLayout[rowKind] = {
+        top: rowTop,
+        labelY: Math.max(56, rowTop - 54),
+        height: rowHeight,
+        empty: false,
+      };
+      cursorY = rowTop + rowHeight + bandGap;
     });
     groups.sort((a, b) => a.z - b.z);
 
     const nodes = [];
     groups.forEach((group) => {
       const groupSessions = (sessions || []).filter((session) => group.sessionIds.includes(session.session_id));
-      const columns = Math.max(1, Math.floor((group.w - GROUP_PADDING * 2 + 20) / (CARD_WIDTH + 20)));
+      const spec = group.layout || projectGroupSpec({ sessions: groupSessions });
+      const columns = Math.max(1, Number(spec.columns) || 1);
       groupSessions.forEach((session, index) => {
         const col = index % columns;
         const row = Math.floor(index / columns);
         const savedNode = savedNodeMap.get(session.session_id);
+        const size = compactNodeCardSize(safeText(session.alias, session.session_id), "project");
+        const offsetX = Math.round((spec.cellW - size.w) / 2);
         nodes.push({
           id: session.session_id,
           session_id: session.session_id,
           group_id: group.id,
-          x: Number(savedNode && savedNode.x) || (group.x + GROUP_PADDING + col * (CARD_WIDTH + 20)),
-          y: Number(savedNode && savedNode.y) || (group.y + 72 + row * (CARD_HEIGHT + 20)),
-          w: CARD_WIDTH,
-          h: CARD_HEIGHT,
+          x: Number(savedNode && savedNode.x) || (group.x + spec.innerPadX + col * (spec.cellW + spec.nodeGapX) + offsetX),
+          y: Number(savedNode && savedNode.y) || (group.y + spec.headerH + spec.innerPadY + row * (spec.cellH + spec.nodeGapY)),
+          w: size.w,
+          h: size.h,
           alias: safeText(session.alias, session.session_id),
           role: safeText(session.desc || session.role, "协作Agent"),
           channel_name: safeText(session.channel_name, "未分组通道"),
@@ -1015,7 +1361,7 @@
         });
       });
     });
-    return { groups, nodes };
+    return { groups, nodes: includeUserNode ? attachTopUserNode(groups, nodes, STATE.projectId) : nodes, rowLayout };
   }
 
   function projectStatusFromTotals(totals) {
@@ -1076,6 +1422,44 @@
       width: Math.max(0, maxX - minX),
       height: Math.max(0, maxY - minY),
     };
+  }
+
+  function buildUserNode(x, y, projectId = "") {
+    return {
+      id: USER_NODE_ID,
+      session_id: USER_NODE_ID,
+      group_id: "",
+      x: Math.round(x),
+      y: Math.round(y),
+      w: 172,
+      h: 52,
+      alias: USER_NODE_LABEL,
+      role: "发起者",
+      channel_name: "用户维度",
+      status: "在线",
+      accent: "#f7a8c2",
+      kind: "user",
+      readonly: true,
+      project_id: safeText(projectId),
+      metric_items: [],
+    };
+  }
+
+  function attachTopUserNode(groups, nodes, projectId = "") {
+    const list = Array.isArray(nodes) ? nodes.slice() : [];
+    const bounds = computeBoardBounds(groups, list);
+    const fallbackWidth = isPlatformMode() ? STAGE_MIN.platform.width : STAGE_MIN.project.width;
+    const centerX = bounds.width > 0 ? (bounds.minX + bounds.maxX) / 2 : fallbackWidth / 2;
+    const topY = bounds.height > 0 ? Math.max(36, bounds.minY - 110) : 42;
+    list.unshift(buildUserNode(centerX - 86, topY, projectId));
+    return list;
+  }
+
+  function visibleAgentNodeCount() {
+    return (STATE.nodes || []).filter((node) => {
+      const kind = safeText(node && node.kind);
+      return kind !== "project" && kind !== "user";
+    }).length;
   }
 
   function platformSectionMeta(channelName) {
@@ -1172,6 +1556,16 @@
     filteredRuns.forEach((run) => {
       const sourceSessionId = safeText(run.session_id);
       if (!sourceSessionId) return;
+      if (safeText(run.sender_type) === "user" || safeText(run.message_kind) === "user_input") {
+        pairs.push({
+          source_session_id: USER_NODE_ID,
+          target_session_id: sourceSessionId,
+          created_at: safeText(run.created_at),
+          ts: dateMs(run.created_at),
+          run_id: safeText(run.run_id),
+        });
+        return;
+      }
       const targets = new Set();
       if (run.reply_to_run_id && runMap.has(run.reply_to_run_id)) {
         targets.add(safeText(runMap.get(run.reply_to_run_id).session_id));
@@ -1221,16 +1615,16 @@
       pairs.forEach((pair) => {
         const source = sessionMap.get(pair.source_session_id);
         const target = sessionMap.get(pair.target_session_id);
-        const sourceProjectId = safeText(source && source.project_id);
-        const targetProjectId = safeText(target && target.project_id);
+        const sourceProjectId = pair.source_session_id === USER_NODE_ID ? USER_NODE_ID : safeText(source && source.project_id);
+        const targetProjectId = pair.target_session_id === USER_NODE_ID ? USER_NODE_ID : safeText(target && target.project_id);
         if (!sourceProjectId || !targetProjectId || sourceProjectId === targetProjectId) return;
         const [endpointA, endpointB] = [sourceProjectId, targetProjectId].sort((a, b) => a.localeCompare(b, "en"));
         const key = `${endpointA}|${endpointB}`;
         if (!linkMap.has(key)) {
           linkMap.set(key, {
             id: `project-link:${key}`,
-            from_id: `project::${endpointA}`,
-            to_id: `project::${endpointB}`,
+            from_id: endpointA === USER_NODE_ID ? USER_NODE_ID : `project::${endpointA}`,
+            to_id: endpointB === USER_NODE_ID ? USER_NODE_ID : `project::${endpointB}`,
             count: 0,
             from_to_count: 0,
             to_from_count: 0,
@@ -1277,7 +1671,9 @@
     pairs.forEach((pair) => {
       const source = sessionMap.get(pair.source_session_id);
       const target = sessionMap.get(pair.target_session_id);
-      if (!source || !target) return;
+      const sourceIsUser = pair.source_session_id === USER_NODE_ID;
+      const targetIsUser = pair.target_session_id === USER_NODE_ID;
+      if ((!source && !sourceIsUser) || (!target && !targetIsUser)) return;
       const [endpointA, endpointB] = [pair.source_session_id, pair.target_session_id].sort((a, b) => a.localeCompare(b, "en"));
       const key = `${endpointA}|${endpointB}`;
       if (!linkMap.has(key)) {
@@ -1288,10 +1684,10 @@
           count: 0,
           from_to_count: 0,
           to_from_count: 0,
-          cross_project: safeText(source.project_id) !== safeText(target.project_id),
+          cross_project: sourceIsUser || targetIsUser || safeText(source && source.project_id) !== safeText(target && target.project_id),
           last_ts: 0,
-          source_project_id: safeText(source.project_id),
-          target_project_id: safeText(target.project_id),
+          source_project_id: sourceIsUser ? USER_NODE_ID : safeText(source && source.project_id),
+          target_project_id: targetIsUser ? USER_NODE_ID : safeText(target && target.project_id),
         });
       }
       const link = linkMap.get(key);
@@ -1360,59 +1756,57 @@
   }
 
   function buildPlatformProjectGroupsAndNodes(projects, sessions, metricsByProject) {
-    const layoutStore = loadLayoutStore();
-    const savedMap = new Map((Array.isArray(layoutStore.groups) ? layoutStore.groups : []).map((group) => [group.id, group]));
-    const savedNodeMap = new Map((Array.isArray(layoutStore.nodes) ? layoutStore.nodes : []).map((node) => [safeText(node.session_id || node.sessionId), node]));
     const groups = [];
     const nodes = [];
     const orderedProjects = sortProjects(projects);
-    const maxRowWidth = 8000;
-    const startX = 420;
-    const startY = 300;
-    const colGap = 260;
-    const rowGap = 250;
-    let cursorX = startX;
+    const maxRowWidth = 12800;
+    const startX = 520;
+    const startY = 340;
+    const colGap = 360;
+    const rowGap = 320;
+    const shellWidth = 620;
+    const shellHeight = 356;
+    const usableRowWidth = Math.max(2400, maxRowWidth - startX * 2);
+    const shellItems = orderedProjects.map((project, index) => ({
+      project,
+      index,
+      spec: { width: shellWidth, height: shellHeight },
+    }));
+    const lanes = buildProjectRowLanes(shellItems, usableRowWidth, colGap);
     let cursorY = startY;
-    let rowHeight = 0;
-    orderedProjects.forEach((project, index) => {
+
+    lanes.forEach((lane) => {
+      let cursorX = startX + Math.max(0, Math.round((usableRowWidth - Number(lane.width || 0)) / 2));
+      const laneHeight = lane.items.reduce((max, item) => Math.max(max, Number(item.spec && item.spec.height) || shellHeight), shellHeight);
+      lane.items.forEach(({ project, index }) => {
       const projectId = safeText(project.project_id);
       const groupId = `group:platform:project:${projectId}`;
-      const shellWidth = 620;
-      const shellHeight = 356;
-      if (cursorX + shellWidth > maxRowWidth) {
-        cursorX = startX;
-        cursorY += rowHeight + rowGap;
-        rowHeight = 0;
-      }
       const groupX = cursorX;
       const groupY = cursorY;
       cursorX += shellWidth + colGap;
-      rowHeight = Math.max(rowHeight, shellHeight);
-      const saved = savedMap.get(groupId);
       const group = {
         id: groupId,
         label: safeText(project.project_name || project.name || project.project_id, projectId),
         rowKind: "other",
         accent: projectAccent(project),
-        x: Number(saved && saved.x) || groupX,
-        y: Number(saved && saved.y) || groupY,
-        w: Number(saved && saved.w) || shellWidth,
-        h: Number(saved && saved.h) || shellHeight,
-        z: Number.isFinite(Number(saved && saved.z)) ? Number(saved.z) : index,
+        x: groupX,
+        y: groupY,
+        w: shellWidth,
+        h: shellHeight,
+        z: index,
         sessionIds: [`project::${projectId}`],
         kind: "project-shell",
         project_id: projectId,
       };
       groups.push(group);
       const totals = (project && project.totals && typeof project.totals === "object") ? project.totals : {};
-      const savedNode = savedNodeMap.get(`project::${projectId}`);
       const metrics = metricsByProject.get(projectId) || { session_count: 0, line_count: 0, cross_count: 0, message_count: 0, peer_count: 0 };
       nodes.push({
         id: `project::${projectId}`,
         session_id: `project::${projectId}`,
         group_id: group.id,
-        x: Number(savedNode && savedNode.x) || (group.x + 36),
-        y: Number(savedNode && savedNode.y) || (group.y + 104),
+        x: group.x + 36,
+        y: group.y + 104,
         w: 412,
         h: 160,
         alias: safeText(project.project_name || project.name || project.project_id, projectId),
@@ -1435,8 +1829,10 @@
           metrics,
         },
       });
+      });
+      cursorY += laneHeight + rowGap;
     });
-    return { groups, nodes, channelSections: [] };
+    return { groups, nodes: attachTopUserNode(groups, nodes), channelSections: [] };
   }
 
   function buildRunsUrl(projectId = STATE.projectId, limit = 200) {
@@ -1472,15 +1868,11 @@
   }
 
   function filteredPlatformCommLinks() {
-    const min = Math.max(0, Number(STATE.platformLineCountMin) || 0);
-    const scope = safeText(STATE.platformCommScope || "all");
-    return (STATE.platformCommLinks || []).filter((link) => {
-      const count = Number(link.count || 0);
-      if (count < min) return false;
-      if (scope === "cross") return Boolean(link.cross_project);
-      if (scope === "high") return count >= PLATFORM_HIGH_FREQ_COUNT;
-      return true;
-    });
+    return filteredCommLinks(STATE.platformCommLinks || []);
+  }
+
+  function filteredProjectCommLinks() {
+    return filteredCommLinks(STATE.commLinks || []);
   }
 
   function currentViewportRect() {
@@ -1549,36 +1941,13 @@
     return dy >= 0 ? "bottom" : "top";
   }
 
-  function defaultRelationLabel(type) {
-    return relationTone(type).label;
-  }
-
-  function buildStoredRelations(nodes, layoutStore = loadLayoutStore()) {
-    const validIds = new Set(nodes.map((node) => node.session_id));
-    const stored = Array.isArray(layoutStore.relations) ? layoutStore.relations : [];
-    return stored
-      .filter((edge) => edge && typeof edge === "object")
-      .map((edge) => ({
-        id: safeText(edge.id) || `relation:${Math.random().toString(36).slice(2, 10)}`,
-        from_session_id: safeText(edge.from_session_id || edge.fromSessionId),
-        to_session_id: safeText(edge.to_session_id || edge.toSessionId),
-        from_side: safeText(edge.from_side || edge.fromSide, "right"),
-        to_side: safeText(edge.to_side || edge.toSide, "left"),
-        type: safeText(edge.type, "business"),
-        label: safeText(edge.label, defaultRelationLabel(safeText(edge.type, "business"))),
-      }))
-      .filter((edge) => validIds.has(edge.from_session_id) && validIds.has(edge.to_session_id));
-  }
-
   function buildProjectLayoutSnapshot(projectId, sessions) {
     const scopedStore = loadLayoutStoreByKey(projectLayoutStorageKey(projectId));
-    const { groups, nodes } = computeGroupsAndNodes(sessions, scopedStore);
-    const relations = buildStoredRelations(nodes, scopedStore);
+    const { groups, nodes } = computeGroupsAndNodes(sessions, scopedStore, { includeUserNode: false });
     return {
       project_id: safeText(projectId),
       groups,
       nodes,
-      relations,
       bounds: computeBoardBounds(groups, nodes),
       zoom: Math.max(0.55, Math.min(1.6, Number(scopedStore.zoom) || 1)),
     };
@@ -1593,30 +1962,20 @@
   }
 
   function buildPlatformComposedAgentLayout(projects, sessions, messageCountBySession, peerMap, commCountBySession) {
-    const layoutStore = loadLayoutStore();
-    const savedShellMap = new Map(
-      (Array.isArray(layoutStore.groups) ? layoutStore.groups : [])
-        .filter((group) => safeText(group.kind) === "project-shell" || /^group:platform:project:/.test(safeText(group.id)))
-        .map((group) => [group.id, group])
-    );
     const groups = [];
     const nodes = [];
-    const relations = [];
     const layoutGroups = [];
     const orderedProjects = sortProjects(projects);
-    const maxRowWidth = 9600;
-    const startX = 560;
-    const startY = 320;
-    const colGap = 560;
-    const rowGap = 560;
-    const shellPadX = 110;
-    const shellPadY = 60;
-    const shellHeaderH = 108;
-    let cursorX = startX;
-    let cursorY = startY;
-    let rowHeight = 0;
-
-    orderedProjects.forEach((project, index) => {
+    const maxRowWidth = 15600;
+    const startX = 620;
+    const startY = 420;
+    const colGap = 680;
+    const rowGap = 640;
+    const shellPadX = 180;
+    const shellPadY = 120;
+    const shellHeaderH = 124;
+    const usableRowWidth = Math.max(3200, maxRowWidth - startX * 2);
+    const shellItems = orderedProjects.map((project, index) => {
       const projectId = safeText(project.project_id);
       const projectSessions = (sessions || []).filter((session) => safeText(session.project_id) === projectId);
       const snapshot = buildProjectLayoutSnapshot(projectId, projectSessions);
@@ -1625,7 +1984,7 @@
         : computeBoardBounds(snapshot.groups, snapshot.nodes);
       const rawWidth = Math.max(480, Number(bounds && bounds.width) || 0);
       const rawHeight = Math.max(320, Number(bounds && bounds.height) || 0);
-      const scale = Math.max(
+      const baseScale = Math.max(
         0.22,
         Math.min(
           PLATFORM_PROJECT_LAYOUT_BASE_SCALE,
@@ -1633,36 +1992,47 @@
           PLATFORM_PROJECT_LAYOUT_MAX_HEIGHT / rawHeight,
         ),
       ) * PLATFORM_PROJECT_LAYOUT_COMPACT_SCALE;
-      const shellWidth = Math.ceil(rawWidth * scale + shellPadX * 2);
-      const shellHeight = Math.ceil(rawHeight * scale + shellHeaderH + shellPadY * 2);
-      if (cursorX + shellWidth > maxRowWidth) {
-        cursorX = startX;
-        cursorY += rowHeight + rowGap;
-        rowHeight = 0;
-      }
-      const groupId = `group:platform:project:${projectId}`;
-      const savedShell = savedShellMap.get(groupId);
-      const shellX = Number(savedShell && savedShell.x) || cursorX;
-      const shellY = Number(savedShell && savedShell.y) || cursorY;
-      cursorX += shellWidth + colGap;
-      rowHeight = Math.max(rowHeight, shellHeight);
+      const mappedScale = Math.max(0.34, baseScale);
+      const shellWidth = Math.ceil(rawWidth * mappedScale + shellPadX * 2);
+      const shellHeight = Math.ceil(rawHeight * mappedScale + shellHeaderH + shellPadY * 2);
+      return {
+        project,
+        index,
+        projectId,
+        projectSessions,
+        snapshot,
+        bounds,
+        scale: mappedScale,
+        shellWidth,
+        shellHeight,
+        spec: { width: shellWidth, height: shellHeight },
+      };
+    });
+    const lanes = buildProjectRowLanes(shellItems, usableRowWidth, colGap);
+    let cursorY = startY;
 
+    lanes.forEach((lane) => {
+      let cursorX = startX + Math.max(0, Math.round((usableRowWidth - Number(lane.width || 0)) / 2));
+      const laneHeight = lane.items.reduce((max, item) => Math.max(max, Number(item.shellHeight) || 0), 0);
+      lane.items.forEach((item) => {
+      const { project, index, projectId, projectSessions, snapshot, bounds, scale, shellWidth, shellHeight } = item;
       const shellGroup = {
-        id: groupId,
+        id: `group:platform:project:${projectId}`,
         label: safeText(project.project_name || project.name || project.project_id, projectId),
         rowKind: "other",
         accent: projectAccent(project),
-        x: shellX,
-        y: shellY,
-        w: Number(savedShell && savedShell.w) || shellWidth,
-        h: Number(savedShell && savedShell.h) || shellHeight,
-        z: Number.isFinite(Number(savedShell && savedShell.z)) ? Number(savedShell.z) : index * 100,
+        x: cursorX,
+        y: cursorY,
+        w: shellWidth,
+        h: shellHeight,
+        z: index * 100,
         sessionIds: projectSessions.map((session) => session.session_id),
         kind: "project-shell",
         project_id: projectId,
         readonly: true,
       };
       groups.push(shellGroup);
+      cursorX += shellWidth + colGap;
 
       const offsetX = shellGroup.x + shellPadX - Number(bounds && bounds.minX || 0) * scale;
       const offsetY = shellGroup.y + shellHeaderH + shellPadY - Number(bounds && bounds.minY || 0) * scale;
@@ -1687,14 +2057,16 @@
       });
 
       snapshot.nodes.forEach((node) => {
-        const compactSize = compactNodeCardSize(node.alias, "platform");
+        const fallbackSize = compactNodeCardSize(node.alias, "project");
+        const mappedWidth = Math.max(96, Math.min(188, Math.round(Number(node.w || fallbackSize.w) * scale * 0.94)));
+        const mappedHeight = Math.max(46, Math.min(84, Math.round(Number(node.h || fallbackSize.h) * scale * 0.94)));
         nodes.push({
           ...node,
           group_id: node.group_id ? `platform:${projectId}:${node.group_id}` : shellGroup.id,
           x: Math.round(offsetX + Number(node.x || 0) * scale),
           y: Math.round(offsetY + Number(node.y || 0) * scale),
-          w: compactSize.w,
-          h: compactSize.h,
+          w: mappedWidth,
+          h: mappedHeight,
           project_id: projectId,
           readonly: true,
           metric_items: [
@@ -1704,23 +2076,12 @@
           ],
         });
       });
-
-      snapshot.relations.forEach((relation) => {
-        relations.push({
-          ...relation,
-          id: `platform:${projectId}:${relation.id}`,
-          readonly: true,
-          project_id: projectId,
-        });
-      });
+    });
+      cursorY += laneHeight + rowGap;
     });
 
     groups.sort((a, b) => a.z - b.z);
-    return { groups, nodes, relations, layoutGroups };
-  }
-
-  function visibleRelationCount() {
-    return STATE.manualRelations.filter((relation) => STATE.visibleRelations[relation.type] !== false).length;
+    return { groups, nodes: attachTopUserNode(groups, nodes), layoutGroups };
   }
 
   function showHoverTooltip(contentHtml, clientX, clientY) {
@@ -1760,27 +2121,10 @@
       el.classList.toggle("is-hidden", !visible);
       el.hidden = !visible;
     };
-    if (dom.envBadge) dom.envBadge.textContent = safeText(DATA.environment, "stable");
-    if (dom.taskLink) {
-      if (isPlatformMode()) {
-        dom.taskLink.textContent = "平台页";
-        dom.taskLink.href = safeText(LINKS.overview_page, "/share/project-overview-dashboard.html");
-      } else {
-        dom.taskLink.textContent = "任务页";
-        dom.taskLink.href = `${safeText(LINKS.task_page, "/share/project-task-dashboard.html")}#p=${encodeURIComponent(STATE.projectId)}`;
-      }
-    }
-    if (dom.curtainLink) {
-      if (isPlatformMode()) {
-        dom.curtainLink.href = `${safeText(DATA.agent_curtain_page || LINKS.agent_curtain_page, "/share/project-agent-curtain.html")}#mode=global`;
-      } else {
-        dom.curtainLink.href = `${safeText(DATA.agent_curtain_page || LINKS.agent_curtain_page, "/share/project-agent-curtain.html")}#p=${encodeURIComponent(STATE.projectId)}`;
-      }
-    }
     toggleVisible(dom.platformModeTabsWrap, isPlatformMode());
-    toggleVisible(dom.platformCommScopeFilters, isPlatformMode());
-    toggleVisible(dom.platformCommCountFilters, isPlatformMode());
-    toggleVisible(dom.relationToolbarStack, false);
+    toggleVisible(dom.platformProjectFilterWrap, isPlatformMode());
+    toggleVisible(dom.commTypeFilters, true);
+    toggleVisible(dom.platformCommCountFilters, true);
     if (dom.rosterSectionTitle) {
       dom.rosterSectionTitle.textContent = isPlatformMode()
         ? (STATE.platformLayoutMode === "project" ? "项目节点池" : "通道节点池（项目级布局拼接）")
@@ -1795,29 +2139,92 @@
         : `${STATE.projectName || STATE.projectId} · ${STATE.channelHint ? `通道 ${STATE.channelHint}` : "单项目组织视图"} · ${currentWindowLabel()}`;
     }
     if (dom.summaryMeta) {
-      const visibleComm = STATE.visibleRelations.message ? filteredPlatformCommLinks().length : 0;
-      const visibleCommTotal = STATE.visibleRelations.message ? totalCommCount(filteredPlatformCommLinks()) : 0;
+      const filteredPlatformLinks = filteredPlatformCommLinks();
+      const filteredProjectLinks = filteredProjectCommLinks();
+      const activeProjectCount = visiblePlatformProjects().length;
+      const totalProjectCount = platformProjectIds().length;
       dom.summaryMeta.textContent = isPlatformMode()
-        ? `项目 ${platformShellCount()} · ${STATE.platformLayoutMode === "agent" ? `节点 ${STATE.nodes.length}` : `项目节点 ${STATE.nodes.length}`} · 沟通线 ${visibleComm}/${STATE.platformCommLinks.length} · 总量 ${visibleCommTotal}${STATE.platformLineCountMin > 0 ? ` · 数量 ${STATE.platformLineCountMin}+` : ""}`
-        : `背景板 ${STATE.groups.length} · Agent ${STATE.nodes.length} · 沟通线 ${(STATE.visibleRelations.message ? STATE.commLinks.length : 0)} · 总量 ${STATE.visibleRelations.message ? totalCommCount(STATE.commLinks) : 0}`;
+        ? `项目 ${activeProjectCount}/${totalProjectCount} · ${STATE.platformLayoutMode === "agent" ? `Agent ${visibleAgentNodeCount()} + 用户` : `项目节点 ${STATE.nodes.length}`} · 沟通线 ${filteredPlatformLinks.length}/${STATE.platformCommLinks.length} · 总量 ${totalCommCount(filteredPlatformLinks)}${STATE.commLineCountMin > 0 ? ` · 数量 ${STATE.commLineCountMin}+` : ""}`
+        : `背景板 ${STATE.groups.length} · Agent ${visibleAgentNodeCount()} + 用户 · 沟通线 ${filteredProjectLinks.length} · 总量 ${totalCommCount(filteredProjectLinks)}${STATE.commLineCountMin > 0 ? ` · 数量 ${STATE.commLineCountMin}+` : ""}`;
+    }
+    if (dom.platformProjectFilterBtn && isPlatformMode()) {
+      const activeProjectCount = visiblePlatformProjects().length;
+      const totalProjectCount = platformProjectIds().length;
+      dom.platformProjectFilterBtn.textContent = totalProjectCount && activeProjectCount !== totalProjectCount
+        ? `项目筛选 ${activeProjectCount}/${totalProjectCount}`
+        : "项目筛选";
+    }
+    if (dom.platformProjectFilterPanel) {
+      dom.platformProjectFilterPanel.hidden = !STATE.platformProjectFilterOpen || !isPlatformMode();
     }
     dom.platformModeButtons.forEach((button) => {
       button.classList.toggle("is-active", button.dataset.platformLayout === STATE.platformLayoutMode);
     });
-    dom.platformScopeButtons.forEach((button) => {
-      button.classList.toggle("is-active", button.dataset.commScope === STATE.platformCommScope);
+    dom.commTypeButtons.forEach((button) => {
+      const kind = safeText(button.dataset.commKind);
+      button.classList.toggle("is-active", STATE.commVisibility[kind] !== false);
     });
     dom.platformCountButtons.forEach((button) => {
-      button.classList.toggle("is-active", Number(button.dataset.commCountMin || 0) === Number(STATE.platformLineCountMin || 0));
-    });
-    dom.relationTypeButtons.forEach((button) => {
-      button.classList.toggle("is-active", button.dataset.relationType === STATE.activeRelationType);
-    });
-    dom.visibilityButtons.forEach((button) => {
-      const key = button.dataset.visibility || "";
-      button.classList.toggle("is-active", STATE.visibleRelations[key] !== false);
+      button.classList.toggle("is-active", Number(button.dataset.commCountMin || 0) === Number(STATE.commLineCountMin || 0));
     });
     syncTimeControls();
+    renderPlatformProjectFilterPanel();
+  }
+
+  function renderRowLabels() {
+    const rowMeta = STATE.projectRowLayout || {};
+    Object.entries(ROWS).forEach(([rowKind, config]) => {
+      const label = document.querySelector(`.row-${rowKind}`);
+      if (!label) return;
+      if (isPlatformMode()) {
+        label.hidden = true;
+        return;
+      }
+      const meta = rowMeta[rowKind] || {};
+      label.hidden = Boolean(meta.empty);
+      label.textContent = safeText(config.label);
+      if (!meta.empty && Number.isFinite(Number(meta.labelY))) {
+        label.style.top = `${Math.round(Number(meta.labelY))}px`;
+      } else {
+        label.style.top = `${Math.round(Number(config.y || 0) - 50)}px`;
+      }
+    });
+  }
+
+  function renderPlatformProjectFilterPanel() {
+    if (!dom.platformProjectFilterList || !dom.platformProjectFilterSummary) return;
+    if (!isPlatformMode()) {
+      dom.platformProjectFilterList.innerHTML = "";
+      dom.platformProjectFilterSummary.textContent = "";
+      return;
+    }
+    normalizePlatformProjectSelection();
+    const projects = sortProjects(STATE.platformProjects);
+    const draft = new Set((STATE.platformProjectFilterDraft || []).map((item) => safeText(item)).filter(Boolean));
+    dom.platformProjectFilterSummary.textContent = `已选 ${draft.size} / ${projects.length}`;
+    dom.platformProjectFilterList.innerHTML = "";
+    projects.forEach((project) => {
+      const projectId = safeText(project.project_id);
+      const row = document.createElement("label");
+      row.className = "project-filter-item";
+      row.innerHTML = `
+        <input type="checkbox" value="${escapeHtml(projectId)}" ${draft.has(projectId) ? "checked" : ""} />
+        <div class="project-filter-item-main">
+          <div class="project-filter-item-name">${escapeHtml(firstText([project.project_name, project.name], projectId))}</div>
+          <div class="project-filter-item-meta">${escapeHtml(projectId)}</div>
+        </div>
+      `;
+      const input = row.querySelector("input");
+      input?.addEventListener("change", () => {
+        const next = new Set((STATE.platformProjectFilterDraft || []).map((item) => safeText(item)).filter(Boolean));
+        if (input.checked) next.add(projectId);
+        else next.delete(projectId);
+        STATE.platformProjectFilterDraft = projects.map((item) => safeText(item.project_id)).filter((id) => next.has(id));
+        STATE.platformProjectFilterDraftDirty = true;
+        dom.platformProjectFilterSummary.textContent = `已选 ${STATE.platformProjectFilterDraft.length} / ${projects.length}`;
+      });
+      dom.platformProjectFilterList.appendChild(row);
+    });
   }
 
   function syncZoom() {
@@ -1894,7 +2301,6 @@
       box.addEventListener("click", () => {
         STATE.selectedGroupId = group.id;
         STATE.selectedSessionId = "";
-        STATE.selectedRelationId = "";
         STATE.selectedPlatformCommLinkId = "";
         renderAll();
       });
@@ -1905,11 +2311,11 @@
       chip.className = `group-chip${group.id === STATE.selectedGroupId ? " selected" : ""}${activity.active ? " active" : ""}${activity.peak ? " peak" : ""}${readonly ? " readonly" : ""}`;
       chip.style.left = `${group.x + 14}px`;
       chip.style.top = `${group.y + 14}px`;
-      chip.innerHTML = `<span>${escapeHtml(group.label)}</span><span class="hint">${readonly ? "只读查看" : "拖动 / 改名"}</span>`;
+      const groupCount = Array.isArray(group.sessionIds) ? group.sessionIds.length : 0;
+      chip.innerHTML = `<span>${escapeHtml(group.label)}</span><span class="hint">${readonly ? "只读查看" : `${groupCount} 个Agent`}</span>`;
       if (!readonly) {
         chip.addEventListener("pointerdown", (event) => {
           STATE.selectedGroupId = group.id;
-          STATE.selectedRelationId = "";
           STATE.selectedSessionId = "";
           STATE.selectedPlatformCommLinkId = "";
           STATE.dragGroup = { id: group.id, pointerId: event.pointerId, originX: group.x, originY: group.y, startX: event.clientX, startY: event.clientY };
@@ -1927,7 +2333,6 @@
       } else {
         chip.addEventListener("click", () => {
           STATE.selectedGroupId = group.id;
-          STATE.selectedRelationId = "";
           STATE.selectedSessionId = "";
           STATE.selectedPlatformCommLinkId = "";
           renderAll();
@@ -1980,7 +2385,7 @@
       const readonly = Boolean(isPlatformNode && node.readonly);
       const compactAgentNode = nodeKind !== "project";
       const avatar = avatarMeta(node);
-      el.className = `node${node.session_id === STATE.selectedSessionId ? " selected" : ""}${STATE.relationDraft && STATE.relationDraft.from_session_id === node.session_id ? " connecting" : ""}${compactAgentNode ? " compact-name-only" : ""}${isPlatformNode ? ` platform-node ${nodeKind === "project" ? "project-node" : "agent-node"}` : ""}${readonly ? " readonly" : ""}`;
+      el.className = `node${node.session_id === STATE.selectedSessionId ? " selected" : ""}${compactAgentNode ? " compact-name-only" : ""}${isPlatformNode ? ` platform-node ${nodeKind === "project" ? "project-node" : "agent-node"}` : ""}${readonly ? " readonly" : ""}`;
       el.dataset.sessionId = node.session_id;
       el.style.left = `${node.x}px`;
       el.style.top = `${node.y}px`;
@@ -1988,9 +2393,6 @@
       el.style.minHeight = `${Number(node.h || CARD_HEIGHT)}px`;
       el.style.setProperty("--avatar-a", avatar.c1 || node.accent);
       el.style.setProperty("--avatar-b", avatar.c2 || rgbaFromHex(node.accent, 0.68));
-      const tags = [];
-      tags.push(`<span class="tag">${escapeHtml(node.status || "idle")}</span>`);
-      tags.push(`<span class="tag">${escapeHtml(node.channel_name)}</span>`);
       const metricItems = Array.isArray(node.metric_items) ? node.metric_items : [];
       const showPlatformStats = !(isPlatformNode && STATE.platformLayoutMode === "agent" && nodeKind !== "project");
       const platformStats = showPlatformStats
@@ -2015,22 +2417,15 @@
               <div class="node-sub">${escapeHtml(node.role)}</div>
             </div>
           </div>
-          <div class="node-tags">${STATE.visibleRelations.labels !== false ? tags.join("") : ""}</div>
           ${platformStats || '<div class="empty-platform-hint">当前时间窗口暂无统计。</div>'}
           `)
         : "";
       el.innerHTML = `
         ${isPlatformNode ? sharedNodeBody : compactHead}
-        ${node.kind === "project" || isPlatformNode ? "" : `
-        <button class="connector top" data-side="top" type="button" aria-label="从上侧连接 ${escapeHtml(node.alias)}"></button>
-        <button class="connector right" data-side="right" type="button" aria-label="从右侧连接 ${escapeHtml(node.alias)}"></button>
-        <button class="connector bottom" data-side="bottom" type="button" aria-label="从下侧连接 ${escapeHtml(node.alias)}"></button>
-        <button class="connector left" data-side="left" type="button" aria-label="从左侧连接 ${escapeHtml(node.alias)}"></button>`}
       `;
       if (!readonly) {
         el.addEventListener("pointerdown", (event) => {
           if (event.button !== 0) return;
-          if (event.target && event.target.closest && event.target.closest(".connector")) return;
           STATE.dragNode = {
             id: node.session_id,
             pointerId: event.pointerId,
@@ -2045,59 +2440,11 @@
       el.addEventListener("click", () => {
         STATE.selectedSessionId = node.session_id;
         STATE.selectedGroupId = "";
-        STATE.selectedRelationId = "";
         STATE.selectedPlatformCommLinkId = "";
         renderAll();
       });
       dom.nodesLayer.appendChild(el);
-      el.querySelectorAll(".connector").forEach((connector) => {
-        connector.addEventListener("click", (event) => {
-          event.stopPropagation();
-          const side = connector.dataset.side || "right";
-          const draft = STATE.relationDraft;
-          if (draft) {
-            if (draft.from_session_id === node.session_id) {
-              STATE.relationDraft = null;
-              renderLinks();
-              return;
-            }
-            completeRelationDraft(node.session_id, side);
-            return;
-          }
-          const start = nodeAnchor(node, side);
-          STATE.relationDraft = {
-            from_session_id: node.session_id,
-            from_side: side,
-            currentX: start ? start.x : node.x + node.w,
-            currentY: start ? start.y : node.y + node.h / 2,
-          };
-          renderAll();
-        });
-      });
     });
-  }
-
-  function completeRelationDraft(targetSessionId, targetSide) {
-    const draft = STATE.relationDraft;
-    if (!draft || !targetSessionId) return false;
-    if (draft.from_session_id === targetSessionId) {
-      STATE.relationDraft = null;
-      renderLinks();
-      return false;
-    }
-    STATE.manualRelations.push({
-      id: `relation:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 7)}`,
-      from_session_id: draft.from_session_id,
-      to_session_id: targetSessionId,
-      from_side: draft.from_side,
-      to_side: safeText(targetSide, "left"),
-      type: STATE.activeRelationType,
-      label: defaultRelationLabel(STATE.activeRelationType),
-    });
-    STATE.relationDraft = null;
-    persistLayoutStore();
-    renderAll();
-    return true;
   }
 
   function nodeCenter(node) {
@@ -2144,16 +2491,6 @@
     };
   }
 
-  function communicationLabelPoint(start, end) {
-    const dx = end.x - start.x;
-    const dy = end.y - start.y;
-    const lift = Math.max(18, Math.min(46, Math.abs(dx) * 0.08 + Math.abs(dy) * 0.04));
-    return {
-      x: Math.round((start.x + end.x) / 2),
-      y: Math.round((start.y + end.y) / 2 - lift),
-    };
-  }
-
   function bindCommunicationHover(target, link, labels) {
     target.addEventListener("mouseenter", (event) => {
       showHoverTooltip(communicationDetailHtml(link, labels.fromLabel, labels.toLabel), event.clientX, event.clientY);
@@ -2171,16 +2508,17 @@
     const end = nodeLinkAnchor(toNode, fromNode);
     if (!start || !end) return;
     const tone = communicationTone(Number(link.count || 0));
+    const userLink = safeText(link.from_id) === USER_NODE_ID || safeText(link.to_id) === USER_NODE_ID;
+    const geometry = communicationGeometry(start, end, link, mode);
     const selectLink = (event) => {
       event.stopPropagation();
       STATE.selectedPlatformCommLinkId = link.id;
-      STATE.selectedRelationId = "";
       STATE.selectedGroupId = "";
       STATE.selectedSessionId = "";
       renderAll();
     };
     const hit = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    hit.setAttribute("d", curvePath(start, end));
+    hit.setAttribute("d", geometry.path);
     hit.setAttribute("class", "relation-hit");
     hit.dataset.commId = link.id;
     hit.addEventListener("click", selectLink);
@@ -2188,19 +2526,19 @@
     dom.linesSvg.appendChild(hit);
 
     const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    path.setAttribute("d", curvePath(start, end));
-    path.setAttribute("class", `comm-line ${mode} ${tone}${link.cross_project ? " cross-project" : ""}${link.id === STATE.selectedPlatformCommLinkId ? " selected" : ""}`);
-    path.style.setProperty("--comm-width", String(communicationStrokeWidth(link.count, mode)));
+    path.setAttribute("d", geometry.path);
+    path.setAttribute("class", `comm-line ${mode} ${tone}${userLink ? " user-link" : ""}${link.cross_project ? " cross-project" : ""}${link.id === STATE.selectedPlatformCommLinkId ? " selected" : ""}`);
+    path.style.setProperty("--comm-width", String(communicationStrokeWidth(link.count, mode) + (userLink ? (mode === "platform" ? 1.8 : 1.2) : 0)));
     path.addEventListener("click", selectLink);
     bindCommunicationHover(path, link, { fromLabel, toLabel });
     dom.linesSvg.appendChild(path);
 
     if (Number(link.count || 0) > 0) {
-      const labelPoint = communicationLabelPoint(start, end);
+      const labelPoint = geometry.labelPoint;
       const labelText = String(Number(link.count || 0));
       const badgeWidth = Math.max(24, 16 + labelText.length * 8);
       const badge = document.createElementNS("http://www.w3.org/2000/svg", "rect");
-      badge.setAttribute("class", `comm-badge${link.cross_project ? " cross-project" : ""}${link.id === STATE.selectedPlatformCommLinkId ? " selected" : ""}`);
+      badge.setAttribute("class", `comm-badge${userLink ? " user-link" : ""}${link.cross_project ? " cross-project" : ""}${link.id === STATE.selectedPlatformCommLinkId ? " selected" : ""}`);
       badge.setAttribute("x", String(Math.round(labelPoint.x - badgeWidth / 2)));
       badge.setAttribute("y", String(Math.round(labelPoint.y - 11)));
       badge.setAttribute("width", String(badgeWidth));
@@ -2211,7 +2549,7 @@
       bindCommunicationHover(badge, link, { fromLabel, toLabel });
       dom.linesSvg.appendChild(badge);
       const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
-      label.setAttribute("class", `comm-label ${tone}${link.cross_project ? " cross-project" : ""}${link.id === STATE.selectedPlatformCommLinkId ? " selected" : ""}`);
+      label.setAttribute("class", `comm-label ${tone}${userLink ? " user-link" : ""}${link.cross_project ? " cross-project" : ""}${link.id === STATE.selectedPlatformCommLinkId ? " selected" : ""}`);
       label.setAttribute("x", String(labelPoint.x));
       label.setAttribute("y", String(labelPoint.y + 1));
       label.setAttribute("text-anchor", "middle");
@@ -2222,82 +2560,31 @@
     }
   }
 
-  function drawRelation(edge) {
-    if (STATE.visibleRelations[edge.type] === false) return;
-    const fromNode = nodeBySessionId(edge.from_session_id);
-    const toNode = nodeBySessionId(edge.to_session_id);
-    const start = nodeAnchor(fromNode, edge.from_side);
-    const end = nodeAnchor(toNode, edge.to_side);
-    if (!start || !end) return;
-    const tone = relationTone(edge.type);
-    const selectRelation = (event) => {
-      event.stopPropagation();
-      STATE.selectedRelationId = edge.id;
-      STATE.selectedPlatformCommLinkId = "";
-      STATE.selectedGroupId = "";
-      STATE.selectedSessionId = "";
-      renderAll();
-    };
-    const hit = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    hit.setAttribute("d", curvePath(start, end));
-    hit.setAttribute("class", "relation-hit");
-    hit.dataset.relationId = edge.id;
-    hit.addEventListener("click", selectRelation);
-    dom.linesSvg.appendChild(hit);
-    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    path.setAttribute("d", curvePath(start, end));
-    path.setAttribute("class", `relation-line ${edge.type}${edge.id === STATE.selectedRelationId ? " selected" : ""}`);
-    path.setAttribute("stroke", tone.color);
-    path.dataset.relationId = edge.id;
-    path.addEventListener("click", selectRelation);
-    dom.linesSvg.appendChild(path);
-    if (STATE.visibleRelations.labels !== false) {
-      const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
-      label.setAttribute("class", "relation-label");
-      label.setAttribute("x", String((start.x + end.x) / 2));
-      label.setAttribute("y", String((start.y + end.y) / 2 - 10));
-      label.setAttribute("text-anchor", "middle");
-      label.dataset.relationId = edge.id;
-      label.textContent = edge.label || tone.label;
-      label.addEventListener("click", selectRelation);
-      dom.linesSvg.appendChild(label);
-    }
-  }
-
   function renderLinks() {
-    dom.linesSvg.innerHTML = `
-      <defs>
-        <marker id="relationArrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
-          <path d="M0,0 L10,5 L0,10 z" fill="rgba(238,245,255,0.86)"></path>
-        </marker>
-      </defs>
-    `;
+    dom.linesSvg.innerHTML = "";
     if (isPlatformMode()) {
-      if (STATE.platformLayoutMode === "agent") {
-        STATE.manualRelations.forEach((relation) => drawRelation(relation));
-      }
-      if (STATE.visibleRelations.message === true) {
-        const visibleLinks = filteredPlatformCommLinks();
-        const viewport = currentViewportRect();
-        visibleLinks.forEach((link, index) => drawAggregatedCommLink(link, index, viewport, "platform"));
-      }
+      const visibleLinks = filteredPlatformCommLinks()
+        .slice()
+        .sort((a, b) => {
+          const aUser = isUserCommLink(a);
+          const bUser = isUserCommLink(b);
+          if (aUser !== bUser) return aUser ? 1 : -1;
+          return Number(a.count || 0) - Number(b.count || 0) || safeText(a.id).localeCompare(safeText(b.id), "en");
+        });
+      const viewport = currentViewportRect();
+      visibleLinks.forEach((link, index) => drawAggregatedCommLink(link, index, viewport, "platform"));
       return;
     }
-    STATE.manualRelations.forEach((relation) => drawRelation(relation));
-    if (STATE.visibleRelations.message === true) {
-      const viewport = currentViewportRect();
-      STATE.commLinks.forEach((link, index) => drawAggregatedCommLink(link, index, viewport, "project"));
-    }
-    if (STATE.relationDraft) {
-      const fromNode = nodeBySessionId(STATE.relationDraft.from_session_id);
-      const start = nodeAnchor(fromNode, STATE.relationDraft.from_side);
-      if (start) {
-        const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-        path.setAttribute("d", curvePath(start, { x: STATE.relationDraft.currentX, y: STATE.relationDraft.currentY }));
-        path.setAttribute("class", "draft-line");
-        dom.linesSvg.appendChild(path);
-      }
-    }
+    const viewport = currentViewportRect();
+    filteredProjectCommLinks()
+      .slice()
+      .sort((a, b) => {
+        const aUser = isUserCommLink(a);
+        const bUser = isUserCommLink(b);
+        if (aUser !== bUser) return aUser ? 1 : -1;
+        return Number(a.count || 0) - Number(b.count || 0) || safeText(a.id).localeCompare(safeText(b.id), "en");
+      })
+      .forEach((link, index) => drawAggregatedCommLink(link, index, viewport, "project"));
   }
 
   function renderGroupList() {
@@ -2322,7 +2609,6 @@
       item.addEventListener("click", () => {
         STATE.selectedGroupId = group.id;
         STATE.selectedSessionId = "";
-        STATE.selectedRelationId = "";
         STATE.selectedPlatformCommLinkId = "";
         renderAll();
       });
@@ -2392,7 +2678,6 @@
       item.addEventListener("click", () => {
         STATE.selectedSessionId = node.session_id;
         STATE.selectedGroupId = "";
-        STATE.selectedRelationId = "";
         STATE.selectedPlatformCommLinkId = "";
         renderAll();
         centerOnNode(node);
@@ -2404,8 +2689,7 @@
   function renderDetail() {
     const group = STATE.groups.find((item) => item.id === STATE.selectedGroupId);
     const node = STATE.nodes.find((item) => item.session_id === STATE.selectedSessionId);
-    const relation = STATE.manualRelations.find((item) => item.id === STATE.selectedRelationId);
-    const platformCommLink = (STATE.platformCommLinks || []).find((item) => item.id === STATE.selectedPlatformCommLinkId);
+    const selectedCommLink = (isPlatformMode() ? STATE.platformCommLinks : STATE.commLinks || []).find((item) => item.id === STATE.selectedPlatformCommLinkId);
     if (group) {
       dom.detailTitle.textContent = group.label;
       const readonly = Boolean(isPlatformMode() && group.readonly);
@@ -2448,86 +2732,43 @@
       dom.detailPanel.classList.remove("collapsed");
       return;
     }
-    if (platformCommLink) {
-      const { fromNode, toNode, fromLabel, toLabel } = communicationEndpointLabels(platformCommLink);
+    if (selectedCommLink) {
+      const { fromNode, toNode, fromLabel, toLabel } = communicationEndpointLabels(selectedCommLink);
       dom.detailTitle.textContent = "沟通线详情";
       dom.detailBody.innerHTML = `
         <div class="detail-grid">
           <div class="k">对象</div><div>${isPlatformMode() && STATE.platformLayoutMode === "project" ? "项目沟通线" : "Agent 沟通线"}</div>
           <div class="k">节点A</div><div>${escapeHtml(fromLabel)}</div>
           <div class="k">节点B</div><div>${escapeHtml(toLabel)}</div>
-          <div class="k">沟通量</div><div>${Number(platformCommLink.count || 0)}</div>
-          <div class="k">${escapeHtml(fromLabel)} → ${escapeHtml(toLabel)}</div><div>${Number(platformCommLink.from_to_count || 0)}</div>
-          <div class="k">${escapeHtml(toLabel)} → ${escapeHtml(fromLabel)}</div><div>${Number(platformCommLink.to_from_count || 0)}</div>
-          <div class="k">类型</div><div>${platformCommLink.cross_project ? "跨项目" : "项目内"}</div>
-          <div class="k">范围过滤</div><div>${escapeHtml(({
-            all: "全部沟通",
-            cross: "只看跨项目",
-            high: `只看高频(${PLATFORM_HIGH_FREQ_COUNT}+)`,
-          })[safeText(STATE.platformCommScope || "all")] || "全部沟通")}</div>
-          <div class="k">最近时间</div><div>${fmtDateTime(platformCommLink.last_ts)}</div>
+          <div class="k">沟通量</div><div>${Number(selectedCommLink.count || 0)}</div>
+          <div class="k">${escapeHtml(fromLabel)} → ${escapeHtml(toLabel)}</div><div>${Number(selectedCommLink.from_to_count || 0)}</div>
+          <div class="k">${escapeHtml(toLabel)} → ${escapeHtml(fromLabel)}</div><div>${Number(selectedCommLink.to_from_count || 0)}</div>
+          <div class="k">类型</div><div>${isUserCommLink(selectedCommLink) ? "用户参与" : "Agent之间"}</div>
+          <div class="k">范围</div><div>${selectedCommLink.cross_project ? "跨项目" : "项目内"}</div>
+          <div class="k">最近时间</div><div>${fmtDateTime(selectedCommLink.last_ts)}</div>
         </div>
       `;
-      dom.detailPanel.classList.remove("collapsed");
-      return;
-    }
-    if (relation) {
-      const fromNode = nodeBySessionId(relation.from_session_id);
-      const toNode = nodeBySessionId(relation.to_session_id);
-      if (isPlatformMode()) {
-        dom.detailTitle.textContent = relation.label || relationTone(relation.type).label;
-        dom.detailBody.innerHTML = `
-          <div class="detail-grid">
-            <div class="k">对象</div><div>项目内业务关系</div>
-            <div class="k">项目</div><div>${escapeHtml(relation.project_id || "-")}</div>
-            <div class="k">起点</div><div>${escapeHtml(fromNode ? fromNode.alias : relation.from_session_id)}</div>
-            <div class="k">终点</div><div>${escapeHtml(toNode ? toNode.alias : relation.to_session_id)}</div>
-            <div class="k">关系类型</div><div>${escapeHtml(relationTone(relation.type).label)}</div>
-            <div class="k">显示名称</div><div>${escapeHtml(relation.label || relationTone(relation.type).label)}</div>
-          </div>
-          <div style="margin-top:14px;font-size:12px;color:var(--muted);">平台页中的项目内关系来自项目级布局快照，当前为只读查看。</div>
-        `;
-        dom.detailPanel.classList.remove("collapsed");
-        return;
-      }
-      dom.detailTitle.textContent = relation.label || relationTone(relation.type).label;
-      dom.detailBody.innerHTML = `
-        <div class="detail-grid">
-          <div class="k">对象</div><div>关系线</div>
-          <div class="k">起点</div><div>${escapeHtml(fromNode ? fromNode.alias : relation.from_session_id)}</div>
-          <div class="k">终点</div><div>${escapeHtml(toNode ? toNode.alias : relation.to_session_id)}</div>
-        </div>
-        <div class="field-stack">
-          <label class="field-label" for="relationLabelInput">关系名称</label>
-          <input class="field-input" id="relationLabelInput" value="${escapeHtml(relation.label || relationTone(relation.type).label)}" />
-          <label class="field-label" for="relationTypeSelect">关系类型</label>
-          <select class="field-select" id="relationTypeSelect">
-            ${Object.entries(RELATION_TYPES).map(([key, meta]) => `<option value="${escapeHtml(key)}"${relation.type === key ? " selected" : ""}>${escapeHtml(meta.label)}</option>`).join("")}
-          </select>
-        </div>
-        <div class="detail-actions">
-          <button class="chip" id="saveRelationBtn" type="button">保存关系</button>
-          <button class="chip" id="deleteRelationBtn" type="button">删除关系</button>
-        </div>
-      `;
-      dom.detailBody.querySelector("#saveRelationBtn")?.addEventListener("click", () => {
-        const labelInput = dom.detailBody.querySelector("#relationLabelInput");
-        const typeSelect = dom.detailBody.querySelector("#relationTypeSelect");
-        relation.type = safeText(typeSelect && typeSelect.value, relation.type);
-        relation.label = safeText(labelInput && labelInput.value, defaultRelationLabel(relation.type));
-        persistLayoutStore();
-        renderAll();
-      });
-      dom.detailBody.querySelector("#deleteRelationBtn")?.addEventListener("click", () => {
-        STATE.manualRelations = STATE.manualRelations.filter((item) => item.id !== relation.id);
-        STATE.selectedRelationId = "";
-        persistLayoutStore();
-        renderAll();
-      });
       dom.detailPanel.classList.remove("collapsed");
       return;
     }
     if (node) {
+      if (node.kind === "user") {
+        dom.detailTitle.textContent = node.alias;
+        const stats = nodeCommunicationStats(node.session_id, isPlatformMode() ? filteredPlatformCommLinks() : filteredProjectCommLinks());
+        dom.detailBody.innerHTML = `
+          <div class="detail-grid">
+            <div class="k">对象</div><div>用户</div>
+            <div class="k">角色</div><div>消息发起者</div>
+            <div class="k">沟通对象</div><div>${stats.peer_count}</div>
+            <div class="k">往来总量</div><div>${stats.total_count}</div>
+            <div class="k">发出</div><div>${stats.outbound_count}</div>
+            <div class="k">收到</div><div>${stats.inbound_count}</div>
+          </div>
+          <div style="margin-top:14px;font-size:12px;color:var(--muted);">当前时间窗口内，所有由用户发起的消息都会汇总连到这个用户节点。</div>
+        `;
+        dom.detailPanel.classList.remove("collapsed");
+        return;
+      }
       if (node.kind === "project") {
         const summary = (node.project_summary && typeof node.project_summary === "object") ? node.project_summary : {};
         const totals = (summary.totals && typeof summary.totals === "object") ? summary.totals : {};
@@ -2567,7 +2808,7 @@
         dom.detailPanel.classList.remove("collapsed");
         return;
       }
-      const stats = nodeCommunicationStats(node.session_id);
+      const stats = nodeCommunicationStats(node.session_id, filteredProjectCommLinks());
       dom.detailTitle.textContent = node.alias;
       dom.detailBody.innerHTML = `
         <div class="detail-grid">
@@ -2594,6 +2835,7 @@
     if (dom.stageWrap && dom.stageWrap.hidden) dom.stageWrap.hidden = false;
     applyStageMetrics();
     renderHeader();
+    renderRowLabels();
     renderGroups();
     renderNodes();
     renderLinks();
@@ -2661,18 +2903,32 @@
   }
 
   function hydratePlatformView() {
-    const projects = sortProjects(STATE.platformProjects);
-    const sessions = (STATE.sessions || []).filter((session) => safeText(session.project_id));
+    const projects = visiblePlatformProjects();
+    if (!projects.length) {
+      STATE.projectRowLayout = {};
+      STATE.groups = [];
+      STATE.nodes = [];
+      STATE.commLinks = [];
+      STATE.platformCommLinks = [];
+      STATE.channelSections = [];
+      STATE.selectedPlatformCommLinkId = "";
+      renderAll();
+      syncZoom();
+      setStatus("当前没有选中项目，请在顶部项目筛选中至少选择一个项目。", "empty");
+      return;
+    }
+    const projectIdSet = new Set(projects.map((item) => safeText(item.project_id)));
+    const sessions = (STATE.sessions || []).filter((session) => projectIdSet.has(safeText(session.project_id)));
     const layoutStore = loadLayoutStore();
     STATE.zoom = Math.max(0.55, Math.min(1.6, Number(layoutStore.zoom) || 1));
     const aggregate = aggregatePlatformCommunication(STATE.platformLayoutMode, projects, sessions, STATE.runs);
+    STATE.projectRowLayout = {};
     STATE.platformCommLinks = aggregate.links;
     STATE.commLinks = [];
     STATE.channelSections = [];
-    STATE.selectedRelationId = "";
     STATE.selectedPlatformCommLinkId = "";
     if (STATE.platformLayoutMode === "agent") {
-      const { groups, nodes, relations, layoutGroups } = buildPlatformComposedAgentLayout(
+      const { groups, nodes, layoutGroups } = buildPlatformComposedAgentLayout(
         projects,
         sessions,
         aggregate.messageCountBySession || new Map(),
@@ -2682,8 +2938,7 @@
       STATE.groups = groups;
       STATE.channelSections = layoutGroups;
       STATE.nodes = nodes;
-      STATE.manualRelations = relations;
-      setStatus(`已进入平台 Agent 模式，加载 ${platformShellCount()} 个项目外壳、${platformLayoutGroupCount()} 个项目内背景板、${STATE.nodes.length} 个通道节点、${STATE.platformCommLinks.length} 根沟通线。`, "ready");
+      setStatus(`已进入平台 Agent 模式，加载 ${projects.length} 个项目外壳、${platformLayoutGroupCount()} 个项目内背景板、${visibleAgentNodeCount()} 个 Agent 节点、1 个用户节点、${STATE.platformCommLinks.length} 根沟通线。`, "ready");
     } else {
       const { groups, nodes } = buildPlatformProjectGroupsAndNodes(
         projects,
@@ -2692,12 +2947,43 @@
       );
       STATE.groups = groups;
       STATE.nodes = nodes;
-      STATE.manualRelations = [];
-      setStatus(`已进入平台项目模式，加载 ${STATE.groups.length} 个项目外壳、${STATE.platformCommLinks.length} 根跨项目沟通线。`, "ready");
+      setStatus(`已进入平台项目模式，加载 ${projects.length} 个项目外壳、${STATE.platformCommLinks.length} 根跨项目沟通线。`, "ready");
     }
     renderAll();
     syncZoom();
     restoreViewportForFreshLayout(layoutStore);
+  }
+
+  function applyProjectViewState(sessions, runs, sessionSource, options = {}) {
+    STATE.sessions = Array.isArray(sessions) ? sessions.slice() : [];
+    STATE.runs = Array.isArray(runs) ? runs.slice() : [];
+    const { groups, nodes, rowLayout } = computeGroupsAndNodes(STATE.sessions);
+    const aggregate = aggregateNodeCommunicationLinks(nodes, STATE.runs);
+    STATE.groups = groups;
+    STATE.projectRowLayout = rowLayout || {};
+    STATE.nodes = nodes.map((node) => ({
+      ...node,
+      ...compactNodeCardSize(node.alias, "project"),
+      metric_items: [
+        { label: "消息", value: Number(aggregate.messageCountBySession.get(node.session_id) || 0) },
+        { label: "对象", value: Number(aggregate.peerMap.get(node.session_id) || 0) },
+        { label: "往来", value: Number(aggregate.commCountBySession.get(node.session_id) || 0) },
+      ],
+    }));
+    const layoutStore = loadLayoutStore();
+    STATE.zoom = Math.max(0.55, Math.min(1.6, Number(layoutStore.zoom) || 1));
+    STATE.commLinks = aggregate.links;
+    renderAll();
+    syncZoom();
+    if (!STATE.nodes.length) {
+      setStatus("当前项目暂无会话数据，保持只读空态。", "empty");
+      return;
+    }
+    const note = safeText(options.note);
+    setStatus(
+      `已加载 ${visibleAgentNodeCount()} 个 Agent、1 个用户节点、${STATE.commLinks.length} 根聚合沟通线 · ${safeText(sessionSource, "构建快照")}${note}`,
+      "ready",
+    );
   }
 
   async function loadData() {
@@ -2712,6 +2998,7 @@
           source_kind: firstText([item.source_kind, item.sourceKind], "real"),
         })).filter((item) => item.project_id);
         STATE.platformProjects = sortProjects(projects);
+        normalizePlatformProjectSelection();
         STATE.sessions = buildPlatformSessionsFromPayload(STATE.platformProjects);
         STATE.sharedAvatarStore = await fetchSharedAvatarStores(STATE.platformProjects.map((item) => item.project_id));
         STATE.runs = [];
@@ -2743,66 +3030,36 @@
     }
     setStatus(`正在加载 ${STATE.projectId} 的 Agent 组织战略...`, "loading");
     try {
-      const [sessionsPayload, runsPayload, sharedAvatarStore] = await Promise.all([
-        fetchJson(`/api/sessions?project_id=${encodeURIComponent(STATE.projectId)}`),
-        fetchJson(buildRunsUrl()),
+      const payloadSessions = buildProjectSessionsFromPayload(STATE.projectId);
+      if (payloadSessions.length) {
+        applyProjectViewState(payloadSessions, [], "构建快照", { note: " · 正在补充实时会话" });
+      }
+      const [sessionsResult, runsResult, sharedAvatarStore] = await Promise.allSettled([
+        fetchJson(`/api/sessions?project_id=${encodeURIComponent(STATE.projectId)}`, { timeoutMs: 45000 }),
+        fetchJson(buildRunsUrl(), { timeoutMs: 12000 }),
         fetchSharedAvatarStore(STATE.projectId),
       ]);
-      STATE.sharedAvatarStore = sharedAvatarStore;
-      STATE.sessions = (Array.isArray(sessionsPayload.sessions) ? sessionsPayload.sessions : []).map(normalizeSession).filter(Boolean);
-      STATE.runs = (Array.isArray(runsPayload.runs) ? runsPayload.runs : []).map(normalizeRun).filter(Boolean);
-      const { groups, nodes } = computeGroupsAndNodes(STATE.sessions);
-      const aggregate = aggregateNodeCommunicationLinks(nodes, STATE.runs);
-      STATE.groups = groups;
-      STATE.nodes = nodes.map((node) => ({
-        ...node,
-        ...compactNodeCardSize(node.alias, "project"),
-        metric_items: [
-          { label: "消息", value: Number(aggregate.messageCountBySession.get(node.session_id) || 0) },
-          { label: "对象", value: Number(aggregate.peerMap.get(node.session_id) || 0) },
-          { label: "往来", value: Number(aggregate.commCountBySession.get(node.session_id) || 0) },
-        ],
-      }));
-      const layoutStore = loadLayoutStore();
-      STATE.zoom = Math.max(0.55, Math.min(1.6, Number(layoutStore.zoom) || 1));
-      STATE.manualRelations = buildStoredRelations(STATE.nodes);
-      STATE.commLinks = aggregate.links;
-      renderAll();
-      syncZoom();
-      if (!STATE.nodes.length) {
-        setStatus("当前项目暂无会话数据，保持只读空态。", "empty");
-      } else {
-        setStatus(`已加载 ${STATE.nodes.length} 个 Agent，${STATE.manualRelations.length} 条业务关系，${STATE.commLinks.length} 根聚合沟通线。`, "ready");
-      }
+      STATE.sharedAvatarStore = sharedAvatarStore.status === "fulfilled" ? sharedAvatarStore.value : emptyAvatarStore();
+      const runtimeSessions = sessionsResult.status === "fulfilled"
+        ? (Array.isArray(sessionsResult.value && sessionsResult.value.sessions) ? sessionsResult.value.sessions : []).map(normalizeSession).filter(Boolean)
+        : [];
+      const nextRuns = runsResult.status === "fulfilled"
+        ? (Array.isArray(runsResult.value && runsResult.value.runs) ? runsResult.value.runs : []).map(normalizeRun).filter(Boolean)
+        : [];
+      const sessionSource = runtimeSessions.length ? "实时会话" : (payloadSessions.length ? "构建快照" : "空态");
+      const runsHint = runsResult.status === "fulfilled" ? "" : " · runs接口超时";
+      const sessionHint = sessionsResult.status === "fulfilled"
+        ? (runtimeSessions.length > payloadSessions.length ? ` · 会话已从 ${payloadSessions.length} 升级到 ${runtimeSessions.length}` : "")
+        : " · sessions接口超时已回退";
+      applyProjectViewState(runtimeSessions.length ? runtimeSessions : payloadSessions, nextRuns, sessionSource, {
+        note: `${sessionHint}${runsHint}`,
+      });
     } catch (error) {
       setStatus(`组织战略加载失败：${safeText(error && error.message, "未知错误")}`, "error");
     }
   }
 
   function bindEvents() {
-    dom.refreshBtn?.addEventListener("click", () => loadData());
-    dom.saveLayoutBtn?.addEventListener("click", () => {
-      persistLayoutStore();
-      setStatus("组织战略布局已保存到本地。", "ready");
-    });
-    dom.exportConfigBtn?.addEventListener("click", () => {
-      const payload = JSON.stringify(loadLayoutStore(), null, 2);
-      const blob = new Blob([payload], { type: "application/json" });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = `${safeText(STATE.projectId || "project")}-relationship-board.json`;
-      link.click();
-      URL.revokeObjectURL(url);
-    });
-    dom.copyConfigBtn?.addEventListener("click", async () => {
-      try {
-        await navigator.clipboard.writeText(JSON.stringify(loadLayoutStore(), null, 2));
-        setStatus("组织战略配置已复制到剪贴板。", "ready");
-      } catch (_) {
-        setStatus("复制失败，请改用导出 JSON。", "error");
-      }
-    });
     dom.timeTabs.forEach((button) => {
       button.addEventListener("click", () => {
         STATE.windowKey = button.dataset.window || "1h";
@@ -2817,7 +3074,6 @@
         STATE.platformLayoutMode = next;
         STATE.selectedGroupId = "";
         STATE.selectedSessionId = "";
-        STATE.selectedRelationId = "";
         STATE.selectedPlatformCommLinkId = "";
         syncRouteLayout();
         if (STATE.platformProjects.length && STATE.sessions.length) {
@@ -2827,21 +3083,69 @@
         loadData();
       });
     });
-    dom.platformScopeButtons.forEach((button) => {
+    dom.commTypeButtons.forEach((button) => {
       button.addEventListener("click", () => {
-        const next = safeText(button.dataset.commScope, "all");
-        if (STATE.platformCommScope === next) return;
-        STATE.platformCommScope = next;
+        const kind = safeText(button.dataset.commKind);
+        if (!kind) return;
+        STATE.commVisibility[kind] = !(STATE.commVisibility[kind] !== false);
         STATE.selectedPlatformCommLinkId = "";
+        persistLayoutStore();
         renderAll();
       });
     });
     dom.platformCountButtons.forEach((button) => {
       button.addEventListener("click", () => {
-        STATE.platformLineCountMin = Math.max(0, Number(button.dataset.commCountMin) || 0);
+        STATE.commLineCountMin = Math.max(0, Number(button.dataset.commCountMin) || 0);
         STATE.selectedPlatformCommLinkId = "";
+        persistLayoutStore();
         renderAll();
       });
+    });
+    dom.platformProjectFilterBtn?.addEventListener("click", (event) => {
+      event.stopPropagation();
+      if (!isPlatformMode()) return;
+      normalizePlatformProjectSelection();
+      if (!STATE.platformProjectFilterOpen) {
+        STATE.platformProjectFilterDraft = [...STATE.platformProjectFilterSelected];
+        STATE.platformProjectFilterDraftDirty = false;
+      }
+      STATE.platformProjectFilterOpen = !STATE.platformProjectFilterOpen;
+      renderHeader();
+    });
+    dom.platformProjectSelectAllBtn?.addEventListener("click", () => {
+      STATE.platformProjectFilterDraft = platformProjectIds();
+      STATE.platformProjectFilterDraftDirty = true;
+      renderPlatformProjectFilterPanel();
+    });
+    dom.platformProjectInvertBtn?.addEventListener("click", () => {
+      const allIds = platformProjectIds();
+      const current = new Set((STATE.platformProjectFilterDraft || []).map((item) => safeText(item)).filter(Boolean));
+      STATE.platformProjectFilterDraft = allIds.filter((id) => !current.has(id));
+      STATE.platformProjectFilterDraftDirty = true;
+      renderPlatformProjectFilterPanel();
+    });
+    dom.platformProjectClearBtn?.addEventListener("click", () => {
+      STATE.platformProjectFilterDraft = [];
+      STATE.platformProjectFilterDraftDirty = true;
+      renderPlatformProjectFilterPanel();
+    });
+    dom.platformProjectCancelBtn?.addEventListener("click", () => {
+      STATE.platformProjectFilterDraft = [...STATE.platformProjectFilterSelected];
+      STATE.platformProjectFilterDraftDirty = false;
+      STATE.platformProjectFilterOpen = false;
+      renderHeader();
+    });
+    dom.platformProjectApplyBtn?.addEventListener("click", () => {
+      normalizePlatformProjectSelection();
+      STATE.platformProjectFilterInitialized = true;
+      STATE.platformProjectFilterSelected = [...STATE.platformProjectFilterDraft];
+      STATE.platformProjectFilterDraftDirty = false;
+      STATE.platformProjectFilterOpen = false;
+      STATE.selectedPlatformCommLinkId = "";
+      STATE.selectedGroupId = "";
+      STATE.selectedSessionId = "";
+      persistLayoutStore();
+      hydratePlatformView();
     });
     dom.customApplyBtn?.addEventListener("click", () => {
       const startMs = parseDateTimeLocal(dom.customStartInput?.value || "");
@@ -2855,24 +3159,8 @@
       syncTimeControls();
       loadData();
     });
-    dom.relationTypeButtons.forEach((button) => {
-      button.addEventListener("click", () => {
-        STATE.activeRelationType = button.dataset.relationType || "business";
-        renderHeader();
-      });
-    });
-    dom.visibilityButtons.forEach((button) => {
-      button.addEventListener("click", () => {
-        const key = button.dataset.visibility || "";
-        if (!key) return;
-        STATE.visibleRelations[key] = !STATE.visibleRelations[key];
-        renderAll();
-      });
-    });
-    dom.toggleLayersBtn?.addEventListener("click", () => dom.layersPanel?.classList.toggle("collapsed"));
     dom.openLayersBtn?.addEventListener("click", () => dom.layersPanel?.classList.remove("collapsed"));
     dom.closeLayersBtn?.addEventListener("click", () => dom.layersPanel?.classList.add("collapsed"));
-    dom.toggleDetailBtn?.addEventListener("click", () => dom.detailPanel?.classList.toggle("collapsed"));
     dom.openDetailBtn?.addEventListener("click", () => dom.detailPanel?.classList.remove("collapsed"));
     dom.closeDetailBtn?.addEventListener("click", () => dom.detailPanel?.classList.add("collapsed"));
     dom.searchInput?.addEventListener("input", renderRosterList);
@@ -2941,13 +3229,6 @@
         renderAll();
         return;
       }
-      if (STATE.relationDraft) {
-        const stageRect = dom.stage.getBoundingClientRect();
-        STATE.relationDraft.currentX = (event.clientX - stageRect.left) / STATE.zoom;
-        STATE.relationDraft.currentY = (event.clientY - stageRect.top) / STATE.zoom;
-        renderLinks();
-        return;
-      }
       if (STATE.resizeGroup) {
         const group = STATE.groups.find((item) => item.id === STATE.resizeGroup.id);
         if (!group) return;
@@ -2984,36 +3265,27 @@
         dom.stageWrap?.classList.remove("dragging");
         STATE.pan = null;
       }
-      if (STATE.relationDraft) {
-        const target = document.elementFromPoint(event.clientX, event.clientY);
-        const connector = target && target.closest ? target.closest(".connector") : null;
-        const hostNode = connector && connector.closest
-          ? connector.closest(".node")
-          : (target && target.closest ? target.closest(".node") : null);
-        const targetSessionId = hostNode ? safeText(hostNode.getAttribute("data-session-id")) : "";
-        const targetSide = connector
-          ? safeText(connector.getAttribute("data-side"), "left")
-          : inferNodeSideFromPoint(hostNode, event.clientX, event.clientY);
-        if (targetSessionId && completeRelationDraft(targetSessionId, targetSide)) return;
-        STATE.relationDraft = null;
-        renderLinks();
-      }
     });
     dom.linesSvg?.addEventListener("click", () => {
-      STATE.selectedRelationId = "";
       STATE.selectedPlatformCommLinkId = "";
       renderDetail();
     });
     dom.stage?.addEventListener("click", (event) => {
       if (event.target === dom.stage || event.target === dom.groupsLayer || event.target === dom.linesSvg) {
-        if (STATE.relationDraft) {
-          STATE.relationDraft = null;
-        }
         STATE.selectedGroupId = "";
         STATE.selectedSessionId = "";
-        STATE.selectedRelationId = "";
         STATE.selectedPlatformCommLinkId = "";
         renderAll();
+      }
+    });
+    document.addEventListener("click", (event) => {
+      if (!STATE.platformProjectFilterOpen) return;
+      const wrap = dom.platformProjectFilterWrap;
+      if (wrap && !wrap.contains(event.target)) {
+        STATE.platformProjectFilterDraft = [...STATE.platformProjectFilterSelected];
+        STATE.platformProjectFilterDraftDirty = false;
+        STATE.platformProjectFilterOpen = false;
+        renderHeader();
       }
     });
     window.addEventListener("resize", () => {
@@ -3052,6 +3324,7 @@
       STATE.projectName = isPlatformMode()
         ? "Qoreon 平台"
         : firstText([projectMeta && projectMeta.project_name, STATE.projectId], STATE.projectId);
+      restoreCommFilterStateFromStore();
       syncTimeControls();
       loadData();
     };

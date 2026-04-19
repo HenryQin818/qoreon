@@ -1175,6 +1175,11 @@
       const backBtn = document.getElementById("backToList");
       if (backBtn) {
         backBtn.addEventListener("click", () => {
+          if (typeof isTaskSingleCanvasMode === "function" && isTaskSingleCanvasMode()) {
+            if (typeof closeTaskCanvasDetail === "function") closeTaskCanvasDetail();
+            showListView();
+            return;
+          }
           showListView();
           // 清除选中状态
           STATE.selectedPath = "";
@@ -1236,13 +1241,6 @@
         item.className = "channel-item" + (STATE.channel === chName ? " active" : "");
         item.textContent = chName;
         item.addEventListener("click", async () => {
-          if (STATE.panelMode === "conv" && String(STATE.selectedSessionId || "").trim()) {
-            rememberConversationSelection(
-              String(STATE.project || ""),
-              String(STATE.channel || ""),
-              String(STATE.selectedSessionId || "")
-            );
-          }
           STATE.channel = chName;
           STATE.selectedPath = "";
           STATE.selectedTaskId = "";
@@ -1258,14 +1256,8 @@
             if (PCONV.sessions.length > 0) {
               const channelSessions = PCONV.sessions.filter((s) => sessionMatchesChannel(s, chName));
               if (channelSessions.length > 0) {
-                const rememberedSid = readRememberedConversationSelection(STATE.project, chName);
-                const rememberedHit = rememberedSid
-                  ? channelSessions.find((s) => String(getSessionId(s) || "").trim() === rememberedSid)
-                  : null;
-                STATE.selectedSessionId = rememberedHit
-                  ? rememberedSid
-                  : pickDefaultConversationSessionId(channelSessions, chName);
-                STATE.selectedSessionExplicit = !!rememberedHit;
+                STATE.selectedSessionId = pickDefaultConversationSessionId(channelSessions, chName);
+                STATE.selectedSessionExplicit = false;
               }
             }
           }
@@ -2685,42 +2677,6 @@
       });
     }
 
-    function taskTypeBadgeMeta(raw, opts = {}) {
-      const item = (raw && typeof raw === "object") ? raw : {};
-      const forced = String(opts.force || "").trim().toLowerCase();
-      const relationText = String(firstNonEmptyText([
-        item.relation_label,
-        item.relation,
-      ], "") || "").trim();
-      const isChild = forced === "child" || (
-        forced !== "parent"
-        && (
-          item._isSubtask === true
-          || item.is_subtask === true
-          || item.isSubtask === true
-          || !!String(firstNonEmptyText([
-            item.parent_task_id,
-            item.parentTaskId,
-            item.parent_task_path,
-            item.parentTaskPath,
-          ], "") || "").trim()
-          || /(?:子任务|subtask|child)/i.test(relationText)
-        )
-      );
-      return isChild
-        ? { key: "child", text: "子", title: "子任务" }
-        : { key: "parent", text: "总", title: "总任务" };
-    }
-
-    function buildTaskTypeBadge(raw, opts = {}) {
-      const meta = taskTypeBadgeMeta(raw, opts);
-      return el("span", {
-        class: "task-type-badge is-" + meta.key + (opts.className ? (" " + String(opts.className || "").trim()) : ""),
-        text: meta.text,
-        title: meta.title,
-      });
-    }
-
     function taskRoleMemberDisplayMeta(rawMember) {
       if (rawMember == null) {
         return { text: "", meta: "", sessionId: "", channelName: "", raw: null };
@@ -3176,6 +3132,19 @@
       return boolLike(s.is_deleted || s.isDeleted);
     }
 
+    function isInactiveSession(session) {
+      const s = (session && typeof session === "object") ? session : {};
+      if (boolLike(s.is_inactive || s.isInactive)) return true;
+      const status = String(
+        s.status || s.session_status || s.sessionStatus || s.binding_state || s.bindingState || ""
+      ).trim().toLowerCase();
+      return status === "inactive";
+    }
+
+    function isVisibleConversationSession(session) {
+      return !isDeletedSession(session) && !isInactiveSession(session);
+    }
+
     function isPrimarySession(session) {
       const s = (session && typeof session === "object") ? session : {};
       if (boolLike(s.is_primary) || boolLike(s.isPrimary)) return true;
@@ -3210,18 +3179,13 @@
 
     function agentDisplayTitle(session, fallback = "-") {
       const s = (session && typeof session === "object") ? session : {};
-      return String(
-        s.alias
-        || s.displayName
-        || s.display_name
-        || getSessionChannelName(s)
-        || s.channelName
-        || s.channel_name
-        || getSessionId(s)
-        || s.sessionId
-        || s.session_id
-        || fallback
-      ).trim() || String(fallback || "-");
+      const resolved = typeof resolveAgentDisplayName === "function"
+        ? String(resolveAgentDisplayName(s) || "").trim()
+        : "";
+      if (resolved) return resolved;
+      const stateLabel = String(conversationAgentName(s) || "").trim();
+      if (stateLabel) return stateLabel;
+      return String(fallback || "-").trim() || "-";
     }
 
     function agentDisplaySubtitle(session, opts = {}) {
@@ -3399,10 +3363,10 @@
         ? window.location.origin
         : ((window.location.protocol && window.location.host)
           ? `${window.location.protocol}//${window.location.host}`
-          : "");
+          : "http://127.0.0.1:18765");
       return {
-        primary: origin ? new URL("/share/avatar-library.html", origin).toString() : "/share/avatar-library.html",
-        fallback: origin ? new URL("/dist/avatar-library.html", origin).toString() : "/dist/avatar-library.html",
+        primary: new URL("/share/avatar-library.html", origin).toString(),
+        fallback: new URL("/dist/avatar-library.html", origin).toString(),
       };
     }
 
@@ -3817,8 +3781,53 @@
       return parts.filter(Boolean).slice(0, 1);
     }
 
+    function conversationTaskCountsKnownForSession(session) {
+      const s = (session && typeof session === "object") ? session : {};
+      return !!getConversationListTaskCounts(s);
+    }
+
+    function conversationTaskCountsForSession(session, projectId) {
+      const s = (session && typeof session === "object") ? session : {};
+      const counts = getConversationListTaskCounts(s);
+      if (counts) {
+        return {
+          in_progress: Math.max(0, Number(counts.in_progress || 0) || 0),
+          pending: Math.max(0, Number(counts.pending || 0) || 0),
+        };
+      }
+      if (typeof countConversationAssociatedTasks === "function" && hasConversationTaskTrackingData(s.task_tracking)) {
+        return countConversationAssociatedTasks(s, projectId);
+      }
+      return { in_progress: 0, pending: 0 };
+    }
+
+    function appendConversationListMetricSubchips(metaRow, session) {
+      const row = metaRow;
+      const s = (session && typeof session === "object") ? session : {};
+      const counts = getConversationListTaskCounts(s);
+      if (!row || !counts) return row;
+      row.taskCounts = counts;
+      return row;
+    }
+
+    function shouldDeferConversationTaskCountWarmup(projectId, sessions) {
+      const pid = String(projectId || "").trim();
+      const sid = String((STATE && STATE.selectedSessionId) || "").trim();
+      if (!pid || !sid || !STATE || !STATE.selectedSessionExplicit) return false;
+      if (!looksLikeSessionId(sid)) return false;
+      const list = Array.isArray(sessions) ? sessions : [];
+      if (!list.some((item) => String(getSessionId(item) || "").trim() === sid)) return false;
+      const meta = ((((PCONV || {}).sessionDirectoryMetaByProject || {})[pid]) || {});
+      if (!meta.liveLoaded) return false;
+      const timelineKey = pid + "::" + sid;
+      if (String((PCONV && PCONV.timelineLoadingKey) || "").trim() === timelineKey) return true;
+      const timelineMap = (PCONV && PCONV.sessionTimelineMap) || {};
+      return !Object.prototype.hasOwnProperty.call(timelineMap, timelineKey);
+    }
+
     function conversationStatusMeta(session) {
       const s = (session && typeof session === "object") ? session : {};
+      const listMetricStatusMeta = conversationListMetricBadgeStatusMeta(s) || conversationListCurrentTaskSummaryMeta(s);
       const runtimeState = getSessionRuntimeState(s);
       const effectiveStatus = getSessionStatus(s);
       const sessionHealthState = getSessionHealthState(s);
@@ -3872,7 +3881,19 @@
           text: statusLabel(effectiveStatus, { queueDepth: runtimeState.queue_depth }),
           tone,
           title: titleParts.join("\n"),
+          source: "runtime_state",
         };
+      }
+      if (listMetricStatusMeta && listMetricStatusMeta.text) {
+        const metaRow = {
+          text: listMetricStatusMeta.text,
+          tone: listMetricStatusMeta.tone || "info",
+          title: listMetricStatusMeta.title || "",
+          source: "conversation_list_metrics",
+        };
+        return typeof appendConversationListMetricSubchips === "function"
+          ? appendConversationListMetricSubchips(metaRow, session)
+          : metaRow;
       }
       if (timeoutLike) {
         const timeoutTitle = sessionTimeoutHint(s);
@@ -3880,6 +3901,7 @@
           text: statusLabel(effectiveStatus, { timeout: true }),
           tone: "timeout",
           title: timeoutTitle ? ("超时摘要：" + timeoutTitle) : "超时",
+          source: "runtime_state",
         };
       }
       if (effectiveStatus === "interrupted") {
@@ -3899,6 +3921,7 @@
             text: "环境中断",
             tone: "external",
             title: interruptedTitleParts.join("\n"),
+            source: "runtime_state",
           };
         }
         interruptedTitleParts.push("用户或人工操作打断");
@@ -3907,6 +3930,7 @@
           text: "已打断",
           tone: "waiting",
           title: interruptedTitleParts.join("\n"),
+          source: "runtime_state",
         };
       }
       if (effectiveStatus === "error") {
@@ -3916,6 +3940,7 @@
             text: "配置阻塞",
             tone: "error",
             title: terminalHint || "会话绑定、工作区权限或 CLI 配置存在问题",
+            source: "runtime_state",
           };
         }
         if (sessionHealthState === "attention" && latestEffectiveOutcomeState === "failed_business") {
@@ -3923,12 +3948,14 @@
             text: "业务失败",
             tone: "error",
             title: terminalHint || "业务处理失败",
+            source: "runtime_state",
           };
         }
         return {
           text: "异常",
           tone: "error",
           title: terminalHint || "执行异常",
+          source: "runtime_state",
         };
       }
       return null;
@@ -3996,7 +4023,14 @@
       if (showUnread && sid && projectId && projectId !== "overview") {
         const key = convComposerDraftKey(projectId, sid);
         const unreadMsg = countUnreadConversationMessagesByKey(key, sid);
-        const unreadMemo = countUnreadConversationMemosByKey(key, getConversationMemoStateByKey(key));
+        const memoState = getConversationMemoStateByKey(key);
+        const unreadMemo = countUnreadConversationMemosByKey(key, memoState);
+        const memoDisplayCount = (typeof resolveConversationMemoDisplayCount === "function")
+          ? resolveConversationMemoDisplayCount(s, key, memoState)
+          : unreadMemo;
+        const memoTitle = (typeof conversationMemoCountTitle === "function")
+          ? conversationMemoCountTitle(s, key, memoState)
+          : (unreadMemo > 0 ? ("备忘未消费：" + unreadMemo) : "");
         if (unreadMsg > 0) {
           wrap.appendChild(el("span", {
             class: "conv-count-dot new",
@@ -4005,11 +4039,11 @@
           }));
           hasAny = true;
         }
-        if (unreadMemo > 0) {
+        if (memoDisplayCount > 0) {
           wrap.appendChild(el("span", {
             class: "conv-count-dot memo",
-            text: memoCountText(unreadMemo),
-            title: "备忘未消费：" + unreadMemo,
+            text: memoCountText(memoDisplayCount),
+            title: memoTitle || ("备忘未消费：" + unreadMemo),
           }));
           hasAny = true;
         }
@@ -4078,16 +4112,40 @@
     }
 
     function conversationAgentName(session) {
-      const sid = getSessionId(session);
-      const channelName = getSessionChannelName(session);
-      const agentName = firstNonEmptyText([
-        session && session.alias,
-        session && session.displayName,
-        session && session.display_name,
-        session && session.codexTitle,
-        session && session.displayChannel,
-      ]);
-      return agentName || channelName || sid || "未命名会话";
+      const s = (session && typeof session === "object") ? session : {};
+      const resolved = typeof resolveAgentDisplayName === "function"
+        ? String(resolveAgentDisplayName(s) || "").trim()
+        : "";
+      if (resolved) return resolved;
+      if (typeof readAgentDisplayContract === "function" && typeof agentNameStateLabel === "function") {
+        const contract = readAgentDisplayContract(s);
+        const stateLabel = agentNameStateLabel(contract.state, contract.issue);
+        if (stateLabel) return stateLabel;
+      }
+      const displayNameSource = String(firstNonEmptyText([
+        s.displayNameSource,
+        s.display_name_source,
+      ]) || "").trim().toLowerCase();
+      const displayName = String(firstNonEmptyText([
+        s.displayName,
+        s.display_name,
+        s.alias,
+      ]) || "").trim();
+      const sessionDerived = typeof isSessionDerivedAgentDisplayName === "function"
+        ? isSessionDerivedAgentDisplayName(displayName, s)
+        : (displayNameSource === "explicit_sid_fallback");
+      if (displayNameSource === "explicit_sid_fallback" || sessionDerived) {
+        if (typeof readAgentDisplayContract === "function" && typeof agentNameStateLabel === "function") {
+          return "身份未解析";
+        }
+        const channelName = String(getSessionChannelName(s) || s.channel_name || s.primaryChannel || "").trim();
+        return channelName || "身份未解析";
+      }
+      const fallbackName = typeof fallbackAgentIdentityName === "function"
+        ? String(fallbackAgentIdentityName(s) || "").trim()
+        : "";
+      if (fallbackName) return fallbackName;
+      return "未命名会话";
     }
 
     function conversationDisplayName(session) {
@@ -4716,15 +4774,39 @@
       for (const s of (Array.isArray(PCONV.sessions) ? PCONV.sessions : [])) {
         const cur = getSessionId(s);
         if (cur !== sid) continue;
+        const projectId = String((s && s.project_id) || STATE.project || "").trim();
         s.lastStatus = "queued";
         s.lastTimeout = false;
         s.lastError = "";
         s.lastErrorHint = "";
         s.lastActiveAt = now;
+        s.session_display_state = "queued";
+        const runtimeState = (s.runtime_state && typeof s.runtime_state === "object")
+          ? { ...s.runtime_state }
+          : {};
+        runtimeState.display_state = "queued";
+        runtimeState.queue_depth = Math.max(1, Number(runtimeState.queue_depth || 0) || 0);
+        runtimeState.updated_at = String(runtimeState.updated_at || now);
+        s.runtime_state = runtimeState;
+        const latestRunSummary = (s.latest_run_summary && typeof s.latest_run_summary === "object")
+          ? { ...s.latest_run_summary }
+          : {};
+        latestRunSummary.status = "queued";
+        latestRunSummary.display_state = "queued";
+        latestRunSummary.updated_at = String(latestRunSummary.updated_at || now);
         const msg = String(message || "").trim();
         if (msg) {
           // 保持左侧预览为“稳定反馈态”，避免排队阶段误判为已处理结果。
           s.latestUserMsg = msg;
+          latestRunSummary.latest_user_msg = msg;
+        }
+        s.latest_run_summary = latestRunSummary;
+        if (typeof conversationStoreUpsertSession === "function") {
+          conversationStoreUpsertSession(s, {
+            projectId,
+            sessionId: sid,
+            source: "local-pending",
+          });
         }
       }
     }
@@ -5104,23 +5186,6 @@
       return !!it && !isTaskItem(it);
     }
 
-    function channelDocumentItems(projectId, channelName, opts = {}) {
-      if (!projectId || projectId === "overview" || !channelName) return [];
-      const respectQuery = opts.query !== false;
-      let list = itemsForProject(projectId)
-        .filter((x) => String(x.channel || "") === String(channelName))
-        .filter(isKnowledgeItem);
-      if (respectQuery) list = list.filter(matchesQuery);
-      list = list.slice();
-      list.sort((a, b) => {
-        const ta = String((a && a.updated_at) || "");
-        const tb = String((b && b.updated_at) || "");
-        if (ta !== tb) return tb.localeCompare(ta);
-        return String((a && a.title) || "").localeCompare(String((b && b.title) || ""), "zh-Hans-CN");
-      });
-      return list;
-    }
-
     function inferKnowledgeGroupLabel(it) {
       const p = String((it && it.path) || "");
       const t = String((it && it.type) || "").trim();
@@ -5137,7 +5202,15 @@
     }
 
     function channelKnowledgeItems(projectId, channelName) {
-      return channelDocumentItems(projectId, channelName, { query: true });
+      if (!projectId || projectId === "overview" || !channelName) return [];
+      const list = channelFileItems(projectId, channelName, { applyQuery: true }).slice();
+      list.sort((a, b) => {
+        const ta = String((a && a.updated_at) || "");
+        const tb = String((b && b.updated_at) || "");
+        if (ta !== tb) return tb.localeCompare(ta);
+        return String((a && a.title) || "").localeCompare(String((b && b.title) || ""), "zh-Hans-CN");
+      });
+      return list;
     }
 
     function groupedChannelKnowledge(items) {
@@ -5196,40 +5269,95 @@
     function sessionForChannel(projectId, channelName) {
       const proj = projectById(projectId);
       if (!proj) return null;
+      const pid = String(projectId || "").trim();
+      const isVisibleRow = (row) => {
+        const current = (row && typeof row === "object") ? row : {};
+        if (typeof isVisibleConversationSession === "function") {
+          return isVisibleConversationSession(current);
+        }
+        const deleted = String(current.is_deleted || current.isDeleted || "").trim().toLowerCase();
+        const inactive = String(current.status || current.session_status || current.sessionStatus || "").trim().toLowerCase();
+        return !["1", "true", "yes", "y"].includes(deleted) && inactive !== "inactive";
+      };
       // bindings 只保留兼容补洞，不再反向覆盖 runtime/store/config 的主链会话信息。
       const local = getBinding(projectId, channelName);
       const list = Array.isArray(proj.channel_sessions) ? proj.channel_sessions : [];
-      const runtimeList = Array.isArray(PCONV.sessions) ? PCONV.sessions : [];
+      const runtimeList = (typeof conversationRuntimeSessionsForProject === "function")
+        ? conversationRuntimeSessionsForProject(pid)
+        : (Array.isArray(PCONV.sessions) ? PCONV.sessions : []);
       const runtimeHit = runtimeList.find((s) => {
         const ch = String((s && (s.channel_name || s.primaryChannel || ((Array.isArray(s.channels) && s.channels[0]) || ""))) || "");
         const sid = String((s && (s.sessionId || s.id || "")) || "").trim();
         return ch === String(channelName) && looksLikeSessionId(sid);
       });
-      const hit = list.find(x => String(x.name || "") === String(channelName));
+      const hit = list.find((x) => isVisibleRow(x) && String(x.name || "") === String(channelName));
       if (hit) {
         const existingSessionId = String(hit.session_id || hit.sessionId || "").trim();
         if (!existingSessionId && local && local.session_id) {
-          return { ...hit, session_id: local.session_id, cli_type: local.cli_type, source: "bindings_compat" };
+          return {
+            ...hit,
+            project_id: pid,
+            projectId: pid,
+            session_id: local.session_id,
+            cli_type: local.cli_type,
+            source: "bindings_compat",
+          };
         }
-        return { ...hit, cli_type: hit.cli_type || hit.cliType || "codex", model: normalizeSessionModel(hit.model) };
+        return {
+          ...hit,
+          project_id: pid,
+          projectId: pid,
+          cli_type: hit.cli_type || hit.cliType || "codex",
+          model: normalizeSessionModel(hit.model),
+        };
       }
       if (runtimeHit) {
         const sid = String(runtimeHit.sessionId || runtimeHit.id || "").trim();
         const cli = String(runtimeHit.cli_type || "codex").trim() || "codex";
         const model = normalizeSessionModel(runtimeHit.model);
-        const base = { name: channelName, alias: "", session_id: sid, desc: "", cli_type: cli, model, source: "runtime" };
+        const base = {
+          name: channelName,
+          alias: "",
+          project_id: pid,
+          projectId: pid,
+          session_id: sid,
+          desc: "",
+          cli_type: cli,
+          model,
+          source: "runtime",
+        };
         return base;
       }
       const cfg = Array.isArray(proj.channels) ? proj.channels : [];
       const hit2 = cfg.find(x => String(x.name || "") === String(channelName));
       if (hit2) {
-        const base = { name: hit2.name, alias: hit2.alias || "", session_id: hit2.session_id || "", desc: hit2.desc || "", cli_type: hit2.cli_type || hit2.cliType || "codex", model: normalizeSessionModel(hit2.model), source: "config" };
+        const base = {
+          name: hit2.name,
+          alias: hit2.alias || "",
+          project_id: pid,
+          projectId: pid,
+          session_id: hit2.session_id || "",
+          desc: hit2.desc || "",
+          cli_type: hit2.cli_type || hit2.cliType || "codex",
+          model: normalizeSessionModel(hit2.model),
+          source: "config",
+        };
         if (!String(base.session_id || "").trim() && local && local.session_id) {
           return { ...base, session_id: local.session_id, cli_type: local.cli_type, source: "bindings_compat" };
         }
         return base;
       }
-      const base = { name: channelName, alias: "", session_id: "", desc: "", cli_type: "codex", model: "", source: "" };
+      const base = {
+        name: channelName,
+        alias: "",
+        project_id: pid,
+        projectId: pid,
+        session_id: "",
+        desc: "",
+        cli_type: "codex",
+        model: "",
+        source: "",
+      };
       if (local && local.session_id) return { ...base, session_id: local.session_id, cli_type: local.cli_type, source: "bindings_compat" };
       return base;
     }
@@ -5430,19 +5558,50 @@
       return m;
     }
 
+    function conversationRuntimeSessionsForProject(projectId = "") {
+      const pid = String(projectId || STATE.project || "").trim();
+      if (!pid || pid === "overview") return [];
+      const normalizeList = (list) => {
+        const src = Array.isArray(list) ? list : [];
+        const currentPid = String(pid || "").trim();
+        const lastPid = String(PCONV.lastProjectId || "").trim();
+        return src.filter((session) => {
+          const row = (session && typeof session === "object") ? session : {};
+          const deleted = typeof isDeletedSession === "function"
+            ? isDeletedSession(row)
+            : ["1", "true", "yes", "y"].includes(String(row.is_deleted || row.isDeleted || "").trim().toLowerCase());
+          if (deleted) return false;
+          const rowProjectId = String(row.project_id || row.projectId || "").trim();
+          if (rowProjectId) return rowProjectId === currentPid;
+          return lastPid === currentPid;
+        });
+      };
+      return normalizeList(Array.isArray(PCONV.sessions) ? PCONV.sessions.slice() : []);
+    }
+
     function conversationSessionsForProject(projectId = "") {
       const pid = String(projectId || STATE.project || "").trim();
       if (!pid || pid === "overview") return [];
-      const normalizeList = (list) => (Array.isArray(list) ? list.filter((s) => !isDeletedSession(s)) : []);
+      const normalizeList = (list) => {
+        const src = Array.isArray(list) ? list : [];
+        return src.filter((session) => {
+          const row = (session && typeof session === "object") ? session : {};
+          const deleted = typeof isDeletedSession === "function"
+            ? isDeletedSession(row)
+            : ["1", "true", "yes", "y"].includes(String(row.is_deleted || row.isDeleted || "").trim().toLowerCase());
+          if (deleted) return false;
+          const rowProjectId = String(row.project_id || row.projectId || "").trim();
+          return !rowProjectId || rowProjectId === pid;
+        });
+      };
       const pending = conversationPendingCreateSessionsForProject(pid);
       const liveMeta = PCONV.sessionDirectoryMetaByProject && PCONV.sessionDirectoryMetaByProject[pid];
       const localDirectory = PCONV.sessionDirectoryByProject && PCONV.sessionDirectoryByProject[pid];
-      if (
-        pid === String(PCONV.lastProjectId || "")
-        && Array.isArray(PCONV.sessions)
-        && PCONV.sessions.length
-      ) {
-        return pending.concat(normalizeList(PCONV.sessions.slice()));
+      const runtimeSessions = (typeof conversationRuntimeSessionsForProject === "function")
+        ? conversationRuntimeSessionsForProject(pid)
+        : [];
+      if (runtimeSessions.length) {
+        return pending.concat(runtimeSessions);
       }
       if (Array.isArray(localDirectory) && (localDirectory.length || (liveMeta && liveMeta.liveLoaded))) {
         return pending.concat(normalizeList(localDirectory.slice()));
@@ -5466,6 +5625,10 @@
         out.push(s);
       }
       return sortedConversationSessions(out);
+    }
+
+    function countConversationByChannel(channelName, projectId = "") {
+      return conversationSessionsForChannel(channelName, projectId).length;
     }
 
     function joinRelPath(base, leaf) {
@@ -5533,7 +5696,7 @@
       const pathText = document.getElementById("channelPathText");
       const copyBtn = document.getElementById("channelPathCopyBtn");
       const revealBtn = document.getElementById("channelPathRevealBtn");
-      const manageBtn = document.getElementById("channelInfoManageBtn");
+      const manageBtn = document.getElementById("channelConversationManageBtn");
       if (!infoLabel || !nameEl || !subEl || !statsEl || !pathRow || !pathText || !copyBtn || !revealBtn) return;
 
       const project = projectById(STATE.project);
@@ -5588,6 +5751,11 @@
       clearNodeChildren(statsEl);
       pathRow.style.display = "none";
       setPathActions("");
+      if (manageBtn) {
+        manageBtn.disabled = true;
+        manageBtn.onclick = null;
+        manageBtn.style.display = "none";
+      }
 
       if (STATE.panelMode === "arch") {
         const orgSnapshot = orgBoardSnapshot(STATE.project);
@@ -5627,27 +5795,21 @@
         const orgRelCount = Array.isArray(orgRuntime.runtime_relations) ? orgRuntime.runtime_relations.length : 0;
         const projectTotals = projectTaskRequirementTotals(STATE.project);
         infoLabel.textContent = "当前维度：";
-        nameEl.textContent = moduleMode === "schedule"
-          ? "项目级排期队列"
-          : (moduleMode === "org" ? "组织2D画板" : "全项目任务");
+        nameEl.textContent = moduleMode === "org" ? "组织2D画板" : "全项目任务";
         const names = unionChannelNames(STATE.project);
         const activeTotal = toNonNegativeInt(projectTotals.active, 0);
         const projectPrimaryCounts = primaryTaskCountsFromTotals(projectTotals);
         const taskTotal = toNonNegativeInt(projectTotals.total, 0);
         const requirementsTotal = toNonNegativeInt(projectTotals.requirements_total, 0);
-        const scheduleTotal = projectScheduleItems(STATE.project).length;
-        subEl.textContent = moduleMode === "schedule"
-          ? "排期模块仅维护任务排序队列；状态筛选在中间顶部统一切换。"
-          : (moduleMode === "org"
-            ? "组织2D画板按统一结构模型展示节点与运行态关系，并保留3D图谱入口。"
-            : "按主任务批次查看。切换到“通道”后可查看通道目录路径并快速打开文件夹。");
+        subEl.textContent = moduleMode === "org"
+          ? "组织2D画板按统一结构模型展示节点与运行态关系，并保留3D图谱入口。"
+          : "按主任务批次查看。切换到“知识”后可查看通道目录路径并快速打开文件夹。";
         statsEl.appendChild(chip("通道:" + names.length, names.length ? "muted" : "warn"));
         statsEl.appendChild(chip("任务:" + taskTotal, taskTotal ? "good" : "muted"));
         statsEl.appendChild(chip("待办:" + projectPrimaryCounts.todo, projectPrimaryCounts.todo ? "muted" : "muted"));
         statsEl.appendChild(chip("进行中:" + projectPrimaryCounts.in_progress, projectPrimaryCounts.in_progress ? "warn" : "muted"));
         if (projectPrimaryCounts.pending_acceptance) statsEl.appendChild(chip("待验收:" + projectPrimaryCounts.pending_acceptance, "warn"));
         statsEl.appendChild(chip("需求:" + requirementsTotal, requirementsTotal ? "good" : "muted"));
-        statsEl.appendChild(chip("排期:" + scheduleTotal, scheduleTotal ? "good" : "muted"));
         statsEl.appendChild(chip("组织节点:" + orgNodeCount, orgNodeCount ? "good" : "muted"));
         statsEl.appendChild(chip("运行态关系:" + orgRelCount, orgRelCount ? "warn" : "muted"));
         statsEl.appendChild(chip("活跃:" + activeTotal, activeTotal ? "warn" : "muted"));
@@ -5657,40 +5819,36 @@
       if (STATE.project === "overview" || !channelName) {
         infoLabel.textContent = "当前通道：";
         nameEl.textContent = "-";
-        subEl.textContent = "请选择左侧通道，查看通道描述、会话绑定和目录路径。";
+        subEl.textContent = "请选择左侧通道，查看文件资料、知识沉淀和目录路径。";
         return;
       }
 
       const sess = sessionForChannel(STATE.project, channelName);
-      const sid = String((sess && sess.session_id) || "").trim();
       const desc = getChannelDesc(project, channelName, sess);
+      const fileItems = channelFileItems(STATE.project, channelName, { applyQuery: false });
+      const visibleFileItems = channelFileItems(STATE.project, channelName, { applyQuery: true });
+      const sedimentCount = fileItems.filter((x) => String((x && x.path) || "").includes("/产出物/沉淀/")).length;
+      const materialCount = fileItems.filter((x) => String((x && x.path) || "").includes("/产出物/材料/")).length;
       const channelRootPath = resolveChannelRootPath(project, channelName, channelItems);
-      const documentCount = channelDocumentItems(STATE.project, channelName, { query: false }).length;
 
-      infoLabel.textContent = "";
-      infoLabel.style.display = "none";
+      infoLabel.textContent = "当前通道：";
+      infoLabel.style.display = "";
       nameEl.textContent = channelName;
       nameEl.title = [
         desc ? ("说明: " + desc) : "说明: 未配置",
         channelRootPath ? ("目录: " + channelRootPath) : "目录: 未识别",
-        sid ? ("会话: " + sid) : "会话: 未绑定",
       ].join("\n");
-      subEl.textContent = "";
-      subEl.style.display = "none";
-      copyBtn.style.display = "none";
+      subEl.textContent = desc || "当前通道仅保留文件资料、知识沉淀与目录入口。";
+      subEl.style.display = "";
 
-      statsEl.appendChild(chip("资料:" + documentCount, documentCount ? "good" : "muted"));
-      if (!sid) statsEl.appendChild(chip("未绑定", "warn"));
+      statsEl.appendChild(chip("文件:" + fileItems.length, fileItems.length ? "good" : "muted"));
+      statsEl.appendChild(chip("沉淀:" + sedimentCount, sedimentCount ? "good" : "muted"));
+      statsEl.appendChild(chip("材料:" + materialCount, materialCount ? "muted" : "muted"));
+      if (String(STATE.q || "").trim()) statsEl.appendChild(chip("命中:" + visibleFileItems.length, visibleFileItems.length ? "warn" : "muted"));
       if (!channelRootPath) statsEl.appendChild(chip("目录缺失", "warn"));
-      if (!desc) statsEl.appendChild(chip("未配置说明", "warn"));
+      if (!desc) statsEl.appendChild(chip("未配置说明", "muted"));
 
       setPathActions(channelRootPath);
-      if (manageBtn) {
-        manageBtn.disabled = false;
-        manageBtn.onclick = () => {
-          openChannelConversationManageModal(STATE.project, channelName);
-        };
-      }
     }
 
     function buildLeftList() {
@@ -5739,15 +5897,12 @@
           if (!Object.prototype.hasOwnProperty.call(byLane, lane)) return;
           byLane[lane] = Number(byLane[lane] || 0) + 1;
         });
-        const queueCounts = projectScheduleLaneCounts(STATE.project);
-        const queueTotal = projectScheduleItems(STATE.project).length;
         const orgSnapshot = orgBoardSnapshot(STATE.project);
         const orgRuntime = orgBoardRuntime(STATE.project);
         const orgNodeCount = Array.isArray(orgSnapshot.nodes) ? orgSnapshot.nodes.length : 0;
         const orgRelationCount = Array.isArray(orgRuntime.runtime_relations) ? orgRuntime.runtime_relations.length : 0;
         asideMeta.innerHTML = "";
         asideMeta.appendChild(metaPill("总任务 " + groups.length, "muted"));
-        asideMeta.appendChild(metaPill("排期 " + queueTotal, queueTotal ? "good" : "muted"));
         asideMeta.appendChild(metaPill("组织 " + orgNodeCount, orgNodeCount ? "good" : "muted"));
 
         const taskBtn = el("button", {
@@ -5769,64 +5924,6 @@
         });
         left.appendChild(taskBtn);
 
-        const scheduleBtn = el("button", {
-          class: "rowbtn task-module-card" + (normalizeTaskModule(STATE.taskModule) === "schedule" ? " active" : ""),
-        });
-        scheduleBtn.setAttribute("data-schedule-drop-zone", "1");
-        scheduleBtn.appendChild(el("div", { class: "name", text: "排期模块" }));
-        const scheduleChips = el("div", { class: "chips" });
-        scheduleChips.appendChild(chip("排期:" + queueTotal, queueTotal ? "good" : "muted"));
-        scheduleChips.appendChild(chip("进行中:" + Number(queueCounts["进行中"] || 0), Number(queueCounts["进行中"] || 0) ? "warn" : "muted"));
-        scheduleChips.appendChild(chip("待处理:" + Number(queueCounts["待处理"] || 0), Number(queueCounts["待处理"] || 0) ? "warn" : "muted"));
-        scheduleChips.appendChild(chip("待开始:" + Number(queueCounts["待开始"] || 0), Number(queueCounts["待开始"] || 0) ? "muted" : "muted"));
-        scheduleChips.appendChild(chip("已完成:" + Number(queueCounts["已完成"] || 0), Number(queueCounts["已完成"] || 0) ? "good" : "muted"));
-        scheduleBtn.appendChild(scheduleChips);
-        scheduleBtn.addEventListener("click", () => {
-          STATE.taskModule = "schedule";
-          setHash();
-          render();
-        });
-        scheduleBtn.title = "支持拖拽总任务到此卡片，直接加入排期队列";
-        scheduleBtn.addEventListener("dragenter", (e) => {
-          const dragPath = scheduleDraggedTaskPathFromEvent(e);
-          if (!dragPath || !isMasterTaskPath(STATE.project, dragPath)) return;
-          e.preventDefault();
-          setTaskScheduleDropHoverState(scheduleBtn, true);
-        });
-        scheduleBtn.addEventListener("dragover", (e) => {
-          const dragPath = scheduleDraggedTaskPathFromEvent(e);
-          if (!dragPath || !isMasterTaskPath(STATE.project, dragPath)) return;
-          e.preventDefault();
-          if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
-          setTaskScheduleDropHoverState(scheduleBtn, true);
-        });
-        scheduleBtn.addEventListener("dragleave", () => {
-          setTaskScheduleDropHoverState(scheduleBtn, false);
-        });
-        scheduleBtn.addEventListener("drop", async (e) => {
-          const dragPath = scheduleDraggedTaskPathFromEvent(e);
-          setTaskScheduleDropHoverState(scheduleBtn, false);
-          clearTaskScheduleDragPayload();
-          if (!dragPath || !isMasterTaskPath(STATE.project, dragPath)) return;
-          e.preventDefault();
-          e.stopPropagation();
-          const ok = await setTaskScheduleState(STATE.project, dragPath, true, "drag");
-          if (ok) {
-            STATE.taskModule = "schedule";
-            STATE.selectedPath = normalizeScheduleTaskPath(dragPath);
-            STATE.selectedTaskId = resolveTaskIdByPath(dragPath);
-            syncSelectedTaskSelectionStorage();
-            setHash();
-            render();
-          }
-        });
-        left.appendChild(scheduleBtn);
-
-        const queueCache = projectScheduleCache(STATE.project);
-        const queueStale = !queueCache || ((Date.now() - Number(queueCache.fetchedAtMs || 0)) > 6000);
-        if (queueStale && !PROJECT_SCHEDULE_UI.loadingByProject[String(STATE.project || "").trim()]) {
-          fetchProjectScheduleQueue(STATE.project, { maxAgeMs: 6000 }).then(() => render()).catch(() => {});
-        }
         const orgCache = orgBoardCache(STATE.project);
         const orgStale = !orgCache || ((Date.now() - Number(orgCache.fetchedAtMs || 0)) > 10000);
         if (orgStale && !ORG_BOARD_UI.loadingByProject[String(STATE.project || "").trim()]) {
@@ -5878,29 +5975,36 @@
         return;
       }
 
-      asideTitle.textContent = "通道";
-      const projectTotals = projectTaskRequirementTotals(STATE.project);
-      const total = toNonNegativeInt(projectTotals.total, 0);
-      const requirementsTotal = toNonNegativeInt(projectTotals.requirements_total, 0);
+      asideTitle.textContent = "知识";
       asideMeta.innerHTML = "";
-      const allKnowledgeItems = itemsForProject(STATE.project).filter(isKnowledgeItem);
-      asideMeta.appendChild(metaPill("通道 " + unionChannelNames(STATE.project).length, "muted"));
-      asideMeta.appendChild(metaPill("资料 " + allKnowledgeItems.length, allKnowledgeItems.length ? "good" : "muted"));
-
       const names = unionChannelNames(STATE.project);
+      const totalFiles = names.reduce((sum, name) => sum + channelFileItems(STATE.project, name, { applyQuery: false }).length, 0);
+      const totalSediments = names.reduce((sum, name) => (
+        sum + channelFileItems(STATE.project, name, { applyQuery: false })
+          .filter((x) => String((x && x.path) || "").includes("/产出物/沉淀/")).length
+      ), 0);
+      asideMeta.appendChild(metaPill("通道 " + names.length, "muted"));
+      asideMeta.appendChild(metaPill("文件 " + totalFiles, totalFiles ? "good" : "muted"));
+      asideMeta.appendChild(metaPill("沉淀 " + totalSediments, totalSediments ? "good" : "muted"));
+
       for (const name of names) {
-        const docCount = channelDocumentItems(STATE.project, name, { query: false }).length;
+        const fileItems = channelFileItems(STATE.project, name, { applyQuery: false });
+        const sedimentCount = fileItems.filter((x) => String((x && x.path) || "").includes("/产出物/沉淀/")).length;
+        const materialCount = fileItems.filter((x) => String((x && x.path) || "").includes("/产出物/材料/")).length;
+        const channelRoot = resolveChannelRootPath(projectById(STATE.project), name, fileItems);
         const btn = el("button", { class: "rowbtn" + (STATE.channel === name ? " active" : "") });
         btn.appendChild(el("div", { class: "name", text: name }));
         const chips = el("div", { class: "chips" });
-        chips.appendChild(chip("资料:" + docCount, docCount ? "good" : "muted"));
+        chips.appendChild(chip("文件:" + fileItems.length, fileItems.length ? "good" : "muted"));
+        chips.appendChild(chip("沉淀:" + sedimentCount, sedimentCount ? "good" : "muted"));
+        if (materialCount) chips.appendChild(chip("材料:" + materialCount, "muted"));
+        if (!channelRoot) chips.appendChild(chip("目录缺失", "warn"));
         btn.appendChild(chips);
-        // Keep left list compact: channel-level summary only; detailed session info is shown in conversation mode.
         btn.addEventListener("click", () => {
           STATE.channel = name;
           STATE.selectedPath = "";
           STATE.selectedTaskId = "";
-          STATE.selectedSessionId = "";  // 切换通道时清除对话选中状态
+          STATE.selectedSessionId = "";
           STATE.selectedSessionExplicit = false;
           syncSelectedTaskSelectionStorage();
           setHash();
@@ -6004,10 +6108,6 @@
         const all = sortListItems(filteredItemsForProject("overview"));
         return all[0] || null;
       }
-      if (STATE.panelMode === "channel" && STATE.view === "work") {
-        const docs = sortListItems(channelDocumentItems(STATE.project, STATE.channel, { query: true }));
-        return docs[0] || null;
-      }
       if (STATE.view === "comms") {
         const base = itemsForProject(STATE.project).filter(x => String(x.channel || "") === String(STATE.channel));
         const comms = sortListItems(base.filter(isDiscussionSpaceItem).filter(matchesQuery));
@@ -6019,10 +6119,6 @@
 
     function ensureSelection() {
       if (STATE.panelMode === "conv") return;
-      if (STATE.panelMode === "channel") {
-        STATE.selectedSessionId = "";
-        STATE.selectedSessionExplicit = false;
-      }
       if (STATE.panelMode === "org" || STATE.panelMode === "arch") {
         STATE.selectedPath = "";
         STATE.selectedTaskId = "";
@@ -6046,24 +6142,6 @@
             STATE.selectedTaskId = currentTaskId;
           }
           return;
-        }
-        if (moduleMode === "schedule") {
-          const lane = String(STATE.taskLane || "全部");
-          const queueRows = projectScheduleItems(STATE.project);
-          const firstQueue = queueRows.find((row) => {
-            const rowLane = String((row && row.lane) || "已归档");
-            if (lane === "全部") return rowLane !== "已归档";
-            return rowLane === lane;
-          }) || queueRows.find((row) => {
-            const rowLane = String((row && row.lane) || "已归档");
-            if (lane === "全部") return true;
-            return rowLane === lane;
-          });
-          if (firstQueue && firstQueue.task_path) {
-            STATE.selectedPath = normalizeScheduleTaskPath(firstQueue.task_path);
-            STATE.selectedTaskId = normalizeTaskStableId(firstQueue.task_id || firstQueue.taskId || "");
-            return;
-          }
         }
         const groups = buildTaskGroups(STATE.project);
         const filtered = STATE.taskLane === "全部" ? groups : groups.filter((g) => g.lane === STATE.taskLane);
@@ -6097,10 +6175,11 @@
       return setSelectedTaskRef(p, "");
     }
 
-    function setSelectedTaskRef(pathValue, taskIdValue = "") {
+    function setSelectedTaskRef(pathValue, taskIdValue = "", opts = null) {
       if (STATE.panelMode === "conv" || STATE.panelMode === "org" || STATE.panelMode === "arch") return;
       STATE.selectedPath = normalizeScheduleTaskPath(pathValue);
       STATE.selectedTaskId = normalizeTaskStableId(taskIdValue || resolveTaskIdByPath(STATE.selectedPath));
+      const openCanvasDetail = !!(opts && opts.openCanvasDetail);
       // 选择任务时清除对话选中状态
       STATE.selectedSessionId = "";
       STATE.selectedSessionExplicit = false;
@@ -6109,6 +6188,13 @@
       refreshCCB();
       updateSelectionUI();
       buildChannelConversationList();
+      if (typeof isTaskSingleCanvasMode === "function" && isTaskSingleCanvasMode()) {
+        if (openCanvasDetail && typeof openTaskCanvasDetail === "function") {
+          openTaskCanvasDetail();
+        }
+        if (isMobileViewport() && pathValue) showDetailView();
+        return;
+      }
       // 移动端切换到详情视图
       if (isMobileViewport() && pathValue) {
         showDetailView();
@@ -6136,6 +6222,27 @@
       t = t.replace(/^(?:【[^】]+】\s*)+/g, "").trim();
       t = t.replace(/\.md$/i, "").trim();
       return t;
+    }
+
+    function taskParentStableIdOfItem(item) {
+      return normalizeTaskStableId(firstNonEmptyText([
+        item && item.parent_task_id,
+        item && item.parentTaskId,
+      ]) || "");
+    }
+
+    function taskParentPathOfItem(item, projectId = "") {
+      return normalizeScheduleTaskPathForProject(projectId, firstNonEmptyText([
+        item && item.parent_task_path,
+        item && item.parentTaskPath,
+      ]) || "");
+    }
+
+    function itemDeclaresExplicitTaskParent(item, projectId = "") {
+      const row = (item && typeof item === "object") ? item : {};
+      if (taskParentStableIdOfItem(row)) return true;
+      if (taskParentPathOfItem(row, projectId)) return true;
+      return row.is_subtask === true || row.isSubtask === true;
     }
 
     function inferTaskGroupMeta(it) {
@@ -6172,60 +6279,170 @@
     }
 
     function buildTaskGroups(projectId) {
-      const tasks = itemsForProject(projectId)
-        .filter(isTaskItem)
-        .filter(matchesQuery);
-      const map = new Map();
-      for (const it of tasks) {
-        const meta = inferTaskGroupMeta(it);
-        const key = String(meta.key || "").trim() || String(it.path || "");
-        if (!map.has(key)) {
-          map.set(key, {
-            key,
-            members: [],
-            total: 0,
-          });
-        }
-        const g = map.get(key);
-        g.members.push({ item: it, meta });
-        g.total += 1;
-      }
-
+      const allTasks = itemsForProject(projectId).filter(isTaskItem);
+      const matchedTasks = allTasks.filter(matchesQuery);
+      const matchedTaskIds = new Set(
+        matchedTasks.map((it) => taskStableIdOfItem(it)).filter(Boolean)
+      );
+      const matchedTaskPaths = new Set(
+        matchedTasks.map((it) => normalizeScheduleTaskPathForProject(projectId, it && it.path)).filter(Boolean)
+      );
+      const explicitHierarchy = allTasks.some((it) => itemDeclaresExplicitTaskParent(it, projectId));
       const groups = [];
-      for (const g of map.values()) {
-        const members = g.members.slice();
-        const rootCandidates = members.filter((x) => !x.meta.child).sort((a, b) => toTimeNum(b.item.updated_at) - toTimeNum(a.item.updated_at));
-        const sortedByFresh = members.slice().sort((a, b) => toTimeNum(b.item.updated_at) - toTimeNum(a.item.updated_at));
-        const master = (rootCandidates[0] || sortedByFresh[0] || {}).item || null;
-        const children = members
-          .filter((x) => !master || String(x.item.path || "") !== String(master.path || ""))
-          .sort((a, b) => {
-            const ao = Number(a.meta.childOrder || 0);
-            const bo = Number(b.meta.childOrder || 0);
-            if (ao !== bo) return ao - bo;
-            return toTimeNum(b.item.updated_at) - toTimeNum(a.item.updated_at);
-          })
-          .map((x) => x.item);
 
-        const childCounts = Object.create(null);
-        for (const child of children) {
-          const b = taskPrimaryStatus(child);
-          childCounts[b] = Number(childCounts[b] || 0) + 1;
-        }
-        const masterBucket = taskPrimaryStatus(master);
-        const lane = taskLaneFromMasterBucket(masterBucket);
-        const masterTs = toTimeNum(master && master.updated_at);
-        groups.push({
-          key: g.key,
-          lane,
-          master,
-          masterBucket,
-          children,
-          childCounts,
-          childTotal: children.length,
-          total: g.total,
-          latestAt: String((master && master.updated_at) || ""),
-          latestTs: masterTs,
+      if (explicitHierarchy) {
+        const taskByStableId = new Map();
+        const taskByPath = new Map();
+        allTasks.forEach((it) => {
+          const stableId = taskStableIdOfItem(it);
+          if (stableId) taskByStableId.set(stableId, it);
+          const normPath = normalizeScheduleTaskPathForProject(projectId, it && it.path);
+          if (normPath) taskByPath.set(normPath, it);
+        });
+
+        const parentByTask = new Map();
+        allTasks.forEach((it) => {
+          let parent = null;
+          const parentStableId = taskParentStableIdOfItem(it);
+          if (parentStableId) parent = taskByStableId.get(parentStableId) || null;
+          if (!parent) {
+            const parentPath = taskParentPathOfItem(it, projectId);
+            if (parentPath) parent = taskByPath.get(parentPath) || null;
+          }
+          if (parent && parent !== it) parentByTask.set(it, parent);
+        });
+
+        const rootCache = new Map();
+        const resolveRootTask = (task) => {
+          if (!task) return null;
+          if (rootCache.has(task)) return rootCache.get(task) || null;
+          const seen = new Set();
+          let current = task;
+          while (current && parentByTask.has(current) && !seen.has(current)) {
+            seen.add(current);
+            const parent = parentByTask.get(current);
+            if (!parent || parent === current) break;
+            current = parent;
+          }
+          const root = current || task;
+          seen.forEach((node) => rootCache.set(node, root));
+          rootCache.set(task, root);
+          return root;
+        };
+
+        const grouped = new Map();
+        allTasks.forEach((it) => {
+          const root = resolveRootTask(it) || it;
+          const key = taskStableIdOfItem(root)
+            || normalizeScheduleTaskPathForProject(projectId, root && root.path)
+            || String((root && root.path) || "");
+          if (!grouped.has(key)) {
+            grouped.set(key, {
+              key,
+              master: root,
+              members: [],
+              matched: false,
+            });
+          }
+          const group = grouped.get(key);
+          group.members.push(it);
+          const stableId = taskStableIdOfItem(it);
+          const normPath = normalizeScheduleTaskPathForProject(projectId, it && it.path);
+          if ((stableId && matchedTaskIds.has(stableId)) || (normPath && matchedTaskPaths.has(normPath))) {
+            group.matched = true;
+          }
+        });
+
+        grouped.forEach((group) => {
+          if (!group.matched) return;
+          const master = group.master || null;
+          const children = group.members
+            .filter((it) => !master || String((it && it.path) || "") !== String((master && master.path) || ""))
+            .map((it) => ({ item: it, meta: inferTaskGroupMeta(it) }))
+            .sort((a, b) => {
+              const ao = Number(a.meta.childOrder || 0);
+              const bo = Number(b.meta.childOrder || 0);
+              if (ao !== bo) return ao - bo;
+              return toTimeNum(b.item && b.item.updated_at) - toTimeNum(a.item && a.item.updated_at);
+            })
+            .map((entry) => entry.item);
+          const childCounts = Object.create(null);
+          for (const child of children) {
+            const bucket = taskPrimaryStatus(child);
+            childCounts[bucket] = Number(childCounts[bucket] || 0) + 1;
+          }
+          const masterBucket = taskPrimaryStatus(master);
+          const lane = taskLaneFromMasterBucket(masterBucket);
+          groups.push({
+            key: group.key,
+            lane,
+            master,
+            masterBucket,
+            children,
+            childCounts,
+            childTotal: children.length,
+            total: group.members.length,
+            latestAt: String((master && master.updated_at) || ""),
+            latestTs: toTimeNum(master && master.updated_at),
+          });
+        });
+      } else {
+        const grouped = new Map();
+        allTasks.forEach((it) => {
+          const meta = inferTaskGroupMeta(it);
+          const key = String(meta.key || "").trim() || String(it.path || "");
+          if (!grouped.has(key)) {
+            grouped.set(key, {
+              key,
+              members: [],
+              matched: false,
+            });
+          }
+          const group = grouped.get(key);
+          group.members.push({ item: it, meta });
+          const stableId = taskStableIdOfItem(it);
+          const normPath = normalizeScheduleTaskPathForProject(projectId, it && it.path);
+          if ((stableId && matchedTaskIds.has(stableId)) || (normPath && matchedTaskPaths.has(normPath))) {
+            group.matched = true;
+          }
+        });
+
+        grouped.forEach((g) => {
+          if (!g.matched) return;
+          const members = g.members.slice();
+          const rootCandidates = members.filter((x) => !x.meta.child).sort((a, b) => toTimeNum(b.item.updated_at) - toTimeNum(a.item.updated_at));
+          const sortedByFresh = members.slice().sort((a, b) => toTimeNum(b.item.updated_at) - toTimeNum(a.item.updated_at));
+          const master = (rootCandidates[0] || sortedByFresh[0] || {}).item || null;
+          const children = members
+            .filter((x) => !master || String(x.item.path || "") !== String(master.path || ""))
+            .sort((a, b) => {
+              const ao = Number(a.meta.childOrder || 0);
+              const bo = Number(b.meta.childOrder || 0);
+              if (ao !== bo) return ao - bo;
+              return toTimeNum(b.item.updated_at) - toTimeNum(a.item.updated_at);
+            })
+            .map((x) => x.item);
+
+          const childCounts = Object.create(null);
+          for (const child of children) {
+            const bucket = taskPrimaryStatus(child);
+            childCounts[bucket] = Number(childCounts[bucket] || 0) + 1;
+          }
+          const masterBucket = taskPrimaryStatus(master);
+          const lane = taskLaneFromMasterBucket(masterBucket);
+          const masterTs = toTimeNum(master && master.updated_at);
+          groups.push({
+            key: g.key,
+            lane,
+            master,
+            masterBucket,
+            children,
+            childCounts,
+            childTotal: children.length,
+            total: g.members.length,
+            latestAt: String((master && master.updated_at) || ""),
+            latestTs: masterTs,
+          });
         });
       }
 
@@ -6253,7 +6470,6 @@
 
     function normalizeTaskModule(raw) {
       const v = String(raw || "").trim().toLowerCase();
-      if (v === "schedule") return "schedule";
       if (v === "org") return "org";
       return "tasks";
     }
@@ -6395,51 +6611,11 @@
     }
 
     function bindTaskScheduleDragSource(node, it) {
-      if (!node || !isSchedulableMasterTaskItem(it)) return false;
-      const path = normalizeScheduleTaskPath(it.path);
-      const title = String((it && it.title) || "").trim();
-      node.setAttribute("draggable", "true");
-      node.classList.add("task-schedule-draggable");
-      node.setAttribute("data-schedule-drag-source", "1");
-      node.setAttribute("data-schedule-task-path", path);
-      if (title) node.setAttribute("data-schedule-task-title", title);
-      node.addEventListener("dragstart", (e) => {
-        setTaskScheduleDragPayload(path, title);
-        node.classList.add("is-dragging");
-        if (e && e.dataTransfer) {
-          e.dataTransfer.effectAllowed = "copy";
-          try { e.dataTransfer.setData("application/x-task-path", path); } catch (_) {}
-          try { e.dataTransfer.setData("text/plain", path); } catch (_) {}
-        }
-      });
-      node.addEventListener("dragend", () => {
-        node.classList.remove("is-dragging");
-        clearTaskScheduleDragPayload();
-      });
-      return true;
+      return false;
     }
 
     function createTaskScheduleToggleBtn(it, compact = false) {
-      if (!isSchedulableMasterTaskItem(it)) return null;
-      const pid = taskScheduleProjectIdForItem(it);
-      const path = normalizeScheduleTaskPath(it.path);
-      const scheduled = isTaskInProjectSchedule(pid, path);
-      const saving = !!PROJECT_SCHEDULE_UI.savingByProject[pid];
-      const btn = el("button", {
-        class: "btn taskschedule-entry-btn" + (compact ? " compact" : "") + (scheduled ? " active" : ""),
-        text: scheduled ? "已排期" : "排期",
-        type: "button",
-        title: scheduled ? "已在排期队列中，点击可取消" : "加入排期队列",
-      });
-      btn.disabled = saving;
-      btn.addEventListener("click", async (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        if (PROJECT_SCHEDULE_UI.savingByProject[pid]) return;
-        const nowScheduled = isTaskInProjectSchedule(pid, path);
-        await setTaskScheduleState(pid, path, !nowScheduled, "manual");
-      });
-      return btn;
+      return null;
     }
 
     function setTaskScheduleDragPayload(taskPath, title) {
@@ -6459,43 +6635,26 @@
     }
 
     function ensureTaskScheduleDragOverlay() {
-      let node = document.getElementById("taskScheduleDragOverlay");
-      if (node) return node;
-      node = el("div", { class: "task-schedule-drag-overlay", id: "taskScheduleDragOverlay" });
-      node.setAttribute("aria-hidden", "true");
-      const tip = el("div", {
-        class: "task-schedule-drag-overlay-tip",
-        id: "taskScheduleDragOverlayTip",
-        text: "拖拽到排期区域可加入排期",
-      });
-      node.appendChild(tip);
-      document.body.appendChild(node);
-      return node;
+      const existing = document.getElementById("taskScheduleDragOverlay");
+      if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
+      return null;
     }
 
     function refreshTaskScheduleDragUi() {
       const body = document.body;
       if (!body) return;
-      const active = !!TASK_SCHEDULE_DND.active;
-      const hovering = !!TASK_SCHEDULE_DND.hoveringDropZone;
-      body.classList.toggle("task-schedule-drag-active", active);
-      body.classList.toggle("task-schedule-drag-hovering", active && hovering);
-
-      const overlay = ensureTaskScheduleDragOverlay();
-      if (overlay) {
-        overlay.classList.toggle("show", active);
-        const tip = document.getElementById("taskScheduleDragOverlayTip");
-        if (tip) tip.textContent = active && hovering ? "松开即可加入排期" : "拖拽到排期区域可加入排期";
-      }
-
+      TASK_SCHEDULE_DND.active = false;
+      TASK_SCHEDULE_DND.hoveringDropZone = false;
+      TASK_SCHEDULE_DND.draggingPath = "";
+      TASK_SCHEDULE_DND.draggingTitle = "";
+      body.classList.remove("task-schedule-drag-active");
+      body.classList.remove("task-schedule-drag-hovering");
+      ensureTaskScheduleDragOverlay();
       const zones = Array.from(document.querySelectorAll("[data-schedule-drop-zone='1']"));
       zones.forEach((zone) => {
-        zone.classList.toggle("is-drop-target", active);
-        zone.classList.toggle("is-drop-ready", active && hovering && zone.classList.contains("is-drop-active"));
-        if (!active) {
-          zone.classList.remove("is-drop-active");
-          zone.classList.remove("is-drop-ready");
-        }
+        zone.classList.remove("is-drop-target");
+        zone.classList.remove("is-drop-active");
+        zone.classList.remove("is-drop-ready");
       });
     }
 

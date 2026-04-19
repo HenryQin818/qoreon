@@ -25,7 +25,24 @@
       return ["待办", "进行中", "待验收", "已完成", "暂缓", "全部"];
     }
 
+    function channelFileItems(projectId, channelName, opts = {}) {
+      const pid = String(projectId || "").trim();
+      const ch = String(channelName || "").trim();
+      if (!pid || pid === "overview" || !ch) return [];
+      const includeDiscussion = !!(opts && opts.includeDiscussion);
+      const applyQuery = !!(opts && opts.applyQuery);
+      let items = itemsForProject(pid)
+        .filter((x) => String((x && x.channel) || "") === ch)
+        .filter(isKnowledgeItem);
+      if (!includeDiscussion) items = items.filter((x) => !isDiscussionSpaceItem(x));
+      if (applyQuery) items = items.filter(matchesQuery);
+      return items;
+    }
+
     function scopeItems() {
+      if (STATE.panelMode === "channel") {
+        return channelFileItems(STATE.project, STATE.channel, { applyQuery: true });
+      }
       if (STATE.view === "comms") {
         if (STATE.project === "overview") return [];
         if (!STATE.channel) return [];
@@ -33,10 +50,6 @@
         const comms = base.filter(isDiscussionSpaceItem).filter(matchesQuery);
         comms.sort((a, b) => String(b.updated_at || "").localeCompare(String(a.updated_at || "")));
         return comms;
-      }
-      if (STATE.panelMode === "channel") {
-        if (STATE.project === "overview" || !STATE.channel) return [];
-        return channelDocumentItems(STATE.project, STATE.channel, { query: true });
       }
       if (STATE.project === "overview") return filteredItemsForProject("overview");
       if (!STATE.channel) return [];
@@ -53,11 +66,10 @@
       const bar = document.getElementById("filterBar");
       const list = document.getElementById("fileList");
       const materialsHeader = document.getElementById("taskMaterialsHeader");
-      const isChannelFileMode = STATE.panelMode === "channel" && STATE.view === "work";
 
       bar.innerHTML = "";
+      bar.style.display = STATE.panelMode === "task" ? "" : "none";
       list.innerHTML = "";
-      bar.style.display = "";
       if (materialsHeader) {
         materialsHeader.style.display = (STATE.panelMode === "channel") ? "" : "none";
       }
@@ -108,17 +120,15 @@
       const scopeLabel = (STATE.project === "overview")
         ? "总览（跨项目）"
         : ("项目:" + (proj ? proj.name : STATE.project) + " · 通道:" + (STATE.channel || "-"));
-      const viewLabel = (STATE.view === "comms") ? "沟通通道" : (isChannelFileMode ? "通道文件" : "工作任务");
+      const viewLabel = STATE.panelMode === "channel"
+        ? "文件资料"
+        : ((STATE.view === "comms") ? "沟通通道" : "工作任务");
       if (mainMeta) {
         const loadingSuffix = itemsLoading ? " · loading=1" : "";
         mainMeta.textContent = "view=" + viewLabel + " · scope=" + scopeLabel + " · generated_at=" + DATA.generated_at + " · items=" + items.length + loadingSuffix;
       }
 
-      if (isChannelFileMode) {
-        const sortRow = el("div", { class: "filterrow" });
-        sortRow.appendChild(buildItemSortControl());
-        bar.appendChild(sortRow);
-      } else if (STATE.view === "work") {
+      if (STATE.panelMode === "task" && STATE.view === "work") {
         const typeRow = el("div", { class: "filterrow" });
         for (const t of typeOptions()) {
           typeRow.appendChild(chipButton(t === "全部" ? "全部" : t, STATE.type === t, () => {
@@ -146,7 +156,7 @@
         const sortRow = el("div", { class: "filterrow" });
         sortRow.appendChild(buildItemSortControl());
         bar.appendChild(sortRow);
-      } else {
+      } else if (STATE.panelMode === "task") {
         const info = el("div", { class: "filterrow" });
         info.appendChild(chip("仅加载：讨论空间", "muted"));
         info.appendChild(buildItemSortControl());
@@ -164,22 +174,17 @@
       }
 
       if (!items.length) {
-        list.appendChild(el("div", { class: "hint", text: isChannelFileMode ? "当前通道暂无可展示的文件资料。" : "当前筛选条件下没有匹配的事项。" }));
+        list.appendChild(el("div", {
+          class: "hint",
+          text: STATE.panelMode === "channel" ? "当前通道暂无可查看文件。" : "当前筛选条件下没有匹配的事项。",
+        }));
         return;
       }
 
       for (const it of items.slice(0, 260)) {
         const path = String(it.path || "");
-        const isTaskRow = STATE.view === "work" && isTaskItem(it);
-        const taskStatusMeta = isTaskRow ? taskDisplayStatusMeta(it, "待办") : null;
-        const rowClassName = [
-          "frow",
-          path && path === String(STATE.selectedPath || "") ? "active" : "",
-          isTaskRow ? "task-main-row" : "",
-          taskStatusMeta ? ("status-" + taskStatusMeta.key) : "",
-        ].filter(Boolean).join(" ");
         const row = el("div", {
-          class: rowClassName,
+          class: "frow" + (path && path === String(STATE.selectedPath || "") ? " active" : ""),
           "data-path": path
         });
         bindTaskScheduleDragSource(row, it);
@@ -188,7 +193,7 @@
         titleRow.appendChild(buildItemTitleNode(it, "t"));
         const titleOps = el("div", { class: "frow-title-ops" });
 
-        if (STATE.view === "work" && path && isTaskItem(it)) {
+        if (STATE.panelMode !== "channel" && STATE.view === "work" && path && isTaskItem(it)) {
           const currentStatus = it.status || parseStatusFromTitle(it.title) || "待处理";
           const statusSelector = createStatusSelector(currentStatus, path, (result) => {
             setSelectedTaskRef(
@@ -200,7 +205,7 @@
           titleOps.appendChild(statusSelector);
         }
 
-        if (STATE.view === "work" && isTaskItem(it)) {
+        if (STATE.panelMode !== "channel" && STATE.view === "work" && isTaskItem(it)) {
           const scheduleBtn = createTaskScheduleToggleBtn(it, true);
           if (scheduleBtn) titleOps.appendChild(scheduleBtn);
           const pushBtn = createTaskPushEntryBtn(it, true);
@@ -212,34 +217,31 @@
 
         row.appendChild(titleRow);
 
-        const meta = el("div", { class: "m" + (isTaskRow ? " task-main-meta" : "") });
+        const meta = el("div", { class: "m" });
+        const primaryStatus = taskPrimaryStatus(it);
         const flags = taskStatusFlags(it);
-        if (STATE.view === "work") {
-          if (isTaskRow) meta.appendChild(buildTaskStatusChip(it, "待办"));
-          else if (isChannelFileMode) meta.appendChild(chip(inferKnowledgeGroupLabel(it), "muted"));
-          else meta.appendChild(chip(taskPrimaryStatus(it) || "未标记", taskPrimaryTone(taskPrimaryStatus(it))));
-          if (!isChannelFileMode && flags.supervised) meta.appendChild(chip("关注", "muted"));
+        if (STATE.panelMode === "channel") {
+          const groupLabel = inferKnowledgeGroupLabel(it);
+          meta.appendChild(chip(groupLabel, "muted"));
+          const typeLabel = String((it && it.type) || "").trim();
+          if (typeLabel && typeLabel !== groupLabel) meta.appendChild(chip(typeLabel, "muted"));
+        } else if (STATE.view === "work") {
+          meta.appendChild(chip(primaryStatus || "未标记", taskPrimaryTone(primaryStatus)));
+          if (flags.supervised) meta.appendChild(chip("关注", "bad"));
+          if (flags.blocked) meta.appendChild(chip("阻塞", "bad"));
         }
         if (STATE.project === "overview") meta.appendChild(chip(it.project_name || it.project_id, "muted"));
-        if (!isTaskRow && it.channel && !isChannelFileMode) meta.appendChild(chip(it.channel, "muted"));
-        if (it.code) meta.appendChild(chip(it.code, "muted"));
+        if (STATE.panelMode !== "channel" && it.channel) meta.appendChild(chip(it.channel, "muted"));
+        if (STATE.panelMode !== "channel" && it.code) meta.appendChild(chip(it.code, "muted"));
         const hasScheduleBtn = !!titleOps.querySelector(".taskschedule-entry-btn");
-        if (isTaskScheduledByItem(it) && !hasScheduleBtn) meta.appendChild(chip("已排期", "good"));
-        if (!isTaskRow && it.owner && !isChannelFileMode) meta.appendChild(chip("负责人:" + it.owner, "muted"));
-        if (it.updated_at) {
-          const updatedText = compactDateTime(it.updated_at) || shortDateTime(it.updated_at) || String(it.updated_at || "").trim();
-          meta.appendChild(chip("更新 " + updatedText, "muted"));
-        }
+        if (STATE.panelMode !== "channel" && isTaskScheduledByItem(it) && !hasScheduleBtn) meta.appendChild(chip("已排期", "good"));
+        if (STATE.panelMode !== "channel" && it.owner) meta.appendChild(chip("负责人:" + it.owner, "muted"));
+        if (it.updated_at) meta.appendChild(chip("更新:" + it.updated_at, "muted"));
         row.appendChild(meta);
-        if (isTaskRow) {
-          row.appendChild(el("div", {
-            class: "task-main-summary",
-            text: taskSummaryText(it, "当前暂无补充说明。"),
-          }));
-          const roleGroups = buildTaskRoleGroups(it, { className: "task-main-role-groups" });
-          if (roleGroups) row.appendChild(roleGroups);
-        }
-        row.appendChild(el("div", { class: "p" + (isTaskRow ? " task-main-path" : ""), text: path }));
+        row.appendChild(el("div", {
+          class: "p",
+          text: STATE.panelMode === "channel" ? (stripChannelPrefix(path, STATE.channel || "") || path) : path,
+        }));
         row.addEventListener("click", () => setSelectedTaskRef(it.path, taskStableIdOfItem(it)));
         list.appendChild(row);
       }

@@ -1,0 +1,56 @@
+body.project-chat-legacy {
+  margin: 0;
+  min-height: 100vh;
+  font-family: "SF Pro Display", "PingFang SC", "Segoe UI", sans-serif;
+  background:
+    radial-gradient(circle at top left, rgba(244, 221, 183, 0.28), transparent 38%),
+    linear-gradient(180deg, #f6f4ef 0%, #eef1f4 100%);
+  color: #1f2d3d;
+}
+
+.legacy-shell {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 32px 20px;
+}
+
+.legacy-card {
+  width: min(520px, 100%);
+  padding: 28px 24px;
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 22px 60px rgba(31, 45, 61, 0.14);
+  border: 1px solid rgba(125, 142, 164, 0.18);
+}
+
+.legacy-kicker {
+  margin-bottom: 10px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #8b6a2f;
+}
+
+.legacy-card h1 {
+  margin: 0 0 10px;
+  font-size: 28px;
+  line-height: 1.2;
+}
+
+.legacy-card p {
+  margin: 0 0 16px;
+  color: #5e6e81;
+  line-height: 1.6;
+}
+
+.legacy-card a {
+  color: #0c63d6;
+  text-decoration: none;
+  word-break: break-all;
+}
+
+.legacy-card a:hover {
+  text-decoration: underline;
+}

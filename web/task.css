@@ -3802,38 +3802,12 @@
       min-width: 32px;
       min-height: 32px;
       height: 32px;
-      padding: 0 9px;
-      gap: 6px;
+      padding: 0 8px;
+      gap: 5px;
       justify-content: center;
     }
     body.panel-conv #detailMemoBtn {
       padding: 0 7px;
-    }
-    body.panel-conv #detailTaskTrackingBtn .detail-task-counts {
-      display: inline-flex;
-      align-items: baseline;
-      gap: 2px;
-      font-family: var(--mono);
-      font-size: 12px;
-      font-weight: 700;
-      line-height: 1;
-      letter-spacing: 0.01em;
-    }
-    body.panel-conv #detailTaskTrackingBtn .detail-task-count {
-      display: inline-block;
-      min-width: 10px;
-      text-align: center;
-    }
-    body.panel-conv #detailTaskTrackingBtn .detail-task-count-todo {
-      color: rgba(100, 116, 139, 0.92);
-    }
-    body.panel-conv #detailTaskTrackingBtn .detail-task-count-progress {
-      color: rgba(217, 119, 6, 0.95);
-    }
-    body.panel-conv #detailTaskTrackingBtn .detail-task-count-sep {
-      color: rgba(148, 163, 184, 0.72);
-      font-size: 11px;
-      line-height: 1;
     }
     .msgrow {
       display: flex;

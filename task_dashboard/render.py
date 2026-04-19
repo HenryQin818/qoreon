@@ -90,6 +90,33 @@ def render_from_template(script_dir: Path, template_name: str, data: dict[str, A
             js = shared + "\n\n" + js
         tpl = tpl.replace("__INLINE_CSS__", css).replace("__INLINE_JS__", js)
         return tpl.replace("__PAYLOAD__", payload)
+    if template_name == "template_project_chat.html" and (web_dir / "project_chat.html.tpl").exists():
+        tpl = _read_text(web_dir / "project_chat.html.tpl")
+        css = _read_text(web_dir / "task.css") if (web_dir / "task.css").exists() else ""
+        task_parts_css = _read_optional_bundle(web_dir / "task_parts", "*.css")
+        project_chat_css = _read_text(web_dir / "project_chat.css") if (web_dir / "project_chat.css").exists() else ""
+        css = "\n\n".join(part for part in [css, task_parts_css, project_chat_css] if part)
+        js = _read_text(web_dir / "project_chat.js") if (web_dir / "project_chat.js").exists() else ""
+        tpl = tpl.replace("__INLINE_CSS__", css).replace("__INLINE_JS__", js)
+        return tpl.replace("__PAYLOAD__", payload)
+    if template_name == "template_message_risk_dashboard.html" and (web_dir / "message_risk_dashboard.html.tpl").exists():
+        tpl = _read_text(web_dir / "message_risk_dashboard.html.tpl")
+        css = _read_text(web_dir / "message_risk_dashboard.css") if (web_dir / "message_risk_dashboard.css").exists() else ""
+        shared = _read_text(web_dir / "shared.js") if (web_dir / "shared.js").exists() else ""
+        js = _read_text(web_dir / "message_risk_dashboard.js") if (web_dir / "message_risk_dashboard.js").exists() else ""
+        if shared:
+            js = shared + "\n\n" + js
+        tpl = tpl.replace("__INLINE_CSS__", css).replace("__INLINE_JS__", js)
+        return tpl.replace("__PAYLOAD__", payload)
+    if template_name == "template_agent_capability_report.html" and (web_dir / "agent_capability_report.html.tpl").exists():
+        tpl = _read_text(web_dir / "agent_capability_report.html.tpl")
+        css = _read_text(web_dir / "agent_capability_report.css") if (web_dir / "agent_capability_report.css").exists() else ""
+        shared = _read_text(web_dir / "shared.js") if (web_dir / "shared.js").exists() else ""
+        js = _read_text(web_dir / "agent_capability_report.js") if (web_dir / "agent_capability_report.js").exists() else ""
+        if shared:
+            js = shared + "\n\n" + js
+        tpl = tpl.replace("__INLINE_CSS__", css).replace("__INLINE_JS__", js)
+        return tpl.replace("__PAYLOAD__", payload)
     if template_name == "template_status_report.html" and (web_dir / "status_report.html.tpl").exists():
         tpl = _read_text(web_dir / "status_report.html.tpl")
         css = _read_text(web_dir / "status_report.css") if (web_dir / "status_report.css").exists() else ""
@@ -104,6 +131,15 @@ def render_from_template(script_dir: Path, template_name: str, data: dict[str, A
         css = _read_text(web_dir / "open_source_sync.css") if (web_dir / "open_source_sync.css").exists() else ""
         shared = _read_text(web_dir / "shared.js") if (web_dir / "shared.js").exists() else ""
         js = _read_text(web_dir / "open_source_sync.js") if (web_dir / "open_source_sync.js").exists() else ""
+        if shared:
+            js = shared + "\n\n" + js
+        tpl = tpl.replace("__INLINE_CSS__", css).replace("__INLINE_JS__", js)
+        return tpl.replace("__PAYLOAD__", payload)
+    if template_name == "template_platform_architecture_board.html" and (web_dir / "platform_architecture_board.html.tpl").exists():
+        tpl = _read_text(web_dir / "platform_architecture_board.html.tpl")
+        css = _read_text(web_dir / "platform_architecture_board.css") if (web_dir / "platform_architecture_board.css").exists() else ""
+        shared = _read_text(web_dir / "shared.js") if (web_dir / "shared.js").exists() else ""
+        js = _read_text(web_dir / "platform_architecture_board.js") if (web_dir / "platform_architecture_board.js").exists() else ""
         if shared:
             js = shared + "\n\n" + js
         tpl = tpl.replace("__INLINE_CSS__", css).replace("__INLINE_JS__", js)

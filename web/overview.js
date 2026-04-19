@@ -10,6 +10,13 @@
     const PROJECT_FILTER_KEY = "overview.projectFilter";
     const PROJECT_FILTER_KNOWN_IDS_KEY = "overview.projectFilterKnownIds";
     const STARRED_PROJECTS_KEY = "overview.starredProjects";
+    const PROJECT_COVER_ASSIGNMENTS_KEY = "overview.projectCardCoverAssignments";
+    const PROJECT_COVER_LOCAL_CUSTOM_LIBRARY_KEY = "overview.projectCardCoverCustomLibrary";
+    const PROJECT_COVER_MAX_UPLOAD_BYTES = 850 * 1024;
+    const PROJECT_COVER_MAX_LOCAL_CUSTOM_ITEMS = 4;
+    const PROJECT_COVER_STATIC_REGISTRY_URL = "/share/assets/project-covers/registry.v1.json";
+    const PROJECT_BOOTSTRAP_FIXED_DIVISION_NAME = "总控分工";
+    const PROJECT_BOOTSTRAP_FIXED_DIVISION_DESC = "项目默认总控分工";
 
     const STATE = {
       q: "",
@@ -46,7 +53,17 @@
       result: null,
       channels: [],
       nextChannelKey: 1,
-      taskRootTouched: false,
+    };
+    const PROJECT_COVER = {
+      loaded: false,
+      loading: false,
+      saving: false,
+      error: "",
+      library: [],
+      assignments: {},
+      opened: false,
+      projectId: "",
+      projectName: "",
     };
     const WORKLOG_MANIFEST_PATH = firstNonEmptyText([
       DATA && DATA.worklog_manifest_path,
@@ -243,7 +260,9 @@
     function toTaskUrl(projectId, channelName) {
       const params = new URLSearchParams();
       params.set("p", String(projectId || ""));
-      if (channelName) params.set("c", String(channelName));
+      const channel = String(channelName || "").trim();
+      if (channel) params.set("c", channel);
+      else params.set("pm", "c");
       params.set("vm", "w");
       return taskBase + "#" + params.toString();
     }
@@ -264,6 +283,619 @@
       window.open(url, "_blank", "noopener,noreferrer");
     }
     function fmt(v) { return String(v == null ? 0 : v); }
+
+    function defaultProjectCoverLibrary() {
+      return [
+        { id: "strategy_loft_hub", name: "战略中枢", image_url: "https://images.unsplash.com/photo-1431540015161-0bf868a2d407?auto=format&fit=crop&w=1600&q=80", tone: "warm", source: "preset", credit: "Unsplash" },
+        { id: "minimalist_focus_bay", name: "极简专注区", image_url: "https://images.unsplash.com/photo-1497215728101-856f4ea42174?auto=format&fit=crop&w=1600&q=80", tone: "neutral", source: "preset", credit: "Unsplash" },
+        { id: "skyline_product_studio", name: "城市产品工位", image_url: "https://images.unsplash.com/photo-1497215842964-222b430dc094?auto=format&fit=crop&w=1600&q=80", tone: "cool", source: "preset", credit: "Unsplash" },
+        { id: "boardroom_glass_light", name: "玻璃会议光场", image_url: "https://images.unsplash.com/photo-1497366811353-6870744d04b2?auto=format&fit=crop&w=1600&q=80", tone: "cool", source: "preset", credit: "Unsplash" },
+        { id: "morning_sync_room", name: "晨会协同间", image_url: "https://images.unsplash.com/photo-1497366754035-f200968a6e72?auto=format&fit=crop&w=1600&q=80", tone: "neutral", source: "preset", credit: "Unsplash" },
+        { id: "coworking_neon_lane", name: "协作长廊", image_url: "https://images.unsplash.com/photo-1497366858526-0766cadbe8fa?auto=format&fit=crop&w=1600&q=80", tone: "cool", source: "preset", credit: "Unsplash" },
+        { id: "makerspace_command_desk", name: "创作主控台", image_url: "https://images.unsplash.com/photo-1499951360447-b19be8fe80f5?auto=format&fit=crop&w=1600&q=80", tone: "warm", source: "preset", credit: "Unsplash" },
+        { id: "clean_code_station", name: "清爽编码位", image_url: "https://images.unsplash.com/photo-1510074377623-8cf13fb86c08?auto=format&fit=crop&w=1600&q=80", tone: "neutral", source: "preset", credit: "Unsplash" },
+        { id: "remote_collab_suite", name: "远程协作套间", image_url: "https://images.unsplash.com/photo-1524758631624-e2822e304c36?auto=format&fit=crop&w=1600&q=80", tone: "cool", source: "preset", credit: "Unsplash" },
+        { id: "planning_huddle_zone", name: "计划讨论区", image_url: "https://images.unsplash.com/photo-1556761175-4b46a572b786?auto=format&fit=crop&w=1600&q=80", tone: "warm", source: "preset", credit: "Unsplash" },
+        { id: "quiet_ideation_corner", name: "安静构思角", image_url: "https://images.unsplash.com/photo-1560264280-88b68371db39?auto=format&fit=crop&w=1600&q=80", tone: "neutral", source: "preset", credit: "Unsplash" },
+        { id: "premium_office_atrium", name: "高级中庭办公", image_url: "https://images.unsplash.com/photo-1571624436279-b272aff752b5?auto=format&fit=crop&w=1600&q=80", tone: "cool", source: "preset", credit: "Unsplash" },
+        { id: "executive_lounge_view", name: "管理层视角", image_url: "https://images.unsplash.com/photo-1504297050568-910d24c426d3?auto=format&fit=crop&w=1600&q=80", tone: "neutral", source: "preset", credit: "Unsplash" },
+        { id: "sprint_wall_session", name: "冲刺作战墙", image_url: "https://images.unsplash.com/photo-1519217651866-847339e674d4?auto=format&fit=crop&w=1600&q=80", tone: "warm", source: "preset", credit: "Unsplash" },
+        { id: "innovation_lab_floor", name: "创新实验区", image_url: "https://images.unsplash.com/photo-1549637642-90187f64f420?auto=format&fit=crop&w=1600&q=80", tone: "cool", source: "preset", credit: "Unsplash" },
+        { id: "city_ops_bridge", name: "城市运营桥", image_url: "https://images.unsplash.com/photo-1606836379799-f88b03bc7039?auto=format&fit=crop&w=1600&q=80", tone: "cool", source: "preset", credit: "Unsplash" },
+        { id: "gradient_focus_pod", name: "光影专注舱", image_url: "https://images.unsplash.com/photo-1606857521015-7f9fcf423740?auto=format&fit=crop&w=1600&q=80", tone: "warm", source: "preset", credit: "Unsplash" },
+        { id: "premium_open_studio", name: "开放工作室", image_url: "https://images.unsplash.com/photo-1657978837950-03646a7c7b9e?auto=format&fit=crop&w=1600&q=80", tone: "neutral", source: "preset", credit: "Unsplash" },
+      ];
+    }
+
+    function normalizeProjectCoverBackground(raw) {
+      const text = String(raw || "").trim();
+      if (!text) return "";
+      if (text.length > 480) return "";
+      const lower = text.toLowerCase();
+      if (lower.startsWith("linear-gradient(") || lower.startsWith("radial-gradient(")) return text;
+      return "";
+    }
+
+    function normalizeProjectCoverImageUrl(raw) {
+      const text = String(raw || "").trim();
+      if (!text) return "";
+      if (/^https?:\/\//i.test(text)) return text;
+      if (/^(?:\/|\.\/|\.\.\/).+\.(?:png|jpe?g|webp|avif|gif|svg)(?:[?#].*)?$/i.test(text)) return text;
+      if (/^data:image\/(?:png|jpeg|jpg|webp);base64,[a-z0-9+/=]+$/i.test(text) && text.length <= 1_900_000) {
+        return text;
+      }
+      return "";
+    }
+
+    function normalizeProjectCoverSource(raw) {
+      const text = String(raw || "").trim().toLowerCase();
+      if (!text) return "preset";
+      if (text === "custom" || text === "user") return "custom";
+      return "preset";
+    }
+
+    function projectCoverBackgroundFromItem(itemLike) {
+      const item = itemLike && typeof itemLike === "object" ? itemLike : {};
+      const imageUrl = normalizeProjectCoverImageUrl(item.image_url || item.imageUrl || "");
+      if (imageUrl) {
+        const safeUrl = imageUrl.replace(/"/g, "%22");
+        return `linear-gradient(170deg, rgba(15, 23, 42, 0.08) 0%, rgba(15, 23, 42, 0.34) 100%), url("${safeUrl}")`;
+      }
+      return normalizeProjectCoverBackground(item.background || "") || "linear-gradient(130deg,#0f172a 0%,#334155 45%,#94a3b8 100%)";
+    }
+
+    function applyProjectCoverBackground(node, itemLike) {
+      if (!node) return;
+      const item = itemLike && typeof itemLike === "object" ? itemLike : {};
+      const imageUrl = normalizeProjectCoverImageUrl(item.image_url || item.imageUrl || "");
+      if (imageUrl) {
+        const safeUrl = imageUrl.replace(/"/g, "%22");
+        node.style.backgroundImage = `linear-gradient(170deg, rgba(15, 23, 42, 0.08) 0%, rgba(15, 23, 42, 0.34) 100%), url("${safeUrl}")`;
+        node.style.backgroundPosition = "center center";
+        node.style.backgroundSize = "cover";
+        node.style.backgroundRepeat = "no-repeat";
+        return;
+      }
+      node.style.background = projectCoverBackgroundFromItem(item);
+      node.style.backgroundImage = "";
+      node.style.backgroundPosition = "";
+      node.style.backgroundSize = "";
+      node.style.backgroundRepeat = "";
+    }
+
+    function normalizeProjectCoverLibrary(raw) {
+      const defaults = defaultProjectCoverLibrary();
+      if (!Array.isArray(raw) || !raw.length) return defaults;
+      const defaultMap = new Map(defaults.map((item) => [String(item.id || "").trim(), item]));
+      const out = [];
+      const seen = new Set();
+      for (const item of raw) {
+        if (!item || typeof item !== "object") continue;
+        const id = String(item.id || "").trim().toLowerCase();
+        if (!id || seen.has(id)) continue;
+        const fallback = defaultMap.get(id) || {};
+        const name = String(item.name || fallback.name || id).trim();
+        const tone = String(item.tone || fallback.tone || "").trim().toLowerCase();
+        const source = normalizeProjectCoverSource(item.source || fallback.source || "");
+        const credit = String(item.credit || fallback.credit || "").trim().slice(0, 60);
+        const imageUrl = normalizeProjectCoverImageUrl(item.image_url || item.imageUrl || fallback.image_url || fallback.imageUrl || "");
+        const background = normalizeProjectCoverBackground(item.background || fallback.background || "");
+        if (!imageUrl && !background) continue;
+        out.push({
+          id,
+          name,
+          image_url: imageUrl,
+          background,
+          tone,
+          source,
+          credit,
+        });
+        seen.add(id);
+      }
+      return out.length ? out : defaults;
+    }
+
+    function projectCoverLibraryMap() {
+      return new Map((Array.isArray(PROJECT_COVER.library) ? PROJECT_COVER.library : []).map((item) => [String(item.id || "").trim(), item]));
+    }
+
+    function stableProjectCoverIndex(projectId, size) {
+      const m = Number(size || 0);
+      if (!m) return 0;
+      const text = String(projectId || "").trim();
+      if (!text) return 0;
+      let hash = 2166136261;
+      for (let i = 0; i < text.length; i += 1) {
+        hash ^= text.charCodeAt(i);
+        hash = (hash + ((hash << 1) + (hash << 4) + (hash << 7) + (hash << 8) + (hash << 24))) >>> 0;
+      }
+      return hash % m;
+    }
+
+    function normalizeProjectCoverAssignments(raw, validIds = null) {
+      const ref = raw && typeof raw === "object" ? raw : {};
+      const out = {};
+      const valid = validIds instanceof Set ? validIds : null;
+      Object.entries(ref).forEach(([k, v]) => {
+        const projectId = String(k || "").trim();
+        const coverId = String(v || "").trim().toLowerCase();
+        if (!projectId || !coverId) return;
+        if (valid && !valid.has(coverId)) return;
+        out[projectId] = coverId;
+      });
+      return out;
+    }
+
+    function normalizeProjectCoverCustomItems(raw) {
+      const list = Array.isArray(raw) ? raw : [];
+      const out = [];
+      const seen = new Set();
+      for (const item of list) {
+        if (!item || typeof item !== "object") continue;
+        const id = String(item.id || "").trim().toLowerCase();
+        if (!id || seen.has(id)) continue;
+        const name = String(item.name || "自定义办公配图").trim().slice(0, 40);
+        const tone = String(item.tone || "custom").trim().toLowerCase() || "custom";
+        const credit = String(item.credit || "本地上传").trim().slice(0, 60);
+        const imageUrl = normalizeProjectCoverImageUrl(item.image_url || item.imageUrl || "");
+        const background = normalizeProjectCoverBackground(item.background || "");
+        if (!imageUrl && !background) continue;
+        out.push({
+          id,
+          name: name || "自定义办公配图",
+          image_url: imageUrl,
+          background,
+          tone,
+          source: "custom",
+          credit: credit || "本地上传",
+        });
+        seen.add(id);
+      }
+      return out.slice(0, PROJECT_COVER_MAX_LOCAL_CUSTOM_ITEMS);
+    }
+
+    function loadLocalProjectCoverCustomItems() {
+      try {
+        const raw = localStorage.getItem(PROJECT_COVER_LOCAL_CUSTOM_LIBRARY_KEY);
+        if (!raw) return [];
+        const parsed = JSON.parse(raw);
+        return normalizeProjectCoverCustomItems(parsed);
+      } catch (_) {
+        return [];
+      }
+    }
+
+    function persistProjectCoverLocalCustomItems() {
+      try {
+        const customItems = normalizeProjectCoverCustomItems(PROJECT_COVER.library);
+        localStorage.setItem(PROJECT_COVER_LOCAL_CUSTOM_LIBRARY_KEY, JSON.stringify(customItems));
+      } catch (_) {}
+    }
+
+    function mergeProjectCoverLibrary(baseLibrary, customItems) {
+      const base = normalizeProjectCoverLibrary(baseLibrary);
+      const custom = normalizeProjectCoverCustomItems(customItems);
+      if (!custom.length) return base;
+      const merged = [];
+      const seen = new Set();
+      for (const item of custom) {
+        const id = String(item.id || "").trim();
+        if (!id || seen.has(id)) continue;
+        merged.push(item);
+        seen.add(id);
+      }
+      for (const item of base) {
+        const id = String(item.id || "").trim();
+        if (!id || seen.has(id)) continue;
+        merged.push(item);
+        seen.add(id);
+      }
+      return merged;
+    }
+
+    function setProjectCoverLibrary(baseLibrary, options = {}) {
+      const opts = options && typeof options === "object" ? options : {};
+      const mergeLocalCustom = opts.mergeLocalCustom !== false;
+      const localCustom = mergeLocalCustom ? loadLocalProjectCoverCustomItems() : [];
+      PROJECT_COVER.library = mergeProjectCoverLibrary(baseLibrary, localCustom);
+      persistProjectCoverLocalCustomItems();
+    }
+
+    function isProjectCoverApiUnavailable(errorLike) {
+      const status = Number(errorLike && errorLike.status);
+      if (status === 404 || status === 405 || status === 501) return true;
+      const text = String(errorLike && errorLike.message ? errorLike.message : errorLike).trim().toLowerCase();
+      if (!text) return false;
+      return text.includes("http 404")
+        || text.includes("http 405")
+        || text.includes("http 501")
+        || text.includes("not found")
+        || text.includes("method not allowed")
+        || text.includes("failed to fetch");
+    }
+
+    function applyProjectCoverSelectionLocally(projectIdRaw, coverIdRaw) {
+      const projectId = String(projectIdRaw || "").trim();
+      const coverId = String(coverIdRaw || "").trim().toLowerCase();
+      if (!projectId) throw new Error("未选择项目");
+      if (coverId) {
+        const validIds = new Set((Array.isArray(PROJECT_COVER.library) ? PROJECT_COVER.library : []).map((item) => String(item.id || "").trim().toLowerCase()));
+        if (!validIds.has(coverId)) throw new Error("无效配图");
+      }
+      const nextAssignments = Object.assign({}, PROJECT_COVER.assignments || {});
+      if (coverId) nextAssignments[projectId] = coverId;
+      else delete nextAssignments[projectId];
+      applyProjectCoverAssignments(nextAssignments);
+    }
+
+    function createLocalProjectCoverId() {
+      const stamp = Date.now().toString(36);
+      const random = Math.random().toString(36).slice(2, 8);
+      return "custom_local_" + stamp + "_" + random;
+    }
+
+    function persistProjectCoverAssignments() {
+      try {
+        localStorage.setItem(PROJECT_COVER_ASSIGNMENTS_KEY, JSON.stringify(PROJECT_COVER.assignments || {}));
+      } catch (_) {}
+    }
+
+    function applyProjectCoverAssignments(nextAssignments) {
+      const validIds = new Set((Array.isArray(PROJECT_COVER.library) ? PROJECT_COVER.library : []).map((item) => String(item.id || "").trim()));
+      PROJECT_COVER.assignments = normalizeProjectCoverAssignments(nextAssignments, validIds);
+      persistProjectCoverAssignments();
+    }
+
+    function loadLocalProjectCoverAssignments() {
+      try {
+        const raw = localStorage.getItem(PROJECT_COVER_ASSIGNMENTS_KEY);
+        if (!raw) return {};
+        const parsed = JSON.parse(raw);
+        return normalizeProjectCoverAssignments(parsed);
+      } catch (_) {
+        return {};
+      }
+    }
+
+    function resolveProjectCardCover(projectId) {
+      const list = Array.isArray(PROJECT_COVER.library) ? PROJECT_COVER.library : [];
+      if (!list.length) {
+        return {
+          id: "fallback",
+          name: "默认封面",
+          image_url: "",
+          background: "linear-gradient(130deg,#0f172a 0%,#334155 45%,#94a3b8 100%)",
+          tone: "neutral",
+          source: "preset",
+          credit: "",
+          customized: false,
+        };
+      }
+      const pid = String(projectId || "").trim();
+      const libraryMap = projectCoverLibraryMap();
+      const assignedId = String((PROJECT_COVER.assignments && PROJECT_COVER.assignments[pid]) || "").trim();
+      const assignedCover = assignedId ? libraryMap.get(assignedId) : null;
+      if (assignedCover) {
+        return {
+          id: assignedCover.id,
+          name: assignedCover.name,
+          image_url: assignedCover.image_url || "",
+          background: assignedCover.background || "",
+          tone: assignedCover.tone || "",
+          source: assignedCover.source || "custom",
+          credit: assignedCover.credit || "",
+          customized: true,
+        };
+      }
+      const index = stableProjectCoverIndex(pid, list.length);
+      const fallback = list[index] || list[0];
+      return {
+        id: String(fallback.id || ""),
+        name: String(fallback.name || "默认封面"),
+        image_url: String(fallback.image_url || ""),
+        background: String(fallback.background || ""),
+        tone: String(fallback.tone || ""),
+        source: String(fallback.source || "preset"),
+        credit: String(fallback.credit || ""),
+        customized: false,
+      };
+    }
+
+    function estimateBase64DataSize(base64Text) {
+      const s = String(base64Text || "").trim();
+      if (!s) return 0;
+      const padding = s.endsWith("==") ? 2 : (s.endsWith("=") ? 1 : 0);
+      return Math.max(0, Math.floor((s.length * 3) / 4) - padding);
+    }
+
+    function estimateDataUrlBytes(dataUrl) {
+      const text = String(dataUrl || "");
+      const idx = text.indexOf(",");
+      if (idx < 0) return 0;
+      return estimateBase64DataSize(text.slice(idx + 1));
+    }
+
+    function normalizeUploadedCoverName(rawName) {
+      const text = String(rawName || "").trim().replace(/\.[a-z0-9]+$/i, "").trim();
+      if (!text) return "自定义办公配图";
+      return text.slice(0, 40);
+    }
+
+    function loadFileAsDataUrl(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ""));
+        reader.onerror = () => reject(new Error("图片读取失败"));
+        reader.readAsDataURL(file);
+      });
+    }
+
+    function loadImageFromDataUrl(dataUrl) {
+      return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => resolve(img);
+        img.onerror = () => reject(new Error("图片解码失败"));
+        img.src = dataUrl;
+      });
+    }
+
+    async function buildUploadCoverDataUrl(file) {
+      const fileCtor = typeof File !== "undefined" ? File : null;
+      const fileLike = fileCtor && file instanceof fileCtor ? file : null;
+      if (!fileLike) throw new Error("未选择图片");
+      if (!/^image\//i.test(String(fileLike.type || ""))) throw new Error("仅支持图片文件");
+      if (fileLike.size > 10 * 1024 * 1024) throw new Error("图片超过 10MB，请压缩后再上传");
+      const rawDataUrl = await loadFileAsDataUrl(fileLike);
+      const image = await loadImageFromDataUrl(rawDataUrl);
+      const maxW = 1600;
+      const maxH = 1000;
+      const rawW = Math.max(1, Number(image.naturalWidth || image.width || 0));
+      const rawH = Math.max(1, Number(image.naturalHeight || image.height || 0));
+      const scale = Math.min(1, maxW / rawW, maxH / rawH);
+      const targetW = Math.max(360, Math.round(rawW * scale));
+      const targetH = Math.max(220, Math.round(rawH * scale));
+      const canvas = document.createElement("canvas");
+      canvas.width = targetW;
+      canvas.height = targetH;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) throw new Error("浏览器不支持图片处理");
+      ctx.drawImage(image, 0, 0, targetW, targetH);
+      let quality = 0.86;
+      let output = canvas.toDataURL("image/jpeg", quality);
+      while (estimateDataUrlBytes(output) > PROJECT_COVER_MAX_UPLOAD_BYTES && quality > 0.62) {
+        quality -= 0.08;
+        output = canvas.toDataURL("image/jpeg", quality);
+      }
+      if (estimateDataUrlBytes(output) > PROJECT_COVER_MAX_UPLOAD_BYTES) {
+        throw new Error("图片过大，请选择分辨率更小的图片");
+      }
+      return output;
+    }
+
+    function projectCoverMsg(text, cls = "") {
+      const node = document.getElementById("projectCoverMessage");
+      if (!node) return;
+      node.className = "cfg-message" + (cls ? (" " + cls) : "");
+      node.textContent = String(text || "");
+    }
+
+    function setProjectCoverOpened(opened) {
+      PROJECT_COVER.opened = !!opened;
+      document.body.classList.toggle("project-cover-open", PROJECT_COVER.opened);
+      const mask = document.getElementById("projectCoverMask");
+      const drawer = document.getElementById("projectCoverDrawer");
+      if (mask) mask.hidden = !PROJECT_COVER.opened;
+      if (drawer) drawer.setAttribute("aria-hidden", PROJECT_COVER.opened ? "false" : "true");
+      if (!PROJECT_COVER.opened) projectCoverMsg("");
+    }
+
+    function renderProjectCoverPicker() {
+      const titleEl = document.getElementById("projectCoverProjectName");
+      const subtitleEl = document.getElementById("projectCoverSubtitle");
+      const grid = document.getElementById("projectCoverGrid");
+      const resetBtn = document.getElementById("projectCoverResetBtn");
+      const uploadBtn = document.getElementById("projectCoverUploadBtn");
+      if (titleEl) {
+        titleEl.textContent = PROJECT_COVER.projectName
+          ? `${PROJECT_COVER.projectName}（${PROJECT_COVER.projectId}）`
+          : "未选择项目";
+      }
+      if (subtitleEl) {
+        subtitleEl.textContent = PROJECT_COVER.projectName
+          ? "为该项目设置展示封面。未自定义时按项目 ID 稳定随机分配。"
+          : "为项目选择封面配图，默认按项目随机稳定分配。";
+      }
+      if (!grid) return;
+      grid.innerHTML = "";
+      const library = Array.isArray(PROJECT_COVER.library) ? PROJECT_COVER.library : [];
+      if (!library.length) {
+        grid.appendChild(el("div", { class: "worklog-empty", text: "暂无可用配图。" }));
+        if (resetBtn) resetBtn.disabled = true;
+        if (uploadBtn) uploadBtn.disabled = PROJECT_COVER.saving || !PROJECT_COVER.projectId;
+        return;
+      }
+      const activeAssigned = String((PROJECT_COVER.assignments && PROJECT_COVER.assignments[PROJECT_COVER.projectId]) || "").trim();
+      if (resetBtn) {
+        resetBtn.disabled = PROJECT_COVER.saving || !activeAssigned;
+      }
+      if (uploadBtn) {
+        uploadBtn.disabled = PROJECT_COVER.saving || !PROJECT_COVER.projectId;
+      }
+      library.forEach((cover) => {
+        const id = String(cover.id || "").trim();
+        const option = el("button", {
+          class: "project-cover-option" + (activeAssigned === id ? " is-active" : "") + (cover.source === "custom" ? " is-custom" : ""),
+          type: "button",
+          title: activeAssigned === id ? "当前自定义配图" : "应用该配图",
+        });
+        const preview = el("span", { class: "project-cover-option-preview" });
+        applyProjectCoverBackground(preview, cover);
+        option.appendChild(preview);
+        const body = el("span", { class: "project-cover-option-body" });
+        const main = el("span", { class: "project-cover-option-main" });
+        main.appendChild(el("span", { class: "project-cover-option-name", text: String(cover.name || id) }));
+        main.appendChild(el("span", { class: "project-cover-option-kind", text: cover.source === "custom" ? "自定义" : "内置" }));
+        body.appendChild(main);
+        body.appendChild(el("span", {
+          class: "project-cover-option-state",
+          text: activeAssigned === id ? "已应用" : "点击应用",
+        }));
+        option.appendChild(body);
+        option.disabled = PROJECT_COVER.saving;
+        option.addEventListener("click", () => {
+          saveProjectCoverSelection(id);
+        });
+        grid.appendChild(option);
+      });
+    }
+
+    function openProjectCoverPicker(projectId, projectName) {
+      PROJECT_COVER.projectId = String(projectId || "").trim();
+      PROJECT_COVER.projectName = String(projectName || "").trim();
+      setCfgOpened(false);
+      setWorklogOpened(false);
+      setProjectBootstrapOpened(false);
+      renderProjectCoverPicker();
+      setProjectCoverOpened(true);
+    }
+
+    function closeProjectCoverPicker() {
+      setProjectCoverOpened(false);
+      PROJECT_COVER.projectId = "";
+      PROJECT_COVER.projectName = "";
+    }
+
+    async function saveProjectCoverSelection(coverId) {
+      const projectId = String(PROJECT_COVER.projectId || "").trim();
+      if (!projectId || PROJECT_COVER.saving) return;
+      const selectedCoverId = String(coverId || "").trim();
+      PROJECT_COVER.saving = true;
+      renderProjectCoverPicker();
+      projectCoverMsg("正在保存配图...", "");
+      try {
+        const body = {
+          project_id: projectId,
+          cover_id: selectedCoverId,
+        };
+        const data = await fetchJson("/api/project-card-covers", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        if (Array.isArray(data.library)) setProjectCoverLibrary(data.library);
+        applyProjectCoverAssignments(data.assignments || {});
+        projectCoverMsg(body.cover_id ? "项目配图已更新" : "已恢复默认随机配图", "ok");
+        renderProjectCoverPicker();
+        renderCards();
+      } catch (e) {
+        if (isProjectCoverApiUnavailable(e)) {
+          try {
+            applyProjectCoverSelectionLocally(projectId, selectedCoverId);
+            projectCoverMsg(selectedCoverId ? "项目配图已本地保存" : "已恢复默认随机配图（本地）", "ok");
+            renderProjectCoverPicker();
+            renderCards();
+          } catch (localErr) {
+            projectCoverMsg("保存失败：" + (localErr && localErr.message ? localErr.message : localErr), "err");
+          }
+        } else {
+          projectCoverMsg("保存失败：" + (e && e.message ? e.message : e), "err");
+        }
+      } finally {
+        PROJECT_COVER.saving = false;
+        renderProjectCoverPicker();
+      }
+    }
+
+    async function uploadProjectCover(file) {
+      const projectId = String(PROJECT_COVER.projectId || "").trim();
+      if (!projectId || PROJECT_COVER.saving) return;
+      let dataUrl = "";
+      PROJECT_COVER.saving = true;
+      renderProjectCoverPicker();
+      projectCoverMsg("正在上传并处理图片...", "");
+      try {
+        dataUrl = await buildUploadCoverDataUrl(file);
+        const body = {
+          project_id: projectId,
+          custom_cover_name: normalizeUploadedCoverName(file && file.name),
+          custom_cover_image_data_url: dataUrl,
+        };
+        const data = await fetchJson("/api/project-card-covers", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        if (Array.isArray(data.library)) setProjectCoverLibrary(data.library);
+        applyProjectCoverAssignments(data.assignments || {});
+        projectCoverMsg("自定义配图已加入图库并应用", "ok");
+        renderProjectCoverPicker();
+        renderCards();
+      } catch (e) {
+        if (isProjectCoverApiUnavailable(e)) {
+          try {
+            const customCover = {
+              id: createLocalProjectCoverId(),
+              name: normalizeUploadedCoverName(file && file.name),
+              image_url: dataUrl,
+              background: "",
+              tone: "custom",
+              source: "custom",
+              credit: "本地上传",
+            };
+            const localCustom = [customCover].concat(loadLocalProjectCoverCustomItems());
+            PROJECT_COVER.library = mergeProjectCoverLibrary(defaultProjectCoverLibrary(), localCustom);
+            persistProjectCoverLocalCustomItems();
+            applyProjectCoverSelectionLocally(projectId, customCover.id);
+            projectCoverMsg("自定义配图已本地加入图库并应用", "ok");
+            renderProjectCoverPicker();
+            renderCards();
+          } catch (localErr) {
+            projectCoverMsg("上传失败：" + (localErr && localErr.message ? localErr.message : localErr), "err");
+          }
+        } else {
+          projectCoverMsg("上传失败：" + (e && e.message ? e.message : e), "err");
+        }
+      } finally {
+        PROJECT_COVER.saving = false;
+        renderProjectCoverPicker();
+      }
+    }
+
+    async function loadProjectCardCoversFromUrl(url) {
+      const result = await fetchJsonWithMeta(url, { cache: "no-store" });
+      if (!result.ok) {
+        throw new Error(String((result.data && result.data.error) || ("HTTP " + result.status)));
+      }
+      const payload = result.data || {};
+      setProjectCoverLibrary(payload.library);
+      applyProjectCoverAssignments(payload.assignments || {});
+      return true;
+    }
+
+    async function loadProjectCardCovers() {
+      if (PROJECT_COVER.loading) return;
+      PROJECT_COVER.loading = true;
+      PROJECT_COVER.error = "";
+      setProjectCoverLibrary(PROJECT_COVER.library.length ? PROJECT_COVER.library : defaultProjectCoverLibrary());
+      applyProjectCoverAssignments(loadLocalProjectCoverAssignments());
+      let applied = false;
+      try {
+        applied = await loadProjectCardCoversFromUrl("/api/project-card-covers");
+      } catch (e) {
+        PROJECT_COVER.error = String(e && e.message ? e.message : e);
+        if (!applied) {
+          try {
+            applied = await loadProjectCardCoversFromUrl(PROJECT_COVER_STATIC_REGISTRY_URL);
+            PROJECT_COVER.error = "";
+          } catch (fallbackError) {
+            if (!PROJECT_COVER.error) PROJECT_COVER.error = String(fallbackError && fallbackError.message ? fallbackError.message : fallbackError);
+          }
+        }
+      } finally {
+        PROJECT_COVER.loaded = true;
+        PROJECT_COVER.loading = false;
+      }
+    }
 
     function applyStateToDom() {
       document.body.classList.toggle("stats-off", !STATE.showStats);
@@ -535,7 +1167,9 @@
       }
       if (!resp.ok) {
         const msg = (data && data.error) ? String(data.error) : ("HTTP " + resp.status);
-        throw new Error(msg);
+        const err = new Error(msg);
+        err.status = resp.status;
+        throw err;
       }
       return data || {};
     }
@@ -734,6 +1368,16 @@
       };
     }
 
+    function resolveProjectKnowledgeCount(totals) {
+      const row = (totals && typeof totals === "object") ? totals : {};
+      if (Object.prototype.hasOwnProperty.call(row, "knowledge_total")) {
+        return Math.max(0, num(row.knowledge_total));
+      }
+      // Fallback for old payloads: non-task documents in project totals.
+      const derived = num(row.items_total) - num(row.total) - num(row.requirements_total);
+      return Math.max(0, derived);
+    }
+
     function classifyTaskStatus(raw) {
       const primary = taskPrimaryStatus(raw);
       if (primary === "已完成") return "done";
@@ -791,12 +1435,58 @@
 
     function collectOverviewTaskOwnerIdentityKeys(task) {
       const item = (task && typeof task === "object") ? task : {};
-      const owner = (item.main_owner && typeof item.main_owner === "object")
-        ? item.main_owner
-        : ((item.owner && typeof item.owner === "object")
-          ? item.owner
-          : ((item.next_owner && typeof item.next_owner === "object") ? item.next_owner : null));
-      return collectOverviewAgentIdentityKeys(owner);
+      const owner = item.main_owner;
+      if (owner && typeof owner === "object") {
+        return collectOverviewAgentIdentityKeys(owner);
+      }
+      const keys = new Set();
+      if (owner !== null && owner !== undefined) {
+        appendOverviewIdentityKey(keys, "name", owner);
+      }
+      return keys;
+    }
+
+    function appendOverviewIdentityKeysFromRoleMember(keys, rawMember) {
+      if (!(keys instanceof Set)) return;
+      if (rawMember === null || rawMember === undefined) return;
+      if (rawMember && typeof rawMember === "object") {
+        collectOverviewAgentIdentityKeys(rawMember).forEach((key) => keys.add(key));
+        return;
+      }
+      appendOverviewIdentityKey(keys, "name", rawMember);
+    }
+
+    function appendOverviewIdentityKeysFromRoleMembers(keys, members) {
+      if (!(keys instanceof Set)) return;
+      if (Array.isArray(members)) {
+        members.forEach((member) => appendOverviewIdentityKeysFromRoleMember(keys, member));
+        return;
+      }
+      appendOverviewIdentityKeysFromRoleMember(keys, members);
+    }
+
+    function collectOverviewTaskAssociationIdentityKeys(task) {
+      const item = (task && typeof task === "object") ? task : {};
+      const keys = new Set();
+      appendOverviewIdentityKeysFromRoleMember(keys, item.main_owner);
+      appendOverviewIdentityKeysFromRoleMembers(keys, item.management_slot);
+      appendOverviewIdentityKeysFromRoleMembers(keys, item.collaborators);
+      appendOverviewIdentityKeysFromRoleMembers(keys, item.validators);
+      appendOverviewIdentityKeysFromRoleMembers(keys, item.challengers);
+      appendOverviewIdentityKeysFromRoleMembers(keys, item.backup_owners);
+      const customRoles = Array.isArray(item.custom_roles) ? item.custom_roles : [];
+      customRoles.forEach((role) => {
+        if (!role || typeof role !== "object") return;
+        appendOverviewIdentityKeysFromRoleMembers(keys, role.members);
+      });
+      return keys;
+    }
+
+    function classifyOverviewAssociatedTaskBucket(task) {
+      const primary = taskPrimaryStatus(task);
+      if (primary === "进行中") return "in_progress";
+      if (primary === "待办" || primary === "待验收") return "pending";
+      return "";
     }
 
     function buildAgentMainOwnerTaskCounts(tasks, agents) {
@@ -832,6 +1522,39 @@
       return countsByAgent;
     }
 
+    function buildAgentAssociatedTaskCounts(tasks, agents) {
+      const taskList = Array.isArray(tasks) ? tasks : [];
+      const agentList = Array.isArray(agents) ? agents : [];
+      const countsByAgent = new Map();
+      const keyToAgents = new Map();
+      agentList.forEach((agent) => {
+        const counts = { in_progress: 0, pending: 0 };
+        countsByAgent.set(agent, counts);
+        collectOverviewAgentIdentityKeys(agent).forEach((key) => {
+          if (!keyToAgents.has(key)) keyToAgents.set(key, []);
+          keyToAgents.get(key).push(agent);
+        });
+      });
+      taskList.forEach((task) => {
+        const bucket = classifyOverviewAssociatedTaskBucket(task);
+        if (bucket !== "in_progress" && bucket !== "pending") return;
+        const identityKeys = collectOverviewTaskAssociationIdentityKeys(task);
+        if (!identityKeys.size) return;
+        const matchedAgents = new Set();
+        identityKeys.forEach((key) => {
+          const list = keyToAgents.get(key);
+          if (!Array.isArray(list)) return;
+          list.forEach((agent) => matchedAgents.add(agent));
+        });
+        matchedAgents.forEach((agent) => {
+          const counts = countsByAgent.get(agent);
+          if (!counts) return;
+          counts[bucket] += 1;
+        });
+      });
+      return countsByAgent;
+    }
+
     function formatCount(v) {
       return num(v).toLocaleString("zh-CN");
     }
@@ -850,54 +1573,45 @@
       const src = Array.isArray(projects) ? projects : [];
       const projectIds = new Set(src.map((p) => String((p && p.project_id) || "").trim()).filter(Boolean));
       const days = lastNDaysKeys(7);
-      const inProgressMap = new Map(days.map((key) => [key, 0]));
-      const todoMap = new Map(days.map((key) => [key, 0]));
-      const pendingAcceptanceMap = new Map(days.map((key) => [key, 0]));
-      const doneMap = new Map(days.map((key) => [key, 0]));
-      const changeMap = new Map(days.map((key) => [key, 0]));
-      const summary = { in_progress: 0, todo: 0, pending_acceptance: 0, done: 0, changes7d: 0 };
-
-      for (const project of src) {
-        const totals = (project && typeof project.totals === "object") ? project.totals : {};
-        const primaryCounts = primaryStatusCountsFromTotals(totals);
-        summary.in_progress += primaryCounts.in_progress;
-        summary.todo += primaryCounts.todo;
-        summary.pending_acceptance += primaryCounts.pending_acceptance;
-        summary.done += primaryCounts.done;
-      }
+      const addedMap = new Map(days.map((key) => [key, 0]));
+      const completedMap = new Map(days.map((key) => [key, 0]));
+      const summary = { added7d: 0, completed7d: 0, completionRate7d: 0 };
 
       const items = Array.isArray(DATA.items) ? DATA.items : [];
       for (const item of items) {
+        if (String((item && item.type) || "").trim() !== "任务") continue;
         const projectId = String((item && (item.project_id || item.projectId)) || "").trim();
         if (projectIds.size && !projectIds.has(projectId)) continue;
-        const updatedAt = parseDateTime(item && item.updated_at);
+        const createdAt = parseDateTime(item && (item.created_at || item.createdAt));
+        const updatedAt = parseDateTime(item && (item.updated_at || item.updatedAt));
+        const addedAt = createdAt || updatedAt;
+        if (addedAt) {
+          const addedDayKey = dateKeyLocal(addedAt);
+          if (addedMap.has(addedDayKey)) {
+            addedMap.set(addedDayKey, addedMap.get(addedDayKey) + 1);
+          }
+        }
         if (!updatedAt) continue;
-        const dayKey = dateKeyLocal(updatedAt);
-        if (!inProgressMap.has(dayKey)) continue;
-        const state = classifyTaskStatus(item);
-        changeMap.set(dayKey, changeMap.get(dayKey) + 1);
-        if (state === "done") doneMap.set(dayKey, doneMap.get(dayKey) + 1);
-        else if (state === "todo") todoMap.set(dayKey, todoMap.get(dayKey) + 1);
-        else if (state === "pending_acceptance") pendingAcceptanceMap.set(dayKey, pendingAcceptanceMap.get(dayKey) + 1);
-        else if (state === "in_progress") inProgressMap.set(dayKey, inProgressMap.get(dayKey) + 1);
+        if (classifyTaskStatus(item) !== "done") continue;
+        const completedDayKey = dateKeyLocal(updatedAt);
+        if (!completedMap.has(completedDayKey)) continue;
+        completedMap.set(completedDayKey, completedMap.get(completedDayKey) + 1);
       }
 
-      const inProgressDaily = days.map((key) => inProgressMap.get(key) || 0);
-      const todoDaily = days.map((key) => todoMap.get(key) || 0);
-      const pendingAcceptanceDaily = days.map((key) => pendingAcceptanceMap.get(key) || 0);
-      const doneDaily = days.map((key) => doneMap.get(key) || 0);
-      const changesDaily = days.map((key) => changeMap.get(key) || 0);
-      summary.changes7d = changesDaily.reduce((sum, value) => sum + value, 0);
+      const addedDaily = days.map((key) => addedMap.get(key) || 0);
+      const completedDaily = days.map((key) => completedMap.get(key) || 0);
+      summary.added7d = addedDaily.reduce((sum, value) => sum + value, 0);
+      summary.completed7d = completedDaily.reduce((sum, value) => sum + value, 0);
+      summary.completionRate7d = summary.added7d > 0
+        ? Math.round((summary.completed7d / summary.added7d) * 100)
+        : 0;
 
       return {
         labels: days.map((key) => key.slice(5)),
         summary,
         series: {
-          stock_in_progress: buildStockSeries(summary.in_progress, inProgressDaily),
-          stock_todo: buildStockSeries(summary.todo, todoDaily),
-          stock_pending_acceptance: buildStockSeries(summary.pending_acceptance, pendingAcceptanceDaily),
-          stock_done: buildStockSeries(summary.done, doneDaily),
-          changes: changesDaily,
+          added: addedDaily,
+          completed: completedDaily,
         },
       };
     }
@@ -911,6 +1625,9 @@
       const agentMap = new Map(days.map((key) => [key, new Set()]));
       const projectActivity = new Map();
       const summary = { messages24h: 0, sessions24h: 0, agents24h: 0 };
+      summary.messages7d = 0;
+      summary.agentsPeak7d = 0;
+      summary.agentsToday = 0;
       const summarySessions = new Set();
       const summaryAgents = new Set();
       const cutoff24h = Date.now() - 24 * 3600000;
@@ -960,6 +1677,11 @@
 
       summary.sessions24h = summarySessions.size;
       summary.agents24h = summaryAgents.size;
+      const messageDaily = days.map((key) => messageMap.get(key) || 0);
+      const agentDaily = days.map((key) => (agentMap.get(key) ? agentMap.get(key).size : 0));
+      summary.messages7d = messageDaily.reduce((sum, value) => sum + value, 0);
+      summary.agentsPeak7d = agentDaily.reduce((maxValue, value) => Math.max(maxValue, value), 0);
+      summary.agentsToday = agentDaily.length ? agentDaily[agentDaily.length - 1] : 0;
 
       return {
         loaded: ACTIVITY.loaded,
@@ -967,9 +1689,9 @@
         summary,
         byProject: projectActivity,
         series: {
-          message_increment: days.map((key) => messageMap.get(key) || 0),
+          message_increment: messageDaily,
           session_stock: days.map((key) => (sessionMap.get(key) ? sessionMap.get(key).size : 0)),
-          agent_stock: days.map((key) => (agentMap.get(key) ? agentMap.get(key).size : 0)),
+          agent_stock: agentDaily,
         },
       };
     }
@@ -1083,6 +1805,7 @@
     async function openWorklogDrawer() {
       setCfgOpened(false);
       setProjectBootstrapOpened(false);
+      setProjectCoverOpened(false);
       WORKLOG.error = "";
       WORKLOG.loading = true;
       setWorklogOpened(true);
@@ -1119,28 +1842,40 @@
     }
 
     function createProjectBootstrapChannel(overrides = {}) {
+      const source = (overrides && typeof overrides === "object") ? overrides : {};
+      const key = Number.isFinite(source.key) ? source.key : PROJECT_BOOTSTRAP.nextChannelKey++;
       return Object.assign(
         {
-          key: PROJECT_BOOTSTRAP.nextChannelKey++,
-          name: "",
-          desc: "",
+          key,
+          name: PROJECT_BOOTSTRAP_FIXED_DIVISION_NAME,
+          desc: PROJECT_BOOTSTRAP_FIXED_DIVISION_DESC,
           cli_type: "codex",
           model: "",
           reasoning_effort: "",
-          primary: false,
+          primary: true,
         },
-        overrides || {},
+        source,
       );
     }
 
+    function normalizeProjectBootstrapDivision(raw) {
+      const source = (raw && typeof raw === "object") ? raw : {};
+      const normalized = {
+        cli_type: String(source.cli_type || "codex").trim().toLowerCase() || "codex",
+        model: String(source.model || ""),
+        reasoning_effort: String(source.reasoning_effort || ""),
+      };
+      if (Number.isFinite(source.key)) normalized.key = source.key;
+      return createProjectBootstrapChannel(normalized);
+    }
+
     function createInitialProjectBootstrapChannels() {
-      return [
-        createProjectBootstrapChannel({
-          name: "主体-总控",
-          desc: "总控通道",
-          primary: true,
-        }),
-      ];
+      return [normalizeProjectBootstrapDivision()];
+    }
+
+    function defaultProjectRootRel(projectIdRaw) {
+      const projectId = String(projectIdRaw || "").trim().toLowerCase();
+      return projectId ? ("projects/" + projectId) : "";
     }
 
     function defaultTaskRootRel(projectRootRaw) {
@@ -1148,13 +1883,14 @@
       return projectRoot ? (projectRoot + "/任务规划") : "";
     }
 
-    function syncProjectBootstrapTaskRoot(force = false) {
+    function syncProjectBootstrapDerivedRoots() {
+      const projectIdInput = document.getElementById("projectBootstrapProjectId");
+      const projectRootInput = document.getElementById("projectBootstrapProjectRoot");
       const taskRootInput = document.getElementById("projectBootstrapTaskRoot");
-      if (!taskRootInput) return;
-      if (PROJECT_BOOTSTRAP.taskRootTouched && !force) return;
-      const projectRootValue = document.getElementById("projectBootstrapProjectRoot")?.value || "";
+      if (!projectRootInput || !taskRootInput) return;
+      const projectRootValue = defaultProjectRootRel(projectIdInput?.value || "");
+      projectRootInput.value = projectRootValue;
       taskRootInput.value = defaultTaskRootRel(projectRootValue);
-      if (force) PROJECT_BOOTSTRAP.taskRootTouched = false;
     }
 
     function updateProjectBootstrapSubmitButton() {
@@ -1179,127 +1915,94 @@
       if (!PROJECT_BOOTSTRAP.channels.length) {
         PROJECT_BOOTSTRAP.channels = createInitialProjectBootstrapChannels();
       }
-      PROJECT_BOOTSTRAP.channels.forEach((channel, index) => {
-        const card = el("div", { class: "project-bootstrap-channel" });
-        const head = el("div", { class: "project-bootstrap-channel-head" });
-        const title = el("div", { class: "project-bootstrap-channel-title" });
-        title.appendChild(document.createTextNode("通道 " + String(index + 1)));
-        const titleName = el("span", { text: channel.name || "未命名" });
-        title.appendChild(titleName);
+      PROJECT_BOOTSTRAP.channels = [normalizeProjectBootstrapDivision(PROJECT_BOOTSTRAP.channels[0])];
+      const division = PROJECT_BOOTSTRAP.channels[0];
 
-        const actions = el("div", { class: "project-bootstrap-channel-actions" });
-        const primaryLabel = el("label", { class: "project-bootstrap-channel-toggle" });
-        const primaryInput = el("input", { type: "checkbox" });
-        primaryInput.checked = !!channel.primary;
-        primaryInput.addEventListener("change", (e) => {
-          channel.primary = !!e.target.checked;
-        });
-        primaryLabel.appendChild(primaryInput);
-        primaryLabel.appendChild(document.createTextNode("初始化主会话"));
+      const card = el("div", { class: "project-bootstrap-channel" });
+      const head = el("div", { class: "project-bootstrap-channel-head" });
+      const title = el("div", { class: "project-bootstrap-channel-title" });
+      title.appendChild(document.createTextNode("分工 1"));
+      title.appendChild(el("span", { text: division.name }));
+      const fixedTag = el("div", { class: "project-bootstrap-channel-fixed", text: "固定总控分工" });
+      head.appendChild(title);
+      head.appendChild(fixedTag);
+      card.appendChild(head);
 
-        const removeBtn = el("button", {
-          class: "btn btn-ghost project-bootstrap-remove-btn",
-          type: "button",
-          text: "移除",
-        });
-        removeBtn.disabled = PROJECT_BOOTSTRAP.channels.length <= 1;
-        removeBtn.addEventListener("click", () => {
-          if (PROJECT_BOOTSTRAP.channels.length <= 1) return;
-          PROJECT_BOOTSTRAP.channels = PROJECT_BOOTSTRAP.channels.filter((item) => item.key !== channel.key);
-          renderProjectBootstrapChannelList();
-        });
+      const grid = el("div", { class: "project-bootstrap-channel-grid" });
 
-        actions.appendChild(primaryLabel);
-        actions.appendChild(removeBtn);
-        head.appendChild(title);
-        head.appendChild(actions);
-        card.appendChild(head);
+      const nameField = el("label", { class: "cfg-field" });
+      nameField.appendChild(el("span", { text: "分工名称（固定）" }));
+      nameField.appendChild(el("input", {
+        class: "input",
+        type: "text",
+        value: division.name,
+        autocomplete: "off",
+        readOnly: true,
+      }));
 
-        const grid = el("div", { class: "project-bootstrap-channel-grid" });
+      const descField = el("label", { class: "cfg-field" });
+      descField.appendChild(el("span", { text: "分工说明（固定）" }));
+      descField.appendChild(el("input", {
+        class: "input",
+        type: "text",
+        value: division.desc,
+        autocomplete: "off",
+        readOnly: true,
+      }));
 
-        const nameField = el("label", { class: "cfg-field" });
-        nameField.appendChild(el("span", { text: "通道名称" }));
-        const nameInput = el("input", {
-          class: "input",
-          type: "text",
-          placeholder: "主体-总控",
-          value: channel.name,
-          autocomplete: "off",
-        });
-        nameInput.addEventListener("input", (e) => {
-          channel.name = String(e.target.value || "");
-          titleName.textContent = channel.name.trim() || "未命名";
-        });
-        nameField.appendChild(nameInput);
-
-        const descField = el("label", { class: "cfg-field" });
-        descField.appendChild(el("span", { text: "通道说明" }));
-        const descInput = el("input", {
-          class: "input",
-          type: "text",
-          placeholder: "总控通道",
-          value: channel.desc,
-          autocomplete: "off",
-        });
-        descInput.addEventListener("input", (e) => {
-          channel.desc = String(e.target.value || "");
-        });
-        descField.appendChild(descInput);
-
-        const cliField = el("label", { class: "cfg-field" });
-        cliField.appendChild(el("span", { text: "CLI 类型" }));
-        const cliSelect = el("select", { class: "input" });
-        ["codex", "claude", "opencode", "gemini", "trae"].forEach((value) => {
-          const option = el("option", { value, text: value });
-          option.selected = value === channel.cli_type;
-          cliSelect.appendChild(option);
-        });
-        cliSelect.addEventListener("change", (e) => {
-          channel.cli_type = String(e.target.value || "codex");
-        });
-        cliField.appendChild(cliSelect);
-
-        const modelField = el("label", { class: "cfg-field" });
-        modelField.appendChild(el("span", { text: "模型" }));
-        const modelInput = el("input", {
-          class: "input",
-          type: "text",
-          placeholder: "默认（可手动填写具体模型名）",
-          value: channel.model,
-          autocomplete: "off",
-        });
-        modelInput.addEventListener("input", (e) => {
-          channel.model = String(e.target.value || "");
-        });
-        modelField.appendChild(modelInput);
-
-        const reasoningField = el("label", { class: "cfg-field" });
-        reasoningField.appendChild(el("span", { text: "推理强度" }));
-        const reasoningSelect = el("select", { class: "input" });
-        [
-          { value: "", label: "默认" },
-          { value: "low", label: "low" },
-          { value: "medium", label: "medium" },
-          { value: "high", label: "high" },
-          { value: "xhigh", label: "xhigh" },
-        ].forEach((item) => {
-          const option = el("option", { value: item.value, text: item.label });
-          option.selected = item.value === (channel.reasoning_effort || "");
-          reasoningSelect.appendChild(option);
-        });
-        reasoningSelect.addEventListener("change", (e) => {
-          channel.reasoning_effort = String(e.target.value || "");
-        });
-        reasoningField.appendChild(reasoningSelect);
-
-        grid.appendChild(nameField);
-        grid.appendChild(descField);
-        grid.appendChild(cliField);
-        grid.appendChild(modelField);
-        grid.appendChild(reasoningField);
-        card.appendChild(grid);
-        list.appendChild(card);
+      const cliField = el("label", { class: "cfg-field" });
+      cliField.appendChild(el("span", { text: "CLI 类型" }));
+      const cliSelect = el("select", { class: "input" });
+      ["codex", "claude", "opencode", "gemini", "trae"].forEach((value) => {
+        const option = el("option", { value, text: value });
+        option.selected = value === division.cli_type;
+        cliSelect.appendChild(option);
       });
+      cliSelect.addEventListener("change", (e) => {
+        division.cli_type = String(e.target.value || "codex");
+      });
+      cliField.appendChild(cliSelect);
+
+      const modelField = el("label", { class: "cfg-field" });
+      modelField.appendChild(el("span", { text: "模型" }));
+      const modelInput = el("input", {
+        class: "input",
+        type: "text",
+        placeholder: "默认（可手动填写具体模型名）",
+        value: division.model,
+        autocomplete: "off",
+      });
+      modelInput.addEventListener("input", (e) => {
+        division.model = String(e.target.value || "");
+      });
+      modelField.appendChild(modelInput);
+
+      const reasoningField = el("label", { class: "cfg-field" });
+      reasoningField.appendChild(el("span", { text: "推理强度" }));
+      const reasoningSelect = el("select", { class: "input" });
+      [
+        { value: "", label: "默认" },
+        { value: "low", label: "low" },
+        { value: "medium", label: "medium" },
+        { value: "high", label: "high" },
+        { value: "xhigh", label: "xhigh" },
+      ].forEach((item) => {
+        const option = el("option", { value: item.value, text: item.label });
+        option.selected = item.value === (division.reasoning_effort || "");
+        reasoningSelect.appendChild(option);
+      });
+      reasoningSelect.addEventListener("change", (e) => {
+        division.reasoning_effort = String(e.target.value || "");
+      });
+      reasoningField.appendChild(reasoningSelect);
+
+      grid.appendChild(nameField);
+      grid.appendChild(descField);
+      grid.appendChild(cliField);
+      grid.appendChild(modelField);
+      grid.appendChild(reasoningField);
+      card.appendChild(grid);
+      list.appendChild(card);
     }
 
     function renderProjectBootstrapResult() {
@@ -1394,11 +2097,11 @@
 
       const createdSessions = Array.isArray(result.created_sessions) ? result.created_sessions : [];
       if (createdSessions.length) {
-        appendSectionTitle("主会话初始化");
+        appendSectionTitle("主会话初始化（分工）");
         const list = el("div", { class: "project-bootstrap-created-list" });
         createdSessions.forEach((item) => {
           const row = el("div", { class: "project-bootstrap-created-item" });
-          const channelName = String(item.channel_name || "").trim() || "未命名通道";
+          const channelName = String(item.channel_name || "").trim() || "未命名分工";
           const sessionId = String(item.session_id || "").trim();
           const flags = [];
           if (item.created) flags.push("已创建");
@@ -1472,9 +2175,11 @@
       setChecked("projectBootstrapRunVisibilityCheck", true);
       const visibilityInput = document.getElementById("projectBootstrapRunVisibilityCheck");
       if (visibilityInput) visibilityInput.disabled = false;
+      const advancedNode = document.getElementById("projectBootstrapAdvanced");
+      if (advancedNode) advancedNode.open = false;
       PROJECT_BOOTSTRAP.channels = createInitialProjectBootstrapChannels();
       PROJECT_BOOTSTRAP.result = null;
-      PROJECT_BOOTSTRAP.taskRootTouched = false;
+      syncProjectBootstrapDerivedRoots();
       renderProjectBootstrapChannelList();
       renderProjectBootstrapResult();
       projectBootstrapMsg("");
@@ -1484,8 +2189,8 @@
     function buildProjectBootstrapPayload() {
       const projectId = String(document.getElementById("projectBootstrapProjectId")?.value || "").trim().toLowerCase();
       const projectName = String(document.getElementById("projectBootstrapProjectName")?.value || "").trim();
-      const projectRootRel = String(document.getElementById("projectBootstrapProjectRoot")?.value || "").trim();
-      const taskRootRel = String(document.getElementById("projectBootstrapTaskRoot")?.value || "").trim();
+      const projectRootRel = defaultProjectRootRel(projectId);
+      const taskRootRel = defaultTaskRootRel(projectRootRel);
       const color = (String(document.getElementById("projectBootstrapColor")?.value || "").trim() || "#0F63F2").toUpperCase();
       const description = String(document.getElementById("projectBootstrapDescription")?.value || "").trim();
       const profile = String(document.getElementById("projectBootstrapProfile")?.value || "").trim() || "project_privileged_full";
@@ -1494,41 +2199,21 @@
       if (!projectId) throw new Error("请填写项目 ID");
       if (!/^[a-z0-9][a-z0-9_-]*$/.test(projectId)) throw new Error("项目 ID 仅支持小写字母、数字、下划线和中划线");
       if (!projectName) throw new Error("请填写项目名称");
-      if (!projectRootRel) throw new Error("请填写项目根目录");
-      if (!taskRootRel) throw new Error("请填写任务根目录");
-      if (projectRootRel.startsWith("/") || taskRootRel.startsWith("/")) {
-        throw new Error("项目目录和任务目录需要填写相对路径");
-      }
       if (!/^#[0-9A-F]{6}$/.test(color)) throw new Error("主题色需为 #RRGGBB 格式");
       if (!profile) throw new Error("请选择执行权限");
       if (!environment) throw new Error("请选择环境");
+      if (!projectRootRel || !taskRootRel) throw new Error("请先填写合法的项目 ID");
+      const projectRootInput = document.getElementById("projectBootstrapProjectRoot");
+      const taskRootInput = document.getElementById("projectBootstrapTaskRoot");
+      if (projectRootInput) projectRootInput.value = projectRootRel;
+      if (taskRootInput) taskRootInput.value = taskRootRel;
 
-      const seen = new Set();
-      const channels = PROJECT_BOOTSTRAP.channels.map((item) => {
-        const name = String(item && item.name || "").trim();
-        const desc = String(item && item.desc || "").trim();
-        const cliType = String(item && item.cli_type || "codex").trim().toLowerCase() || "codex";
-        const model = String(item && item.model || "").trim();
-        const reasoningEffort = String(item && item.reasoning_effort || "").trim();
-        if (!name) throw new Error("请补全所有通道名称");
-        if (seen.has(name)) throw new Error("通道名称不能重复：" + name);
-        seen.add(name);
-        return {
-          name,
-          desc: desc || name,
-          cli_type: cliType,
-          model,
-          reasoning_effort: reasoningEffort,
-          primary: !!(item && item.primary),
-        };
-      });
-      if (!channels.length) throw new Error("至少保留一个通道");
+      const division = normalizeProjectBootstrapDivision(PROJECT_BOOTSTRAP.channels[0]);
+      PROJECT_BOOTSTRAP.channels = [division];
+      const channels = [division];
 
       const createPrimarySessions = !!document.getElementById("projectBootstrapCreatePrimarySessions")?.checked;
-      const primaryChannelNames = channels.filter((item) => item.primary).map((item) => item.name);
-      if (createPrimarySessions && !primaryChannelNames.length) {
-        throw new Error("已开启主会话初始化时，至少勾选一个通道");
-      }
+      const primaryChannelNames = createPrimarySessions ? [division.name] : [];
 
       const payload = {
         project_id: projectId,
@@ -1690,7 +2375,7 @@
         p1.textContent = enabled ? "可联通" : "未启用";
         const p2 = document.createElement("span");
         p2.className = "cfg-pill " + (configured ? "ok" : "");
-        p2.textContent = configured ? `已配置 通道${channelCount} 会话${sessionCount}` : "未配置";
+        p2.textContent = configured ? `已配置 分工${channelCount} 会话${sessionCount}` : "未配置";
         const p3 = document.createElement("span");
         p3.className = "cfg-pill " + (effectiveReady ? "ok" : "warn");
         if (effectiveReady) p3.textContent = `当前可用 · ${binSource}`;
@@ -2190,6 +2875,7 @@
       const openDrawer = async () => {
         setWorklogOpened(false);
         setProjectBootstrapOpened(false);
+        setProjectCoverOpened(false);
         setCfgOpened(true);
         renderAvatarLibraryEntry();
         await loadPlatformConfig();
@@ -2271,43 +2957,36 @@
       }
 
       container.appendChild(trendPanel(
-        "任务情况趋势",
+        "任务新增与完成趋势",
         [
-          { label: "进行中", value: formatCount(taskModel.summary.in_progress) },
-          { label: "待办", value: formatCount(taskModel.summary.todo) },
-          { label: "待验收", value: formatCount(taskModel.summary.pending_acceptance) },
-          { label: "近7天变更", value: formatCount(taskModel.summary.changes7d) },
+          { label: "近7天新增", value: formatCount(taskModel.summary.added7d) },
+          { label: "近7天完成", value: formatCount(taskModel.summary.completed7d) },
+          { label: "完成率", value: taskModel.summary.added7d ? (String(taskModel.summary.completionRate7d) + "%") : "—" },
         ],
         [
-          { name: "日变更量", values: taskModel.series.changes, color: "#94a3b8", type: "bar" },
-          { name: "进行中存量", values: taskModel.series.stock_in_progress, color: "#1f8f5f", type: "line", area: false },
-          { name: "待办存量", values: taskModel.series.stock_todo, color: "#b36a00", type: "line", area: false },
-          { name: "待验收存量", values: taskModel.series.stock_pending_acceptance, color: "#eab308", type: "line", area: false },
+          { name: "任务新增", values: taskModel.series.added, color: "#2563eb", type: "bar" },
+          { name: "任务完成", values: taskModel.series.completed, color: "#16a34a", type: "line", area: false },
         ],
         taskModel.labels,
         [
-          { color: "#1f8f5f", label: "进行中存量", shape: "line" },
-          { color: "#b36a00", label: "待办存量", shape: "line" },
-          { color: "#eab308", label: "待验收存量", shape: "line" },
-          { color: "#94a3b8", label: "日变更量", shape: "bar" },
+          { color: "#2563eb", label: "任务新增", shape: "bar" },
+          { color: "#16a34a", label: "任务完成", shape: "line" },
         ]
       ));
 
       container.appendChild(trendPanel(
-        "Agent 活动消息趋势",
+        "Agent活跃与消息趋势",
         [
-          { label: "24h消息", value: messageLoaded ? formatCount(messageModel.summary.messages24h) : "—" },
-          { label: "活跃会话", value: messageLoaded ? formatCount(messageModel.summary.sessions24h) : "—" },
-          { label: "活跃Agent", value: messageLoaded ? formatCount(messageModel.summary.agents24h) : "—" },
+          { label: "近7天消息", value: messageLoaded ? formatCount(messageModel.summary.messages7d) : "—" },
+          { label: "活跃Agent峰值", value: messageLoaded ? formatCount(messageModel.summary.agentsPeak7d) : "—" },
+          { label: "今日活跃Agent", value: messageLoaded ? formatCount(messageModel.summary.agentsToday) : "—" },
         ],
         [
           { name: "日消息增量", values: messageModel.series.message_increment, color: "#2563eb", type: "bar" },
-          { name: "活跃会话存量", values: messageModel.series.session_stock, color: "#14b8a6", type: "line", area: false },
           { name: "活跃Agent存量", values: messageModel.series.agent_stock, color: "#f59e0b", type: "line", area: false },
         ],
         messageModel.labels,
         [
-          { color: "#14b8a6", label: "活跃会话存量", shape: "line" },
           { color: "#f59e0b", label: "活跃Agent存量", shape: "line" },
           { color: "#2563eb", label: "日消息增量", shape: "bar" },
         ]
@@ -2360,7 +3039,6 @@
       }
 
       const messageModel = buildMessageOverviewModel(currentFilteredProjects());
-      const messageLoaded = !!messageModel.loaded;
       const messageMetricForProject = (projectId) => {
         return messageModel.byProject.get(String(projectId || "").trim()) || {
           messages24h: 0,
@@ -2368,21 +3046,12 @@
           agents24h: new Set(),
         };
       };
-      const flatMetric = (label, value) => {
-        const metric = el("div", { class: "flat-metric" });
-        metric.appendChild(el("div", { class: "flat-metric-v", text: value }));
-        metric.appendChild(el("div", { class: "flat-metric-k", text: label }));
+      const compactMetric = (label, value, title = "") => {
+        const metric = el("section", { class: "project-kpi-item" });
+        if (title) metric.title = title;
+        metric.appendChild(el("div", { class: "project-kpi-value", text: value }));
+        metric.appendChild(el("div", { class: "project-kpi-label", text: label }));
         return metric;
-      };
-      const flatSection = (title, metrics) => {
-        const section = el("section", { class: "flat-section" });
-        const head = el("div", { class: "flat-head" });
-        head.appendChild(el("strong", { text: title }));
-        section.appendChild(head);
-        const grid = el("div", { class: "flat-grid" });
-        for (const item of metrics) grid.appendChild(flatMetric(item.label, item.value));
-        section.appendChild(grid);
-        return section;
       };
 
       for (const p of projects) {
@@ -2410,24 +3079,53 @@
         titleRow.appendChild(starBtn);
         card.appendChild(titleRow);
 
+        const coverInfo = resolveProjectCardCover(projectId);
+        const cover = el("section", { class: "project-cover" });
+        const coverSurface = el("div", { class: "project-cover-surface" });
+        applyProjectCoverBackground(coverSurface, coverInfo);
+        cover.appendChild(coverSurface);
+        const coverEditBtn = el("button", {
+          class: "project-cover-edit-btn",
+          type: "button",
+          text: "✎",
+          title: "更换配图",
+          "aria-label": "更换配图",
+        });
+        coverEditBtn.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          openProjectCoverPicker(projectId, projectName);
+        });
+        cover.appendChild(coverEditBtn);
+        card.appendChild(cover);
+
         const totals = (p && typeof p.totals === "object") ? p.totals : {};
         const primaryCounts = primaryStatusCountsFromTotals(totals);
-        const channelsData = Array.isArray(p && p.channels_data) ? p.channels_data : [];
-        const divisionCount = channelsData.length || num(totals.channels);
-        const configuredAgentCount = channelsData.filter((item) => !!(item && item.session_configured)).length;
-        card.appendChild(flatSection("任务", [
-          { label: "待办", value: formatCount(primaryCounts.todo) },
-          { label: "进行中", value: formatCount(primaryCounts.in_progress) },
-          { label: "待验收", value: formatCount(primaryCounts.pending_acceptance) },
-          { label: "已完成", value: formatCount(primaryCounts.done) },
-        ]));
+        const taskTotal = num(totals.total);
+        const taskTodoOpen = Math.max(0, taskTotal - num(primaryCounts.done));
+        const knowledgeTotal = resolveProjectKnowledgeCount(totals);
 
         const messageMetrics = messageMetricForProject(p.project_id);
-        card.appendChild(flatSection("Agent", [
-          { label: "分工", value: formatCount(divisionCount) },
-          { label: "Agent", value: formatCount(configuredAgentCount || divisionCount) },
-          { label: "消息", value: messageLoaded ? formatCount(messageMetrics.messages24h) : "—" },
-        ]));
+        const activeAgents24h = messageMetrics && messageMetrics.agents24h instanceof Set
+          ? messageMetrics.agents24h.size
+          : 0;
+        const metricGrid = el("section", { class: "project-kpi-grid" });
+        metricGrid.appendChild(compactMetric(
+          "任务总/待办",
+          `${formatCount(taskTotal)} / ${formatCount(taskTodoOpen)}`,
+          `任务总数 ${formatCount(taskTotal)}；待办（未完成）${formatCount(taskTodoOpen)}`
+        ));
+        metricGrid.appendChild(compactMetric(
+          "活跃Agent(24h)",
+          formatCount(activeAgents24h),
+          "近24小时活跃Agent数量"
+        ));
+        metricGrid.appendChild(compactMetric(
+          "知识数",
+          formatCount(knowledgeTotal),
+          "沉淀/材料/证据文件总数"
+        ));
+        card.appendChild(metricGrid);
 
         list.appendChild(card);
       }
@@ -2435,6 +3133,12 @@
 
     renderStats();
     renderCards();
+    loadProjectCardCovers()
+      .catch(() => {})
+      .finally(() => {
+        renderCards();
+        if (PROJECT_COVER.opened) renderProjectCoverPicker();
+      });
 
     (function initOverviewActivity() {
       if (ACTIVITY.loading || ACTIVITY.loaded) return;
@@ -2461,18 +3165,17 @@
       const openBtn = document.getElementById("newProjectBtn");
       const closeBtn = document.getElementById("projectBootstrapCloseBtn");
       const mask = document.getElementById("projectBootstrapMask");
-      const addChannelBtn = document.getElementById("projectBootstrapAddChannelBtn");
       const submitBtn = document.getElementById("projectBootstrapSubmitBtn");
       const resetBtn = document.getElementById("projectBootstrapResetBtn");
       const reloadBtn = document.getElementById("projectBootstrapReloadBtn");
-      const projectRootInput = document.getElementById("projectBootstrapProjectRoot");
-      const taskRootInput = document.getElementById("projectBootstrapTaskRoot");
+      const projectIdInput = document.getElementById("projectBootstrapProjectId");
       const generateRegistryInput = document.getElementById("projectBootstrapGenerateRegistry");
       const visibilityInput = document.getElementById("projectBootstrapRunVisibilityCheck");
 
       const openDrawer = () => {
         setCfgOpened(false);
         setWorklogOpened(false);
+        setProjectCoverOpened(false);
         setProjectBootstrapOpened(true);
         window.setTimeout(() => {
           document.getElementById("projectBootstrapProjectId")?.focus();
@@ -2491,27 +3194,10 @@
       if (openBtn) openBtn.addEventListener("click", openDrawer);
       if (closeBtn) closeBtn.addEventListener("click", closeDrawer);
       if (mask) mask.addEventListener("click", closeDrawer);
-      if (addChannelBtn) {
-        addChannelBtn.addEventListener("click", () => {
-          PROJECT_BOOTSTRAP.channels.push(createProjectBootstrapChannel());
-          renderProjectBootstrapChannelList();
-        });
-      }
       if (submitBtn) submitBtn.addEventListener("click", submitProjectBootstrap);
       if (resetBtn) resetBtn.addEventListener("click", resetProjectBootstrapForm);
       if (reloadBtn) reloadBtn.addEventListener("click", () => window.location.reload());
-      if (projectRootInput) {
-        projectRootInput.addEventListener("input", () => {
-          syncProjectBootstrapTaskRoot(false);
-        });
-      }
-      if (taskRootInput) {
-        taskRootInput.addEventListener("input", () => {
-          const defaultValue = defaultTaskRootRel(projectRootInput?.value || "");
-          const currentValue = String(taskRootInput.value || "").trim();
-          PROJECT_BOOTSTRAP.taskRootTouched = !!currentValue && currentValue !== defaultValue;
-        });
-      }
+      if (projectIdInput) projectIdInput.addEventListener("input", syncProjectBootstrapDerivedRoots);
       if (generateRegistryInput) {
         generateRegistryInput.addEventListener("change", () => {
           syncVisibilityOption();
@@ -2521,6 +3207,42 @@
         if (e.key === "Escape" && PROJECT_BOOTSTRAP.opened) {
           e.preventDefault();
           closeDrawer();
+        }
+      });
+    })();
+
+    (function initProjectCoverControls() {
+      const closeBtn = document.getElementById("projectCoverCloseBtn");
+      const mask = document.getElementById("projectCoverMask");
+      const resetBtn = document.getElementById("projectCoverResetBtn");
+      const uploadBtn = document.getElementById("projectCoverUploadBtn");
+      const uploadInput = document.getElementById("projectCoverUploadInput");
+      if (closeBtn) closeBtn.addEventListener("click", closeProjectCoverPicker);
+      if (mask) mask.addEventListener("click", closeProjectCoverPicker);
+      if (resetBtn) {
+        resetBtn.addEventListener("click", () => {
+          saveProjectCoverSelection("");
+        });
+      }
+      if (uploadBtn && uploadInput) {
+        uploadBtn.addEventListener("click", () => {
+          if (PROJECT_COVER.saving) return;
+          uploadInput.click();
+        });
+      }
+      if (uploadInput) {
+        uploadInput.addEventListener("change", () => {
+          const files = uploadInput.files;
+          const file = files && files.length ? files[0] : null;
+          uploadInput.value = "";
+          if (!file) return;
+          uploadProjectCover(file);
+        });
+      }
+      document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" && PROJECT_COVER.opened) {
+          e.preventDefault();
+          closeProjectCoverPicker();
         }
       });
     })();
@@ -3316,6 +4038,18 @@
       return ["active", "running"].includes(s);
     }
 
+    function resolveAgentRunStatusMeta(agent) {
+      const raw = String((agent && (agent.current_run_status || agent.status)) || "").trim();
+      const key = raw.toLowerCase();
+      if (key === "running") return { label: "Run·活跃中", color: "#fcd34d" };
+      if (key === "queued") return { label: "Run·排队中", color: "#fbbf24" };
+      if (key === "retry_waiting") return { label: "Run·重试等待", color: "#f59e0b" };
+      if (key === "done" || key === "completed") return { label: "Run·已完成", color: "#86efac" };
+      if (key === "error" || key === "failed" || key === "interrupted") return { label: "Run·异常", color: "#fca5a5" };
+      if (raw) return { label: `Run·${raw}`, color: "#94a3b8" };
+      return { label: "Run·空闲", color: "#94a3b8" };
+    }
+
     function buildFallbackGraphData() {
       const nodes = [];
       const edges = [];
@@ -3687,8 +4421,10 @@
         const agents = data.nodes.filter(n => n.type === 'agent' && (n.project_id === pid || !n.project_id));
         const runs = data.nodes.filter(n => n.type === 'run' && (n.project_id === pid || !n.project_id));
         const agentOwnedTaskCounts = buildAgentMainOwnerTaskCounts(taskCandidates, agents);
+        const agentAssociatedTaskCounts = buildAgentAssociatedTaskCounts(taskCandidates, agents);
         agents.forEach((agent) => {
             agent._ownedTaskCounts = agentOwnedTaskCounts.get(agent) || { todo: 0, in_progress: 0 };
+            agent._associatedTaskCounts = agentAssociatedTaskCounts.get(agent) || { in_progress: 0, pending: 0 };
         });
         const runById = new Map();
         runs.forEach(r => {
@@ -4292,6 +5028,16 @@
       };
     }
 
+    function resolveWallAgentAssociatedTaskCounts(agent) {
+      const raw = (agent && typeof agent === "object" && agent._associatedTaskCounts && typeof agent._associatedTaskCounts === "object")
+        ? agent._associatedTaskCounts
+        : {};
+      return {
+        in_progress: Math.max(0, num(raw.in_progress)),
+        pending: Math.max(0, num(raw.pending)),
+      };
+    }
+
     function drawWallTaskGlyph(ctx, x, y, color) {
       ctx.save();
       ctx.translate(x, y);
@@ -4311,31 +5057,123 @@
 
     function drawWallAgentOwnedTaskStrip(ctx, centerX, centerY, counts) {
       const metrics = counts && typeof counts === "object" ? counts : {};
-      const todoText = String(Math.max(0, num(metrics.todo)));
-      const inProgressText = String(Math.max(0, num(metrics.in_progress)));
-      const sepText = "/";
+      const todoCount = Math.max(0, num(metrics.todo));
+      const inProgressCount = Math.max(0, num(metrics.in_progress));
+      const total = todoCount + inProgressCount;
+      const todoText = `待${todoCount}`;
+      const inProgressText = `进${inProgressCount}`;
+      const sepText = "·";
       ctx.save();
       ctx.font = "600 11px sans-serif";
       ctx.textAlign = "left";
       ctx.textBaseline = "middle";
+      if (total <= 0) {
+        const weakText = "无主责任务";
+        const weakW = ctx.measureText(weakText).width;
+        const padX = 7;
+        const boxW = weakW + padX * 2;
+        const boxH = 18;
+        const boxX = centerX - boxW * 0.5;
+        const boxY = centerY - boxH * 0.5;
+        drawRoundedRectPath(ctx, boxX, boxY, boxW, boxH, 9);
+        ctx.fillStyle = "rgba(15, 23, 42, 0.92)";
+        ctx.fill();
+        ctx.strokeStyle = "rgba(148, 163, 184, 0.42)";
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        ctx.fillStyle = "rgba(148, 163, 184, 0.88)";
+        ctx.fillText(weakText, boxX + padX, centerY);
+        ctx.restore();
+        return;
+      }
       const iconW = 10;
       const gap = 4;
-      const sepGap = 2;
+      const sepGap = 4;
       const todoW = ctx.measureText(todoText).width;
       const sepW = ctx.measureText(sepText).width;
       const inProgressW = ctx.measureText(inProgressText).width;
-      const totalW = iconW + gap + todoW + sepGap + sepW + sepGap + inProgressW;
-      let x = centerX - totalW / 2;
-      drawWallTaskGlyph(ctx, x + iconW * 0.5, centerY, "rgba(148, 163, 184, 0.84)");
+      const padX = 7;
+      const boxH = 18;
+      const contentW = iconW + gap + todoW + sepGap + sepW + sepGap + inProgressW;
+      const boxW = contentW + padX * 2;
+      const boxX = centerX - boxW * 0.5;
+      const boxY = centerY - boxH * 0.5;
+      drawRoundedRectPath(ctx, boxX, boxY, boxW, boxH, 9);
+      ctx.fillStyle = "rgba(15, 23, 42, 0.92)";
+      ctx.fill();
+      ctx.strokeStyle = "rgba(148, 163, 184, 0.48)";
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      let x = boxX + padX;
+      drawWallTaskGlyph(ctx, x + iconW * 0.5, centerY, "rgba(148, 163, 184, 0.9)");
       x += iconW + gap;
-      ctx.fillStyle = "rgba(100, 116, 139, 0.92)";
+      ctx.fillStyle = "rgba(148, 163, 184, 0.96)";
       ctx.fillText(todoText, x, centerY);
       x += todoW + sepGap;
       ctx.fillStyle = "rgba(148, 163, 184, 0.72)";
       ctx.fillText(sepText, x, centerY);
       x += sepW + sepGap;
-      ctx.fillStyle = "rgba(217, 119, 6, 0.95)";
+      ctx.fillStyle = "rgba(251, 191, 36, 0.98)";
       ctx.fillText(inProgressText, x, centerY);
+      ctx.restore();
+    }
+
+    function drawWallAgentAssociatedTaskStrip(ctx, startX, centerY, counts) {
+      const metrics = counts && typeof counts === "object" ? counts : {};
+      const inProgressCount = Math.max(0, num(metrics.in_progress));
+      const pendingCount = Math.max(0, num(metrics.pending));
+      const gap = 5;
+      const chipPadX = 6;
+      const chipH = 16;
+      ctx.save();
+      ctx.font = "600 10px sans-serif";
+      ctx.textAlign = "left";
+      ctx.textBaseline = "middle";
+      if (inProgressCount <= 0 && pendingCount <= 0) {
+        const weakText = "无关联任务";
+        const weakW = ctx.measureText(weakText).width;
+        const boxW = weakW + chipPadX * 2;
+        const boxX = startX;
+        const boxY = centerY - chipH * 0.5;
+        drawRoundedRectPath(ctx, boxX, boxY, boxW, chipH, 8);
+        ctx.fillStyle = "rgba(15, 23, 42, 0.82)";
+        ctx.fill();
+        ctx.strokeStyle = "rgba(148, 163, 184, 0.35)";
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        ctx.fillStyle = "rgba(148, 163, 184, 0.84)";
+        ctx.fillText(weakText, boxX + chipPadX, centerY);
+        ctx.restore();
+        return;
+      }
+      const chips = [
+        {
+          text: "处理中 " + inProgressCount,
+          bg: "rgba(245, 158, 11, 0.2)",
+          stroke: "rgba(245, 158, 11, 0.55)",
+          fg: "rgba(254, 240, 138, 0.98)",
+        },
+        {
+          text: "待处理 " + pendingCount,
+          bg: "rgba(148, 163, 184, 0.18)",
+          stroke: "rgba(148, 163, 184, 0.45)",
+          fg: "rgba(226, 232, 240, 0.96)",
+        },
+      ];
+      let x = startX;
+      chips.forEach((chip) => {
+        const chipW = ctx.measureText(chip.text).width + chipPadX * 2;
+        const chipY = centerY - chipH * 0.5;
+        drawRoundedRectPath(ctx, x, chipY, chipW, chipH, 8);
+        ctx.fillStyle = chip.bg;
+        ctx.fill();
+        ctx.strokeStyle = chip.stroke;
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        ctx.fillStyle = chip.fg;
+        ctx.fillText(chip.text, x + chipPadX, centerY);
+        x += chipW + gap;
+      });
       ctx.restore();
     }
 
@@ -5557,8 +6395,10 @@
                         // Agent Card
                         const a = wn.agent_ref;
                         const isActive = isAgentActive(a);
-                        const showOwnedTaskStrip = GRAPH.leftWallMode !== 'org';
+                        const showOwnedTaskStrip = true;
                         const ownedTaskCounts = resolveWallAgentOwnedTaskCounts(a);
+                        const associatedTaskCounts = resolveWallAgentAssociatedTaskCounts(a);
+                        const runStatusMeta = resolveAgentRunStatusMeta(a);
                         
                         ctx.fillStyle = isActive ? "rgba(245, 158, 11, 0.1)" : "rgba(30, 41, 59, 0.8)";
                         ctx.strokeStyle = isActive ? "#f59e0b" : "rgba(148, 163, 184, 0.3)";
@@ -5594,10 +6434,11 @@
                         ctx.textAlign = "left";
                         ctx.fillText(wn.label, avatarX + 24, showOwnedTaskStrip ? -10 : -6);
                         
-                        ctx.fillStyle = isActive ? "#fcd34d" : "#94a3b8";
+                        ctx.fillStyle = runStatusMeta.color || (isActive ? "#fcd34d" : "#94a3b8");
                         ctx.font = "11px sans-serif";
-                        const st = String(a.current_run_status || a.status || 'idle');
-                        ctx.fillText(st, avatarX + 24, 12);
+                        ctx.fillText(runStatusMeta.label || "Run·空闲", avatarX + 24, 12);
+                        const assocStripY = clampNum(h * 0.5 - 10, 24, 28);
+                        drawWallAgentAssociatedTaskStrip(ctx, avatarX + 24, assocStripY, associatedTaskCounts);
                     }
                     
                     ctx.restore();

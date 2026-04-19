@@ -30,13 +30,32 @@
           </div>
         </div>
         <div class="toolbar-filters">
-          <div class="chip-group" id="platformCommScopeFilters" aria-label="沟通范围过滤" hidden>
-            <button class="chip is-active" data-comm-scope="all" type="button">全部</button>
-            <button class="chip" data-comm-scope="cross" type="button">跨项目</button>
-            <button class="chip" data-comm-scope="high" type="button">高频</button>
+          <div class="project-filter-wrap is-hidden" id="platformProjectFilterWrap" hidden>
+            <button class="chip" id="platformProjectFilterBtn" type="button">项目筛选</button>
+            <div class="project-filter-panel" id="platformProjectFilterPanel" hidden>
+              <div class="project-filter-head">
+                <div class="project-filter-title">项目筛选</div>
+                <div class="project-filter-summary" id="platformProjectFilterSummary">已选 0 / 0</div>
+              </div>
+              <div class="project-filter-actions">
+                <button class="chip mini" id="platformProjectSelectAllBtn" type="button">全选</button>
+                <button class="chip mini" id="platformProjectInvertBtn" type="button">反选</button>
+                <button class="chip mini" id="platformProjectClearBtn" type="button">清空</button>
+              </div>
+              <div class="project-filter-list" id="platformProjectFilterList"></div>
+              <div class="project-filter-actions submit">
+                <button class="chip" id="platformProjectCancelBtn" type="button">取消</button>
+                <button class="chip is-active" id="platformProjectApplyBtn" type="button">应用</button>
+              </div>
+            </div>
+          </div>
+          <div class="chip-group" id="commTypeFilters" aria-label="连线类型过滤">
+            <span class="toolbar-label">连线</span>
+            <button class="chip is-active" data-comm-kind="user" type="button">用户参与</button>
+            <button class="chip is-active" data-comm-kind="agent" type="button">Agent之间</button>
           </div>
           <div class="chip-group" id="platformCommCountFilters" aria-label="沟通数量过滤" hidden>
-            <span class="toolbar-label">数量</span>
+            <span class="toolbar-label">沟通量</span>
             <button class="chip is-active" data-comm-count-min="0" type="button">全部</button>
             <button class="chip" data-comm-count-min="2" type="button">2+</button>
             <button class="chip" data-comm-count-min="5" type="button">5+</button>
@@ -47,7 +66,7 @@
 
       <div class="meta-row">
         <div id="boardMeta">组织战略加载中...</div>
-        <div id="summaryMeta">背景板 0 · Agent 0 · 业务关系 0 · 沟通线 0</div>
+        <div id="summaryMeta">背景板 0 · Agent 0 · 沟通线 0</div>
       </div>
 
       <div class="status-banner is-loading" id="statusBanner">正在加载组织战略...</div>
@@ -94,11 +113,6 @@
           <div class="row-label row-dev">开发（子级）</div>
           <div class="row-label row-other">新业务（其他）</div>
           <svg class="lines-layer" id="linesSvg" aria-hidden="true">
-            <defs>
-              <marker id="relationArrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
-                <path d="M0,0 L10,5 L0,10 z" fill="rgba(238,245,255,0.86)"></path>
-              </marker>
-            </defs>
           </svg>
           <div class="groups-layer" id="groupsLayer"></div>
           <div class="group-chip-layer" id="groupChipLayer"></div>

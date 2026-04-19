@@ -1,0 +1,1124 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>请求动作诊断表单 v2</title>
+  <link rel="stylesheet" href="./task-shell-preview-base.css" />
+  <style>
+    :root {
+      --diag-ink: rgba(15, 23, 42, 0.92);
+      --diag-muted: rgba(15, 23, 42, 0.62);
+      --diag-soft: rgba(15, 23, 42, 0.42);
+      --diag-line: rgba(15, 23, 42, 0.08);
+      --diag-panel: rgba(255, 255, 255, 0.9);
+      --diag-strong: rgba(255, 255, 255, 0.97);
+      --diag-blue: #2f6fed;
+      --diag-red: #c91d3b;
+      --diag-amber: #b36a00;
+      --diag-green: #1f8f5f;
+      --diag-shadow: 0 18px 46px rgba(15, 23, 42, 0.08);
+    }
+
+    .diag-shell {
+      min-height: 100vh;
+      height: auto;
+    }
+
+    .diag-shell .body {
+      display: block;
+      min-height: calc(100vh - 58px);
+      overflow: auto;
+    }
+
+    .diag-board {
+      width: min(1480px, calc(100vw - 32px));
+      margin: 0 auto;
+      padding: 18px 0 44px;
+      display: grid;
+      gap: 16px;
+    }
+
+    .diag-hero,
+    .diag-panel,
+    .diag-card,
+    .diag-form-panel {
+      border: 1px solid var(--diag-line);
+      background: var(--diag-panel);
+      border-radius: 24px;
+      box-shadow: var(--diag-shadow);
+    }
+
+    .diag-hero {
+      padding: 20px;
+      display: grid;
+      gap: 16px;
+      background:
+        radial-gradient(circle at 12% 0%, rgba(47, 111, 237, 0.16), transparent 28%),
+        radial-gradient(circle at 88% 14%, rgba(201, 29, 59, 0.10), transparent 24%),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(246, 250, 255, 0.94));
+    }
+
+    .diag-kicker {
+      font-family: var(--mono);
+      font-size: 11px;
+      font-weight: 900;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--diag-soft);
+    }
+
+    .diag-hero-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.25fr) minmax(340px, 0.75fr);
+      gap: 18px;
+      align-items: end;
+    }
+
+    .diag-title {
+      margin: 0;
+      max-width: 960px;
+      font-size: clamp(26px, 4vw, 48px);
+      line-height: 1.05;
+      letter-spacing: -0.045em;
+      color: var(--diag-ink);
+    }
+
+    .diag-subtitle {
+      margin: 14px 0 0;
+      max-width: 920px;
+      color: var(--diag-muted);
+      font-size: 14px;
+      line-height: 1.8;
+    }
+
+    .diag-status-strip {
+      display: grid;
+      gap: 8px;
+      padding: 14px;
+      border-radius: 20px;
+      border: 1px solid rgba(201, 29, 59, 0.12);
+      background: rgba(255, 246, 248, 0.86);
+    }
+
+    .diag-status-title {
+      font-size: 13px;
+      font-weight: 900;
+      color: var(--diag-red);
+    }
+
+    .diag-status-copy {
+      color: var(--diag-muted);
+      font-size: 13px;
+      line-height: 1.7;
+    }
+
+    .diag-chip-row,
+    .diag-toolbar,
+    .diag-live-head,
+    .diag-form-head {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .diag-chip,
+    .diag-btn,
+    .diag-filter,
+    .diag-tag {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      border-radius: 999px;
+      border: 1px solid var(--diag-line);
+      background: rgba(255, 255, 255, 0.94);
+      color: var(--diag-muted);
+      font-size: 12px;
+      font-weight: 850;
+      line-height: 1;
+      white-space: nowrap;
+    }
+
+    .diag-chip,
+    .diag-tag {
+      padding: 7px 10px;
+    }
+
+    .diag-chip.is-blue,
+    .diag-filter.is-active {
+      border-color: rgba(47, 111, 237, 0.18);
+      background: rgba(239, 246, 255, 0.96);
+      color: #1d4ed8;
+    }
+
+    .diag-chip.is-danger,
+    .diag-tag.is-danger {
+      border-color: rgba(201, 29, 59, 0.16);
+      background: rgba(255, 241, 244, 0.94);
+      color: var(--diag-red);
+    }
+
+    .diag-chip.is-warn,
+    .diag-tag.is-warn {
+      border-color: rgba(179, 106, 0, 0.16);
+      background: rgba(255, 247, 225, 0.94);
+      color: var(--diag-amber);
+    }
+
+    .diag-chip.is-good,
+    .diag-tag.is-good {
+      border-color: rgba(31, 143, 95, 0.16);
+      background: rgba(236, 253, 245, 0.96);
+      color: var(--diag-green);
+    }
+
+    .diag-btn,
+    .diag-filter {
+      appearance: none;
+      padding: 9px 12px;
+      cursor: pointer;
+      transition: transform 140ms ease, border-color 140ms ease, color 140ms ease, background 140ms ease;
+    }
+
+    .diag-btn:hover,
+    .diag-filter:hover {
+      transform: translateY(-1px);
+      border-color: rgba(47, 111, 237, 0.22);
+      color: var(--diag-ink);
+    }
+
+    .diag-metric-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .diag-card {
+      padding: 14px;
+      display: grid;
+      gap: 8px;
+    }
+
+    .diag-card-label {
+      font-family: var(--mono);
+      font-size: 10px;
+      font-weight: 900;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--diag-soft);
+    }
+
+    .diag-card-value {
+      color: var(--diag-ink);
+      font-size: 24px;
+      font-weight: 950;
+      line-height: 1.15;
+      word-break: break-word;
+    }
+
+    .diag-card-note {
+      color: var(--diag-muted);
+      font-size: 12px;
+      line-height: 1.7;
+    }
+
+    .diag-flow {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .diag-flow-step {
+      position: relative;
+      min-height: 120px;
+      padding: 14px;
+      border: 1px solid var(--diag-line);
+      border-radius: 20px;
+      background: rgba(255, 255, 255, 0.82);
+      overflow: hidden;
+    }
+
+    .diag-flow-step::after {
+      content: attr(data-index);
+      position: absolute;
+      right: 12px;
+      bottom: -8px;
+      font-size: 54px;
+      font-weight: 950;
+      color: rgba(47, 111, 237, 0.08);
+      line-height: 1;
+    }
+
+    .diag-flow-title {
+      position: relative;
+      z-index: 1;
+      font-size: 14px;
+      font-weight: 950;
+      color: var(--diag-ink);
+    }
+
+    .diag-flow-copy {
+      position: relative;
+      z-index: 1;
+      margin-top: 8px;
+      color: var(--diag-muted);
+      font-size: 12px;
+      line-height: 1.7;
+    }
+
+    .diag-panel,
+    .diag-form-panel {
+      padding: 16px;
+      display: grid;
+      gap: 12px;
+    }
+
+    .diag-section-title {
+      margin: 0;
+      color: var(--diag-ink);
+      font-size: 18px;
+      line-height: 1.35;
+    }
+
+    .diag-section-copy {
+      margin: 4px 0 0;
+      color: var(--diag-muted);
+      font-size: 13px;
+      line-height: 1.75;
+    }
+
+    .diag-table-wrap {
+      overflow: auto;
+      border: 1px solid rgba(15, 23, 42, 0.07);
+      border-radius: 18px;
+      background: rgba(255, 255, 255, 0.78);
+    }
+
+    .diag-table {
+      width: 100%;
+      min-width: 1180px;
+      border-collapse: collapse;
+    }
+
+    .diag-table th,
+    .diag-table td {
+      padding: 12px;
+      border-bottom: 1px solid rgba(15, 23, 42, 0.06);
+      text-align: left;
+      vertical-align: top;
+      color: var(--diag-muted);
+      font-size: 12px;
+      line-height: 1.65;
+    }
+
+    .diag-table th {
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      background: rgba(248, 250, 252, 0.96);
+      color: var(--diag-ink);
+      font-size: 11px;
+      font-weight: 950;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+
+    .diag-table tr:last-child td {
+      border-bottom: 0;
+    }
+
+    .diag-action {
+      display: grid;
+      gap: 6px;
+      min-width: 190px;
+    }
+
+    .diag-action strong {
+      color: var(--diag-ink);
+      font-size: 13px;
+      line-height: 1.35;
+    }
+
+    .diag-endpoint {
+      display: grid;
+      gap: 6px;
+      min-width: 240px;
+    }
+
+    .diag-endpoint code {
+      color: var(--diag-ink);
+      font-size: 12px;
+      font-weight: 850;
+      word-break: break-all;
+    }
+
+    .diag-small {
+      color: var(--diag-muted);
+      font-size: 12px;
+      line-height: 1.65;
+    }
+
+    .diag-meter {
+      width: 130px;
+      height: 8px;
+      border-radius: 999px;
+      background: rgba(15, 23, 42, 0.08);
+      overflow: hidden;
+    }
+
+    .diag-meter span {
+      display: block;
+      height: 100%;
+      width: var(--w);
+      border-radius: inherit;
+      background: linear-gradient(90deg, #74b4ff, #2f6fed);
+    }
+
+    .diag-meter.is-warn span {
+      background: linear-gradient(90deg, #ffd26f, #f59e0b);
+    }
+
+    .diag-meter.is-danger span {
+      background: linear-gradient(90deg, #ff8da1, #c91d3b);
+    }
+
+    .diag-input,
+    .diag-select,
+    .diag-textarea {
+      width: 100%;
+      border: 1px solid rgba(15, 23, 42, 0.12);
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.98);
+      color: var(--diag-ink);
+      font: inherit;
+      font-size: 12px;
+      padding: 9px 10px;
+      outline: none;
+    }
+
+    .diag-textarea {
+      min-height: 78px;
+      resize: vertical;
+      line-height: 1.6;
+    }
+
+    .diag-form-table {
+      width: 100%;
+      min-width: 1040px;
+      border-collapse: collapse;
+    }
+
+    .diag-form-table th,
+    .diag-form-table td {
+      padding: 10px;
+      border-bottom: 1px solid rgba(15, 23, 42, 0.06);
+      text-align: left;
+      vertical-align: top;
+      color: var(--diag-muted);
+      font-size: 12px;
+      line-height: 1.6;
+    }
+
+    .diag-form-table th {
+      color: var(--diag-ink);
+      font-size: 11px;
+      font-weight: 950;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+
+    .diag-live-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .diag-live-box {
+      padding: 14px;
+      border: 1px dashed rgba(47, 111, 237, 0.18);
+      border-radius: 18px;
+      background: rgba(247, 250, 255, 0.86);
+      color: var(--diag-muted);
+      font-size: 13px;
+      line-height: 1.75;
+    }
+
+    .diag-live-box strong {
+      color: var(--diag-ink);
+    }
+
+    .diag-evidence-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .diag-evidence {
+      padding: 14px;
+      border-radius: 18px;
+      border: 1px solid var(--diag-line);
+      background: rgba(255, 255, 255, 0.76);
+      color: var(--diag-muted);
+      font-size: 12px;
+      line-height: 1.7;
+    }
+
+    .diag-evidence strong {
+      display: block;
+      margin-bottom: 6px;
+      color: var(--diag-ink);
+      font-size: 13px;
+    }
+
+    @media (max-width: 1120px) {
+      .diag-hero-grid,
+      .diag-metric-grid,
+      .diag-flow,
+      .diag-live-grid,
+      .diag-evidence-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .diag-board {
+        width: min(100vw - 18px, 980px);
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="ambient-bg">
+    <div class="blob blob-1"></div>
+    <div class="blob blob-2"></div>
+    <div class="blob blob-3"></div>
+    <div class="blob blob-4"></div>
+    <div class="blob blob-5"></div>
+    <div class="blob blob-6"></div>
+    <div class="blob blob-7"></div>
+    <div class="blob blob-8"></div>
+  </div>
+
+  <div class="shell diag-shell">
+    <header>
+      <div class="header-main">
+        <a class="back-link" href="/share/project-task-dashboard.html" title="返回任务页">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" width="18" height="18">
+            <path d="M15 19l-7-7 7-7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <span>任务页</span>
+        </a>
+        <div class="project-info">
+          <h1 class="project-title">请求动作诊断表单 v2</h1>
+          <div class="project-meta-row">
+            <span class="project-desc">基于 2026-04-11 截图、HTTP 日志和 curl 抽样，冻结本轮请求动作诊断口径。</span>
+          </div>
+        </div>
+      </div>
+      <div class="header-nav">
+        <div class="header-mode-tabs" role="tablist" aria-label="页面分组">
+          <button class="header-mode-btn active">request diagnostics</button>
+          <button class="header-mode-btn is-disabled" disabled>form</button>
+        </div>
+      </div>
+      <div class="hctrl">
+        <a class="back-link" href="/share/page-previews-index.html" title="返回预览索引">
+          <span>预览索引</span>
+        </a>
+      </div>
+    </header>
+
+    <div class="body">
+      <main class="diag-board">
+        <section class="diag-hero">
+          <div class="diag-kicker">Request Action Diagnosis · frozen snapshot</div>
+          <div class="diag-hero-grid">
+            <div>
+              <h2 class="diag-title">把页面 Network 里“自己跑的请求”拆成可治理表单</h2>
+              <p class="diag-subtitle">
+                本页回答四个问题：每个动作做了什么、为什么会触发、实际频率是多少、单次耗时和包体有多大。
+                页面默认不自动轮询，避免诊断页本身继续制造背景请求。
+              </p>
+            </div>
+            <div class="diag-status-strip">
+              <div class="diag-status-title">当前结论</div>
+              <div class="diag-status-copy">
+                当前主要瓶颈不是单个接口慢，而是会话目录、会话详情、runs 时间线、run 详情和附件图片重复加载叠加，导致浏览器队列出现大量 pending。
+              </div>
+              <div class="diag-chip-row">
+                <span class="diag-chip is-danger">P0：附件重复加载</span>
+                <span class="diag-chip is-danger">P0：sessions 轻重拆分</span>
+                <span class="diag-chip is-warn">P1：轮询合并降频</span>
+              </div>
+            </div>
+          </div>
+          <div class="diag-metric-grid" id="metricGrid"></div>
+        </section>
+
+        <section class="diag-panel">
+          <div class="diag-toolbar">
+            <div style="flex: 1 1 520px">
+              <h3 class="diag-section-title">请求链路怎么形成排队</h3>
+              <p class="diag-section-copy">这四步对应截图里密集出现的 fetch：先刷新会话，再刷新当前会话与时间线，最后在重绘时继续拉 run 详情和图片。</p>
+            </div>
+          </div>
+          <div class="diag-flow" id="flowGrid"></div>
+        </section>
+
+        <section class="diag-panel">
+          <div class="diag-toolbar">
+            <div style="flex: 1 1 520px">
+              <h3 class="diag-section-title">请求动作清单</h3>
+              <p class="diag-section-copy">频率来自 stable HTTP 日志 `2026-04-11 17:33:00 ~ 17:39:18`；耗时来自本轮 curl 轻量抽样和截图观测。</p>
+            </div>
+            <button class="diag-filter is-active" type="button" data-filter="all">全部</button>
+            <button class="diag-filter" type="button" data-filter="p0">只看 P0</button>
+            <button class="diag-filter" type="button" data-filter="auto">自动链路</button>
+            <button class="diag-filter" type="button" data-filter="conditional">条件自动</button>
+          </div>
+          <div class="diag-table-wrap">
+            <table class="diag-table">
+              <thead>
+                <tr>
+                  <th>动作</th>
+                  <th>接口</th>
+                  <th>做什么</th>
+                  <th>触发与设计频率</th>
+                  <th>实际频率</th>
+                  <th>耗时/包体</th>
+                  <th>压力</th>
+                  <th>治理建议</th>
+                </tr>
+              </thead>
+              <tbody id="requestTableBody"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="diag-form-panel">
+          <div class="diag-form-head">
+            <div style="flex: 1 1 520px">
+              <h3 class="diag-section-title">治理跟进表单</h3>
+              <p class="diag-section-copy">可直接在这里给每个请求动作标优先级、责任位和下一步动作。数据仅保存在当前浏览器 LocalStorage，不写服务端。</p>
+            </div>
+            <button class="diag-btn" id="exportBtn" type="button">导出 JSON</button>
+            <button class="diag-btn" id="resetBtn" type="button">重置表单</button>
+          </div>
+          <div class="diag-table-wrap">
+            <table class="diag-form-table">
+              <thead>
+                <tr>
+                  <th>治理对象</th>
+                  <th>状态</th>
+                  <th>优先级</th>
+                  <th>责任位</th>
+                  <th>下一步动作 / 备注</th>
+                  <th>更新时间</th>
+                </tr>
+              </thead>
+              <tbody id="trackerBody"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="diag-panel">
+          <div class="diag-live-head">
+            <div style="flex: 1 1 520px">
+              <h3 class="diag-section-title">Live 快照对照</h3>
+              <p class="diag-section-copy">点击后手动读取 `/api/runtime/perf-snapshot`，用于和冻结诊断对照。这里不会自动刷新。</p>
+            </div>
+            <button class="diag-btn" id="liveBtn" type="button">手动刷新 live 快照</button>
+            <span class="diag-chip" id="liveStamp">未读取</span>
+          </div>
+          <div class="diag-live-grid" id="liveGrid"></div>
+          <div class="diag-live-box" id="liveDiagnosis">尚未读取 live 诊断。</div>
+        </section>
+
+        <section class="diag-panel">
+          <h3 class="diag-section-title">证据与边界</h3>
+          <p class="diag-section-copy">本页是诊断可视化原型，不改接口契约，不新增后台任务，不替代正式性能治理任务。</p>
+          <div class="diag-evidence-grid">
+            <div class="diag-evidence">
+              <strong>截图证据</strong>
+              DevTools Network 显示 `/api/sessions/{sessionId}` 单条约 1.5 分钟，大量 fetch 处于 pending。
+            </div>
+            <div class="diag-evidence">
+              <strong>日志证据</strong>
+              6.3 分钟窗口内，`.runs` 图片 1212 次、sessions 目录 128 次、runs 轻量 84 次、run 详情 54 次。
+            </div>
+            <div class="diag-evidence">
+              <strong>源码证据</strong>
+              会话目录默认 10s 轮询、4s 缓存、8s inflight；项目运维三连请求默认 20s 缓存。
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <script>
+    const STORAGE_KEY = "taskDashboard.requestTrafficDiagnosticsForm.v2";
+    const STATUS_OPTIONS = ["待处理", "已识别", "处理中", "已验证", "已收口"];
+    const PRIORITY_OPTIONS = ["P0", "P1", "P2", "观察"];
+
+    const METRICS = [
+      {
+        label: "诊断窗口",
+        value: "6.3 min",
+        note: "2026-04-11 17:33:00 ~ 17:39:18，本机 stable HTTP 日志。",
+      },
+      {
+        label: "15 分钟请求量",
+        value: "2660",
+        note: "约 177.3 req/min，轮询占比约 48.9%。",
+      },
+      {
+        label: "5 分钟请求量",
+        value: "1061",
+        note: "约 212.2 req/min，说明当时请求压力正在升高。",
+      },
+      {
+        label: "系统压力",
+        value: "Swap 11.4GB",
+        note: "Chrome CPU 约 87.6%，stable 服务 CPU 约 63.3%。",
+      },
+    ];
+
+    const FLOW = [
+      {
+        title: "会话目录先刷新",
+        copy: "`/api/sessions` 拉全项目会话摘要，用于左侧列表、运行态、红点和任务摘要。",
+      },
+      {
+        title: "当前会话补详情",
+        copy: "`/api/sessions/:id` 拉选中会话详情、task tracking、心跳和 runtime state。",
+      },
+      {
+        title: "时间线继续拉 runs",
+        copy: "`/api/codex/runs` 拉当前会话消息气泡和运行态；展开时再拉 `/api/codex/run/:id`。",
+      },
+      {
+        title: "重绘触发附件资源",
+        copy: "图片附件 `/.runs/.../attachments/*.png` 被重复加载，挤占浏览器下载与解码资源。",
+      },
+    ];
+
+    const REQUESTS = [
+      {
+        id: "attachment-repeat",
+        action: "附件图片重复加载",
+        mode: "conditional",
+        priority: "P0",
+        endpoint: "/.runs/.../attachments/*.png",
+        purpose: "渲染聊天/附件缩略图；截图附件、历史图片和运行附件进入页面时会下载。",
+        trigger: "时间线重绘、附件卡片进入可视区、图片节点被重新创建。",
+        design: "理想应按可视区加载并复用缓存。",
+        actual: "1212 次 / 6.3min，约 192.4/min，平均 0.3s 一个请求。",
+        sample: "0.06-0.20s；样例单张约 673KB。",
+        score: 98,
+        pressure: "最高。不是 API，但会挤占同源服务、浏览器下载队列和图片解码。",
+        recommendation: "优先做图片节点复用、懒加载、缩略图缓存和有效缓存头。",
+      },
+      {
+        id: "sessions-directory",
+        action: "会话目录刷新",
+        mode: "auto",
+        priority: "P0",
+        endpoint: "/api/sessions?project_id=task_dashboard",
+        purpose: "拉项目下所有会话、最近 run、运行态、心跳和任务摘要，用于左侧会话列表。",
+        trigger: "对话页 poll/resume、busy kick、切换项目或会话后刷新。",
+        design: "可见态约 10s；缓存 4s；inflight 复用 8s。",
+        actual: "128 次 / 6.3min，约 20.3/min，平均 3.0s 一次。",
+        sample: "curl 0.05-0.08s；约 146KB。",
+        score: 92,
+        pressure: "很高。实际频率高于设计值，说明多个触发源或标签页叠加。",
+        recommendation: "拆轻量列表接口，左侧只返回必要字段；重字段按选中会话懒加载。",
+      },
+      {
+        id: "session-detail",
+        action: "当前会话详情",
+        mode: "auto",
+        priority: "P0",
+        endpoint: "/api/sessions/:sessionId?project_id=task_dashboard",
+        purpose: "拉选中会话详情、task tracking、runtime state、健康和心跳摘要。",
+        trigger: "选中会话后，时间线刷新前补齐详情。",
+        design: "默认 15s freshness；轮询策略下约 10s。",
+        actual: "56 次 / 6.3min，约 8.9/min，平均 6.8s 一次。",
+        sample: "curl 0.36-0.91s；截图排队约 1.5min；约 80KB。",
+        score: 88,
+        pressure: "很高。单次数据不算最大，但和目录刷新叠加后阻塞明显。",
+        recommendation: "详情进一步拆包，task_tracking、heartbeat、history 不要每轮全量返回。",
+      },
+      {
+        id: "runs-light",
+        action: "时间线轻量 runs",
+        mode: "auto",
+        priority: "P1",
+        endpoint: "/api/codex/runs?...payloadMode=light",
+        purpose: "拉当前会话消息气泡和运行态列表，用于聊天时间线和 CCB 状态。",
+        trigger: "对话页刷新、CCB 面板刷新、运行态变化。",
+        design: "通常 10s；有运行态时会更积极。",
+        actual: "84 次 / 6.3min，约 13.3/min，平均 4.5s 一次。",
+        sample: "0.56-0.79s；约 281KB。",
+        score: 74,
+        pressure: "中高。包体偏大，是时间线基础链路。",
+        recommendation: "保持 light 和增量游标，不自动转 full；加强同会话 inflight 去重。",
+      },
+      {
+        id: "run-detail",
+        action: "单 run 详情",
+        mode: "conditional",
+        priority: "P1",
+        endpoint: "/api/codex/run/:runId",
+        purpose: "拉完整 message、last、logTail、partial、错误提示和过程信息。",
+        trigger: "展开详情、运行中同步、重试/回收前读取原 run。",
+        design: "应按需触发，不应全局预拉。",
+        actual: "54 次 / 6.3min，约 8.6/min，平均 7.0s 一次。",
+        sample: "1.7-4.0s；约 466KB。",
+        score: 82,
+        pressure: "高。单次最重之一，容易拖慢详情面板。",
+        recommendation: "全文、过程、调试继续分层懒加载，运行中详情加刷新上限。",
+      },
+      {
+        id: "conversation-memos",
+        action: "会话备忘",
+        mode: "conditional",
+        priority: "P2",
+        endpoint: "/api/conversation-memos?projectId=...&sessionId=...",
+        purpose: "拉当前会话备忘、badge 和备忘抽屉数据。",
+        trigger: "备忘入口、抽屉打开、缓存过期。",
+        design: "默认 15s；抽屉打开时可到 6s。",
+        actual: "21 次 / 6.3min，约 3.3/min，平均 18s 一次。",
+        sample: "0.025-0.039s；约 396B。",
+        score: 28,
+        pressure: "低。单次很小，但不应在重链路旁边继续补流量。",
+        recommendation: "只在抽屉打开或 badge 需要时拉；缓存可延长到 30-60s。",
+      },
+      {
+        id: "auto-scheduler",
+        action: "项目自动调度",
+        mode: "conditional",
+        priority: "P1",
+        endpoint: "/api/projects/task_dashboard/auto-scheduler",
+        purpose: "拉项目自动调度开关、状态、扫描配置和候选预览。",
+        trigger: "项目运维/巡检区域打开后刷新。",
+        design: "默认 20s 缓存；通常和巡检、心跳三连发。",
+        actual: "37 次 / 6.3min，约 5.9/min，平均 10.2s 一次。",
+        sample: "0.03-0.04s；约 10.9KB。",
+        score: 44,
+        pressure: "中低。单条不重，但三连发会变成稳定背景流量。",
+        recommendation: "只在运维面板展开时刷新，或合并为项目运维聚合接口。",
+      },
+      {
+        id: "inspection-tasks",
+        action: "巡检任务列表",
+        mode: "conditional",
+        priority: "P1",
+        endpoint: "/api/projects/task_dashboard/auto-scheduler/inspection-tasks",
+        purpose: "拉自动巡检任务列表和 active inspection task。",
+        trigger: "项目运维/巡检区域打开后跟随自动调度刷新。",
+        design: "随 auto-scheduler 一起刷新。",
+        actual: "37 次 / 6.3min，约 5.9/min，平均 10.2s 一次。",
+        sample: "0.02-0.18s；约 6.9KB。",
+        score: 38,
+        pressure: "中低。和 auto-scheduler、heartbeat 组成三连请求。",
+        recommendation: "并入聚合接口，避免每块独立发请求。",
+      },
+      {
+        id: "heartbeat-tasks",
+        action: "心跳任务列表",
+        mode: "conditional",
+        priority: "P1",
+        endpoint: "/api/projects/task_dashboard/heartbeat-tasks",
+        purpose: "拉项目心跳任务配置和运行摘要。",
+        trigger: "项目运维/心跳任务区域打开后刷新。",
+        design: "随项目运维面板节奏刷新。",
+        actual: "37 次 / 6.3min，约 5.9/min，平均 10.2s 一次。",
+        sample: "0.03-0.17s；约 3.6KB。",
+        score: 36,
+        pressure: "中低。多项目同时打开时会放大背景流量。",
+        recommendation: "隐藏页停轮询，非当前项目降频，和运维状态合并返回。",
+      },
+      {
+        id: "perf-snapshot",
+        action: "性能快照",
+        mode: "conditional",
+        priority: "P2",
+        endpoint: "/api/runtime/perf-snapshot",
+        purpose: "拉服务 CPU、Chrome、Swap、请求热区诊断。",
+        trigger: "性能诊断页或本页手动刷新。",
+        design: "应低频或手动刷新。",
+        actual: "7 次 / 6.3min，约 1.1/min，平均 54s 一次。",
+        sample: "0.06-0.23s，偶发 1s+；约 11KB。",
+        score: 22,
+        pressure: "低。诊断页不是主因，但不应自动高频刷新。",
+        recommendation: "保持手动刷新优先，排障模式再开定时刷新。",
+      },
+    ];
+
+    const DEFAULT_NOTES = {
+      "attachment-repeat": "先确认是否重绘重建 img 节点；优先做懒加载和缓存。",
+      "sessions-directory": "设计轻量列表字段清单，避免左侧列表拿详情级数据。",
+      "session-detail": "拆分 task_tracking/heartbeat/history，当前会话按需补齐。",
+      "runs-light": "保持 payloadMode=light；检查增量游标和 inflight 去重。",
+      "run-detail": "保持按需，不允许首屏自动预拉 full detail。",
+    };
+
+    let activeFilter = "all";
+
+    function escapeHtml(value) {
+      return String(value == null ? "" : value)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll("\"", "&quot;");
+    }
+
+    function toneForScore(score) {
+      if (Number(score) >= 80) return "danger";
+      if (Number(score) >= 45) return "warn";
+      return "good";
+    }
+
+    function filteredRequests() {
+      if (activeFilter === "p0") return REQUESTS.filter((item) => item.priority === "P0");
+      if (activeFilter === "auto") return REQUESTS.filter((item) => item.mode === "auto");
+      if (activeFilter === "conditional") return REQUESTS.filter((item) => item.mode === "conditional");
+      return REQUESTS;
+    }
+
+    function renderMetrics() {
+      document.getElementById("metricGrid").innerHTML = METRICS.map((item) => `
+        <article class="diag-card">
+          <div class="diag-card-label">${escapeHtml(item.label)}</div>
+          <div class="diag-card-value">${escapeHtml(item.value)}</div>
+          <div class="diag-card-note">${escapeHtml(item.note)}</div>
+        </article>
+      `).join("");
+    }
+
+    function renderFlow() {
+      document.getElementById("flowGrid").innerHTML = FLOW.map((item, index) => `
+        <article class="diag-flow-step" data-index="${index + 1}">
+          <div class="diag-flow-title">${escapeHtml(item.title)}</div>
+          <div class="diag-flow-copy">${escapeHtml(item.copy)}</div>
+        </article>
+      `).join("");
+    }
+
+    function renderFilters() {
+      document.querySelectorAll(".diag-filter").forEach((btn) => {
+        btn.classList.toggle("is-active", btn.dataset.filter === activeFilter);
+      });
+    }
+
+    function renderRequests() {
+      const rows = filteredRequests().map((item) => {
+        const tone = toneForScore(item.score);
+        return `
+          <tr>
+            <td>
+              <div class="diag-action">
+                <strong>${escapeHtml(item.action)}</strong>
+                <span class="diag-tag is-${tone}">${escapeHtml(item.priority)}</span>
+                <span class="diag-small">${item.mode === "auto" ? "自动链路" : "条件自动/按需链路"}</span>
+              </div>
+            </td>
+            <td>
+              <div class="diag-endpoint">
+                <code>${escapeHtml(item.endpoint)}</code>
+                <span class="diag-small">${escapeHtml(item.id)}</span>
+              </div>
+            </td>
+            <td>${escapeHtml(item.purpose)}</td>
+            <td>
+              ${escapeHtml(item.trigger)}
+              <div class="diag-small">${escapeHtml(item.design)}</div>
+            </td>
+            <td>${escapeHtml(item.actual)}</td>
+            <td>${escapeHtml(item.sample)}</td>
+            <td>
+              <div class="diag-meter is-${tone}" style="--w:${Math.max(8, Math.min(100, item.score))}%"><span></span></div>
+              <div class="diag-small">${escapeHtml(item.pressure)}</div>
+            </td>
+            <td>${escapeHtml(item.recommendation)}</td>
+          </tr>
+        `;
+      });
+      document.getElementById("requestTableBody").innerHTML = rows.join("");
+    }
+
+    function loadTracker() {
+      try {
+        return JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}") || {};
+      } catch (_) {
+        return {};
+      }
+    }
+
+    function saveTracker(state) {
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      } catch (_) {}
+    }
+
+    function defaultTracker(item) {
+      return {
+        status: item.priority === "P0" ? "已识别" : "待处理",
+        priority: item.priority,
+        owner: item.priority === "P0" ? "数据治理-性能管理" : "",
+        notes: DEFAULT_NOTES[item.id] || "",
+        updatedAt: "",
+      };
+    }
+
+    function renderTracker() {
+      const state = loadTracker();
+      const root = document.getElementById("trackerBody");
+      root.innerHTML = "";
+      REQUESTS.forEach((item) => {
+        const current = Object.assign({}, defaultTracker(item), state[item.id] || {});
+        const row = document.createElement("tr");
+        row.innerHTML = `
+          <td>
+            <div class="diag-action">
+              <strong>${escapeHtml(item.action)}</strong>
+              <span class="diag-small">${escapeHtml(item.endpoint)}</span>
+            </div>
+          </td>
+          <td></td>
+          <td></td>
+          <td></td>
+          <td></td>
+          <td>${escapeHtml(current.updatedAt || "-")}</td>
+        `;
+
+        const statusSelect = buildSelect(STATUS_OPTIONS, current.status);
+        const prioritySelect = buildSelect(PRIORITY_OPTIONS, current.priority);
+        const ownerInput = document.createElement("input");
+        ownerInput.className = "diag-input";
+        ownerInput.value = current.owner || "";
+        ownerInput.placeholder = "责任通道 / Agent";
+
+        const notesArea = document.createElement("textarea");
+        notesArea.className = "diag-textarea";
+        notesArea.value = current.notes || "";
+        notesArea.placeholder = "下一步动作、验收口径或风险说明";
+
+        row.children[1].appendChild(statusSelect);
+        row.children[2].appendChild(prioritySelect);
+        row.children[3].appendChild(ownerInput);
+        row.children[4].appendChild(notesArea);
+
+        function persist() {
+          const next = loadTracker();
+          next[item.id] = {
+            status: statusSelect.value,
+            priority: prioritySelect.value,
+            owner: ownerInput.value.trim(),
+            notes: notesArea.value.trim(),
+            updatedAt: new Date().toLocaleString("zh-CN", { hour12: false }),
+          };
+          saveTracker(next);
+          row.children[5].textContent = next[item.id].updatedAt;
+        }
+
+        statusSelect.addEventListener("change", persist);
+        prioritySelect.addEventListener("change", persist);
+        ownerInput.addEventListener("change", persist);
+        notesArea.addEventListener("change", persist);
+        root.appendChild(row);
+      });
+    }
+
+    function buildSelect(options, selected) {
+      const select = document.createElement("select");
+      select.className = "diag-select";
+      options.forEach((value) => {
+        const option = document.createElement("option");
+        option.value = value;
+        option.textContent = value;
+        if (selected === value) option.selected = true;
+        select.appendChild(option);
+      });
+      return select;
+    }
+
+    async function refreshLiveSnapshot() {
+      const stamp = document.getElementById("liveStamp");
+      const grid = document.getElementById("liveGrid");
+      const diagnosis = document.getElementById("liveDiagnosis");
+      stamp.textContent = "读取中";
+      grid.innerHTML = "";
+      diagnosis.textContent = "正在读取当前 live 快照...";
+      try {
+        const resp = await fetch("/api/runtime/perf-snapshot", { cache: "no-store" });
+        if (!resp.ok) throw new Error("HTTP " + resp.status);
+        const payload = await resp.json();
+        const cards = Array.isArray(payload.summary_cards) ? payload.summary_cards.slice(0, 4) : [];
+        const diag = payload.diagnosis || {};
+        grid.innerHTML = cards.map((card) => `
+          <article class="diag-card">
+            <div class="diag-card-label">${escapeHtml(card.label || "-")}</div>
+            <div class="diag-card-value">${escapeHtml(card.value || "-")}</div>
+            <div class="diag-card-note">${escapeHtml(card.note || "")}</div>
+          </article>
+        `).join("");
+        diagnosis.innerHTML = `
+          <strong>${escapeHtml(diag.headline || "当前诊断")}</strong><br />
+          ${escapeHtml(diag.summary || "未返回诊断摘要")}
+        `;
+        stamp.textContent = "已刷新 " + new Date().toLocaleTimeString("zh-CN", { hour12: false });
+      } catch (err) {
+        stamp.textContent = "读取失败";
+        diagnosis.textContent = "live 快照读取失败：" + String((err && err.message) || err || "未知错误");
+      }
+    }
+
+    function exportTracker() {
+      const state = loadTracker();
+      const payload = {
+        exportedAt: new Date().toISOString(),
+        snapshotWindow: "2026-04-11 17:33:00~17:39:18",
+        items: REQUESTS.map((item) => ({
+          id: item.id,
+          action: item.action,
+          endpoint: item.endpoint,
+          actual: item.actual,
+          sample: item.sample,
+          tracker: Object.assign({}, defaultTracker(item), state[item.id] || {}),
+        })),
+      };
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = "request-traffic-diagnostics-form-v2.json";
+      anchor.click();
+      URL.revokeObjectURL(url);
+    }
+
+    function resetTracker() {
+      localStorage.removeItem(STORAGE_KEY);
+      renderTracker();
+    }
+
+    document.querySelectorAll(".diag-filter").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        activeFilter = btn.dataset.filter || "all";
+        renderFilters();
+        renderRequests();
+      });
+    });
+    document.getElementById("liveBtn").addEventListener("click", refreshLiveSnapshot);
+    document.getElementById("exportBtn").addEventListener("click", exportTracker);
+    document.getElementById("resetBtn").addEventListener("click", resetTracker);
+
+    renderMetrics();
+    renderFlow();
+    renderFilters();
+    renderRequests();
+    renderTracker();
+  </script>
+</body>
+</html>

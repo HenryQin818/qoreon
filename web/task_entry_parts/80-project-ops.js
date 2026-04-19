@@ -3360,8 +3360,6 @@
     function messageObjectViewerOpenUrl(target, item) {
       const direct = String((target && target.openUrl) || "").trim();
       if (direct) return direct;
-      const trustedHtmlPreviewUrl = messageObjectViewerTrustedHtmlPreviewUrl(target, item);
-      if (trustedHtmlPreviewUrl) return trustedHtmlPreviewUrl;
       const path = String(((item && item.path) || (target && target.path) || (target && target.value) || "")).trim();
       if (!path) return "";
       if (/^https?:\/\//i.test(path)) return path;
@@ -3370,30 +3368,6 @@
         const previewUrl = messageObjectViewerPreviewBlobUrl(target, item);
         if (previewUrl) return previewUrl;
         return String(location.origin || "") + "/api/fs/open?path=" + encodeURIComponent(path);
-      }
-      return "";
-    }
-
-    function messageObjectViewerTrustedHtmlPreviewUrl(target, item) {
-      const row = (item && typeof item === "object") ? item : null;
-      if (!row || String(row.kind || "") !== "file") return "";
-      const previewMode = String(row.preview_mode || "").trim().toLowerCase();
-      const name = String(row.name || "").trim();
-      const relativePath = String(row.relative_path || "").trim().replace(/\\/g, "/");
-      const absPath = String(row.path || (target && target.path) || "").trim().replace(/\\/g, "/");
-      if (previewMode !== "html" || !name || !/\.html?$/i.test(name)) return "";
-      if (/^\/share\//.test(absPath)) return String(location.origin || "") + absPath;
-      if (relativePath.indexOf("web/page_previews/") === 0) {
-        return String(location.origin || "") + "/share/" + encodeURIComponent(name);
-      }
-      if (relativePath.indexOf("static_sites/share/") === 0) {
-        return String(location.origin || "") + "/share/" + encodeURIComponent(name);
-      }
-      if (/\/web\/page_previews\/[^/]+\.html?$/i.test(absPath)) {
-        return String(location.origin || "") + "/share/" + encodeURIComponent(name);
-      }
-      if (/\/static_sites\/share\/[^/]+\.html?$/i.test(absPath)) {
-        return String(location.origin || "") + "/share/" + encodeURIComponent(name);
       }
       return "";
     }
@@ -4273,7 +4247,6 @@
         return;
       }
       if (mode === "html") {
-        const trustedHtmlPreviewUrl = messageObjectViewerTrustedHtmlPreviewUrl(MESSAGE_OBJECT_VIEWER.target, item);
         if (item.truncated) {
           body.appendChild(el("div", {
             class: "hint",
@@ -4283,19 +4256,14 @@
         const frameWrap = el("div", { class: "msgobj-html-preview-wrap" });
         const frame = el("iframe", {
           class: "msgobj-html-preview",
+          sandbox: "",
           referrerpolicy: "no-referrer",
           title: String(item.name || item.path || "HTML 预览"),
         });
-        if (trustedHtmlPreviewUrl) {
-          frame.setAttribute("sandbox", "allow-scripts allow-same-origin");
-          frame.src = trustedHtmlPreviewUrl;
-        } else {
-          frame.setAttribute("sandbox", "");
-          try {
-            frame.srcdoc = String(item.content || "");
-          } catch (_) {
-            frame.srcdoc = "<!doctype html><html><body><pre>HTML 预览加载失败</pre></body></html>";
-          }
+        try {
+          frame.srcdoc = String(item.content || "");
+        } catch (_) {
+          frame.srcdoc = "<!doctype html><html><body><pre>HTML 预览加载失败</pre></body></html>";
         }
         frameWrap.appendChild(frame);
         body.appendChild(frameWrap);
@@ -4795,30 +4763,6 @@
       return false;
     }
 
-    function shouldKeepStructuredAssistantSender(raw, opts = {}) {
-      const role = String(opts.role || "").trim().toLowerCase();
-      if (role !== "assistant") return false;
-      const messageKind = firstNonEmptyText([
-        opts.messageKind,
-        raw && raw.message_kind,
-        raw && raw.messageKind,
-      ]).toLowerCase();
-      if (messageKind === "system_callback" || messageKind === "collab_update") return true;
-      const callbackToSessionId = firstNonEmptyText([
-        raw && raw.callback_to_session_id,
-        raw && raw.callbackToSessionId,
-        raw && raw.callback_to && raw.callback_to.session_id,
-        raw && raw.callbackTo && raw.callbackTo.sessionId,
-      ]);
-      const targetSessionId = firstNonEmptyText([
-        raw && raw.target_session_id,
-        raw && raw.targetSessionId,
-        raw && raw.communication_view && raw.communication_view.target_session_id,
-        raw && raw.communicationView && raw.communicationView.targetSessionId,
-      ]);
-      return !!(callbackToSessionId || targetSessionId);
-    }
-
     function resolveMessageSender(raw, opts = {}) {
       const role = String(opts.role || "").trim().toLowerCase();
       const allowSourceChannel = Object.prototype.hasOwnProperty.call(opts, "allowSourceChannel")
@@ -4835,7 +4779,6 @@
       const structuredType = normalizeSenderType(structured.type, role);
       const hasStructured = !!(structured.typeRaw || structured.id || structured.name);
       const defaultLabel = senderDefaultLabel(role, opts);
-      const keepStructuredAssistantSender = shouldKeepStructuredAssistantSender(raw, opts);
       if (hasStructured) {
         const assistantMismatch = role === "assistant" && structuredType !== "agent";
         const userLegacyUnknown = role === "user"
@@ -4844,7 +4787,7 @@
         if (!assistantMismatch && !userLegacyUnknown) {
           // 对 assistant 来说，run.sender_* 在 CCB 场景通常代表“发起方”（用户侧），
           // 不应覆盖当前会话的“响应方”身份展示。
-          if (role === "assistant" && !keepStructuredAssistantSender) {
+          if (role === "assistant") {
             const structuredLabel = firstNonEmptyText([structured.name, structured.id]);
             if (structuredLabel && defaultLabel && structuredLabel !== defaultLabel) {
               return {
@@ -4914,6 +4857,9 @@
     }
 
     function buildConversationComposerSenderHint() {
+      if (typeof isTaskShareModeActive === "function" && isTaskShareModeActive()) {
+        return "发送主体：外部协作者 · " + taskShareModeText(taskShareModeParams && taskShareModeParams().sender_name, "外部协作者");
+      }
       const sender = readStructuredSender(buildUiUserSenderFields(currentConversationCtx() || resolveConversationSendCtx()));
       const st = normalizeSenderType(sender.type, "user");
       const kind = st === "system" ? "系统" : (st === "agent" ? "通道Agent" : "用户");

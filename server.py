@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
+import ipaddress
 import inspect
 import json
 import mimetypes
@@ -30,6 +31,7 @@ import os
 import re
 import secrets
 import signal
+import socket
 import subprocess
 import sys
 import threading
@@ -191,6 +193,11 @@ from task_dashboard.runtime.project_scheduler_routes import (  # noqa: F401
 )
 from task_dashboard.runtime.callback_runtime import *  # noqa: F401,F403
 from task_dashboard.runtime.session_health_registry import SessionHealthRuntimeRegistry
+from task_dashboard.runtime.share_space import (
+    LEGACY_PROJECT_CHAT_PAGE_PATH as RUNTIME_LEGACY_PROJECT_CHAT_PAGE_PATH,
+    LEGACY_SHARE_SPACE_PAGE_PATH as RUNTIME_LEGACY_SHARE_SPACE_PAGE_PATH,
+    SHARE_MODE_PAGE_PATH as RUNTIME_SHARE_MODE_PAGE_PATH,
+)
 
 # Import route dispatcher (extracted from server.py)
 from task_dashboard.routes import (
@@ -236,8 +243,6 @@ _DASHBOARD_CFG_CACHE: dict[str, Any] = {
     "with_local": False,
     "checked_at_mono": 0.0,
 }
-_PROJECT_SCHEDULE_QUEUE_CACHE_LOCK = threading.Lock()
-_PROJECT_SCHEDULE_QUEUE_CACHE: dict[str, dict[str, Any]] = {}
 _PROJECT_TASK_ITEMS_CACHE_LOCK = threading.Lock()
 _PROJECT_TASK_ITEMS_CACHE: dict[str, dict[str, Any]] = {}
 _AUTO_INSPECTION_PREVIEW_CACHE_LOCK = threading.Lock()
@@ -466,9 +471,6 @@ def _build_session_health_payload(
                 "workdir": str(row.get("workdir") or "").strip(),
                 "project_execution_context": dict(row.get("project_execution_context") or {})
                 if isinstance(row.get("project_execution_context"), dict)
-                else {},
-                "task_tracking": dict(row.get("task_tracking") or {})
-                if isinstance(row.get("task_tracking"), dict)
                 else {},
                 "is_primary": bool(row.get("is_primary")),
                 "session_role": str(row.get("session_role") or "").strip(),
@@ -934,51 +936,6 @@ def _fallback_log_from_meta(meta: dict[str, Any]) -> str:
     return "\n".join(parts)
 
 
-def _run_meta_related_session_ids(meta: Any) -> set[str]:
-    row = meta if isinstance(meta, dict) else {}
-    related: set[str] = set()
-
-    def _add(value: Any) -> None:
-        text = _safe_text(value, 80).strip()
-        if text:
-            related.add(text)
-
-    def _add_ref(payload: Any) -> None:
-        if not isinstance(payload, dict):
-            return
-        _add(payload.get("session_id") if "session_id" in payload else payload.get("sessionId"))
-
-    _add(row.get("sessionId") if "sessionId" in row else row.get("session_id"))
-    _add(row.get("target_session_id") if "target_session_id" in row else row.get("targetSessionId"))
-    _add(row.get("source_session_id") if "source_session_id" in row else row.get("sourceSessionId"))
-
-    for key in ("source_ref", "target_ref", "callback_to", "sender_agent_ref"):
-        _add_ref(row.get(key))
-
-    communication_view = row.get("communication_view")
-    if isinstance(communication_view, dict):
-        _add(
-            communication_view.get("target_session_id")
-            if "target_session_id" in communication_view
-            else communication_view.get("targetSessionId")
-        )
-        _add(
-            communication_view.get("source_session_id")
-            if "source_session_id" in communication_view
-            else communication_view.get("sourceSessionId")
-        )
-
-    technical = row.get("technical")
-    technical_route = technical.get("route_resolution") if isinstance(technical, dict) else None
-    for route in (row.get("route_resolution"), technical_route):
-        if not isinstance(route, dict):
-            continue
-        for key in ("final_target", "resolved_target", "original_callback_to", "callback_to"):
-            _add_ref(route.get(key))
-
-    return related
-
-
 def _resolve_runs_static_target(runs_root: Path, request_path: str) -> Optional[Path]:
     """Resolve '/.runs/*' request path to a safe file path under runs_root."""
     if not str(request_path or "").startswith("/.runs/"):
@@ -1000,7 +957,174 @@ def _is_runs_attachment_request(request_path: str) -> bool:
     return p.startswith("/.runs/") and ("/attachments/" in p)
 
 
+def _normalize_client_host(host: Any) -> str:
+    raw = str(host or "").strip()
+    if raw.startswith("[") and raw.endswith("]"):
+        raw = raw[1:-1]
+    if "%" in raw:
+        raw = raw.split("%", 1)[0]
+    if raw.lower().startswith("::ffff:"):
+        raw = raw.split(":", 3)[-1]
+    return raw
+
+
+_LOCAL_CLIENT_ADDRESSES_CACHE_LOCK = threading.Lock()
+_LOCAL_CLIENT_ADDRESSES_CACHE: dict[str, Any] = {
+    "checked_at": 0.0,
+    "addresses": {"127.0.0.1", "::1", "localhost"},
+}
+
+
+def _is_loopback_client_address(client_address: Any) -> bool:
+    host = ""
+    if isinstance(client_address, (tuple, list)) and client_address:
+        host = _normalize_client_host(client_address[0])
+    else:
+        host = _normalize_client_host(client_address)
+    if not host:
+        return False
+    if host == "localhost":
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    mapped = getattr(ip, "ipv4_mapped", None)
+    if mapped is not None:
+        ip = mapped
+    return bool(ip.is_loopback)
+
+
+def _local_client_address_candidates() -> set[str]:
+    candidates = {"localhost", "127.0.0.1", "::1"}
+    for raw in {socket.gethostname(), socket.getfqdn()}:
+        host = _normalize_client_host(raw)
+        if host:
+            candidates.add(host)
+    for host in tuple(candidates):
+        try:
+            infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+        except Exception:
+            continue
+        for info in infos:
+            sockaddr = info[4] if len(info) > 4 else ()
+            if not sockaddr:
+                continue
+            resolved = _normalize_client_host(sockaddr[0])
+            if resolved:
+                candidates.add(resolved)
+    for dest in (("8.8.8.8", 80), ("1.1.1.1", 80), ("192.168.0.1", 80)):
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            try:
+                sock.connect(dest)
+                resolved = _normalize_client_host(sock.getsockname()[0])
+            finally:
+                sock.close()
+        except Exception:
+            continue
+        if resolved:
+            candidates.add(resolved)
+    normalized: set[str] = set()
+    for raw in candidates:
+        host = _normalize_client_host(raw)
+        if not host:
+            continue
+        normalized.add(host)
+        try:
+            ip = ipaddress.ip_address(host)
+        except ValueError:
+            continue
+        mapped = getattr(ip, "ipv4_mapped", None)
+        if mapped is not None:
+            ip = mapped
+        normalized.add(str(ip))
+    return normalized
+
+
+def _local_client_addresses(refresh: bool = False) -> set[str]:
+    ttl_s = 15.0
+    now_mono = time.monotonic()
+    with _LOCAL_CLIENT_ADDRESSES_CACHE_LOCK:
+        checked_at = float(_LOCAL_CLIENT_ADDRESSES_CACHE.get("checked_at") or 0.0)
+        cached = set(_LOCAL_CLIENT_ADDRESSES_CACHE.get("addresses") or set())
+        if cached and not refresh and (now_mono - checked_at) < ttl_s:
+            return cached
+    resolved = _local_client_address_candidates()
+    with _LOCAL_CLIENT_ADDRESSES_CACHE_LOCK:
+        _LOCAL_CLIENT_ADDRESSES_CACHE["checked_at"] = now_mono
+        _LOCAL_CLIENT_ADDRESSES_CACHE["addresses"] = set(resolved)
+    return set(resolved)
+
+
+def _is_local_client_address(client_address: Any, local_addresses: Optional[set[str]] = None) -> bool:
+    host = ""
+    if isinstance(client_address, (tuple, list)) and client_address:
+        host = _normalize_client_host(client_address[0])
+    else:
+        host = _normalize_client_host(client_address)
+    if not host:
+        return False
+    if _is_loopback_client_address(host):
+        return True
+    normalized = local_addresses if local_addresses is not None else _local_client_addresses()
+    if host in normalized:
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    mapped = getattr(ip, "ipv4_mapped", None)
+    if mapped is not None:
+        ip = mapped
+    return str(ip) in normalized
+
+
+def _is_remote_share_only_allowed_request(method: str, request_path: str) -> bool:
+    path = urlparse(str(request_path or "")).path
+    method_upper = str(method or "").upper()
+    parts = [seg for seg in path.split("/") if seg]
+
+    if method_upper in {"GET", "HEAD"} and path in {
+        RUNTIME_SHARE_MODE_PAGE_PATH,
+        RUNTIME_LEGACY_PROJECT_CHAT_PAGE_PATH,
+        RUNTIME_LEGACY_SHARE_SPACE_PAGE_PATH,
+    }:
+        return True
+
+    if method_upper in {"GET", "HEAD"} and _is_runs_attachment_request(path):
+        return True
+
+    if len(parts) == 4 and parts[:2] == ["api", "share-spaces"] and parts[3] == "bootstrap":
+        return method_upper in {"GET", "HEAD"}
+
+    if len(parts) == 5 and parts[:2] == ["api", "share-spaces"] and parts[3] == "sessions":
+        return method_upper in {"GET", "HEAD"}
+
+    if len(parts) == 4 and parts[:2] == ["api", "share-spaces"] and parts[3] == "announce":
+        return method_upper == "POST"
+
+    return False
+
+
+def _is_remote_share_only_request_blocked(
+    client_address: Any,
+    method: str,
+    request_path: str,
+    *,
+    local_addresses: Optional[set[str]] = None,
+) -> bool:
+    if _is_local_client_address(client_address, local_addresses=local_addresses):
+        return False
+    return not _is_remote_share_only_allowed_request(method, request_path)
+
+
 def _build_local_server_origin(bind_host: str, port: int) -> str:
+    public_origin = str(os.environ.get("TASK_DASHBOARD_PUBLIC_ORIGIN") or "").strip().rstrip("/")
+    if public_origin:
+        if not re.match(r"^https?://", public_origin, re.I):
+            public_origin = "http://" + public_origin.lstrip("/")
+        return public_origin
     host = str(bind_host or "").strip()
     if not host or host in {"0.0.0.0", "::", "[::]"}:
         host = "127.0.0.1"
@@ -1777,7 +1901,7 @@ def _server_token() -> str:
 def _dashboard_build_paths() -> dict[str, Path]:
     """Resolve static dashboard build script and output paths."""
     repo_root = _repo_root()
-    task_dir = Path(__file__).resolve().parent
+    task_dir = repo_root / "项目管理-小秘书" / "项目看板" / "task-dashboard"
     script = task_dir / "build_project_task_dashboard.py"
     out_task = task_dir / "dist" / "project-task-dashboard.html"
     out_overview = task_dir / "dist" / "project-overview-dashboard.html"
@@ -1802,9 +1926,22 @@ def _rebuild_dashboard_static(timeout_s: int = 120) -> dict[str, Any]:
     if not script.exists():
         raise RuntimeError(f"build script not found: {script}")
 
+    repo_root = paths["repo_root"]
     cmd = [
         str(sys.executable or "python3"),
         str(script),
+        "--root",
+        str(repo_root),
+        "--out-task",
+        "项目管理-小秘书/项目看板/task-dashboard/dist/project-task-dashboard.html",
+        "--out-overview",
+        "项目管理-小秘书/项目看板/task-dashboard/dist/project-overview-dashboard.html",
+        "--out-communication",
+        "项目管理-小秘书/项目看板/task-dashboard/dist/project-communication-audit.html",
+        "--out-message-risk-dashboard",
+        "项目管理-小秘书/项目看板/task-dashboard/dist/project-message-risk-dashboard.html",
+        "--out-status-report",
+        "项目管理-小秘书/项目看板/task-dashboard/dist/project-status-report.html",
     ]
     started = time.time()
     proc = subprocess.run(
@@ -1939,14 +2076,6 @@ def _clear_dashboard_cfg_cache() -> None:
         _DASHBOARD_CFG_CACHE["checked_at_mono"] = 0.0
     runtime_clear_work_context_cache()
 
-
-def _schedule_queue_cache_enabled() -> bool:
-    raw = str(os.environ.get("CCB_SCHEDULE_QUEUE_CACHE") or "").strip().lower()
-    if raw in {"0", "false", "off", "no"}:
-        return False
-    return True
-
-
 def _task_items_cache_enabled() -> bool:
     raw = str(os.environ.get("CCB_TASK_ITEMS_CACHE") or "").strip().lower()
     if raw in {"0", "false", "off", "no"}:
@@ -1978,19 +2107,6 @@ def _auto_inspection_preview_cache_ttl_s() -> float:
     if ms <= 0:
         return 0.0
     return min(ms / 1000.0, 20.0)
-
-
-def _schedule_queue_cache_signature(path: Path) -> tuple[Any, ...]:
-    return (str(path), _cfg_file_mtime_ns(path), _path_size(path))
-
-
-def _clear_project_schedule_queue_cache(project_id: str = "") -> None:
-    pid = str(project_id or "").strip()
-    with _PROJECT_SCHEDULE_QUEUE_CACHE_LOCK:
-        if not pid:
-            _PROJECT_SCHEDULE_QUEUE_CACHE.clear()
-            return
-        _PROJECT_SCHEDULE_QUEUE_CACHE.pop(pid, None)
 
 
 def _clear_project_task_items_cache(project_id: str = "") -> None:
@@ -2711,7 +2827,7 @@ def _resolve_project_task_root(project_id: str) -> Optional[Path]:
     # task_dashboard should still be able to locate its local 任务规划目录.
     script_dir = Path(__file__).resolve().parent
     norm_rel = _normalize_task_path_identity(task_root_rel)
-    marker = f"{script_dir.name}/"
+    marker = "task-dashboard/"
     if norm_rel:
         idx = norm_rel.find(marker)
         if idx >= 0:
@@ -2830,7 +2946,10 @@ def _repair_project_prefixed_path(path: Path) -> Path:
     if not parts:
         return path
     for idx in range(1, len(parts)):
+        parent_name = parts[idx - 1]
         name = parts[idx]
+        if parent_name != "项目管理-小秘书":
+            continue
         if not name or name.startswith("【项目】"):
             continue
         try:
@@ -2998,6 +3117,38 @@ class RunScheduler:
         self._retry_timers[rid] = timer
         return timer
 
+    def _enqueue_pending_retry_locked(self, session_id: str, run_id: str, cli_type: str) -> None:
+        sid = str(session_id or "").strip()
+        rid = str(run_id or "").strip()
+        cli_t = str(cli_type or "codex").strip() or "codex"
+        if not sid or not rid:
+            return
+        q = self._q.get(sid)
+        if q is None:
+            q = deque()
+            self._q[sid] = q
+        existing = [item for item in q]
+        for item in existing:
+            irid = str(item[0] if isinstance(item, tuple) else item).strip()
+            if irid == rid:
+                return
+        insert_at = 0
+        for idx, item in enumerate(existing):
+            qrid = str(item[0] if isinstance(item, tuple) else item).strip()
+            if not qrid:
+                break
+            try:
+                qmeta = self.store.load_meta(qrid) if hasattr(self.store, "load_meta") else None
+            except Exception:
+                qmeta = None
+            qstatus = str((qmeta or {}).get("status") or "").strip().lower()
+            if qstatus == "retry_waiting":
+                insert_at = idx + 1
+                continue
+            break
+        existing.insert(insert_at, (rid, cli_t))
+        self._q[sid] = deque(existing)
+
     def schedule_retry_waiting(self, run_id: str, session_id: str, due_ts: float, cli_type: str = "codex") -> bool:
         sid = str(session_id or "").strip()
         rid = str(run_id or "").strip()
@@ -3006,7 +3157,12 @@ class RunScheduler:
             return False
         timer: Optional[threading.Timer] = None
         with self._lock:
-            timer = self._schedule_retry_waiting_locked(rid, sid, due_ts, cli_t)
+            cur = self._retry_waiting.get(sid)
+            if (cur and str(cur[0] or "").strip() != rid) or sid in self._running or bool(self._q.get(sid)):
+                self._enqueue_pending_retry_locked(sid, rid, cli_t)
+                self._try_dispatch_locked(sid)
+            else:
+                timer = self._schedule_retry_waiting_locked(rid, sid, due_ts, cli_t)
         if timer:
             timer.start()
         return True
@@ -3204,8 +3360,9 @@ class RunScheduler:
                 due_ts = _parse_iso_ts(meta.get("retryScheduledAt")) or time.time() + max(1, _default_network_resume_delay_s())
                 timer = self._schedule_retry_waiting_locked(run_id, session_id, due_ts, cli_type)
                 timer.start()
-                run_id = ""
-                continue
+                if not q:
+                    self._q.pop(session_id, None)
+                return
             # stale queue item, skip
             run_id = ""
             continue
@@ -3394,53 +3551,6 @@ def _find_new_session_id(
     return "", ""
 
 
-def _extract_session_id_from_cli_output(
-    adapter_cls: Any,
-    *chunks: Any,
-    exclude_session_ids: Optional[set[str]] = None,
-) -> str:
-    extractor = getattr(adapter_cls, "extract_session_id_from_output", None)
-    if not callable(extractor):
-        return ""
-    combined_output = "\n".join(str(part or "") for part in chunks if str(part or "").strip())
-    if not combined_output:
-        return ""
-    try:
-        sid = str(extractor(combined_output) or "").strip().lower()
-    except Exception:
-        return ""
-    if not sid:
-        return ""
-    blocked = {
-        str(row or "").strip().lower()
-        for row in (exclude_session_ids or set())
-        if str(row or "").strip()
-    }
-    if sid in blocked:
-        return ""
-    return sid
-
-
-def _find_session_path_by_id(
-    adapter_cls: Any,
-    session_id: str,
-    *,
-    after_ts: float = 0.0,
-) -> str:
-    target = str(session_id or "").strip().lower()
-    if not target:
-        return ""
-    try:
-        sessions = adapter_cls.scan_sessions(after_ts=after_ts)
-    except Exception:
-        sessions = []
-    for info in sessions:
-        sid = str(getattr(info, "session_id", "") or "").strip().lower()
-        if sid == target:
-            return str(getattr(info, "path", "") or "")
-    return ""
-
-
 def create_codex_session(seed_prompt: str, timeout_s: int = 90) -> dict[str, Any]:
     """
     Create a new Codex session by running a minimal `codex exec` turn (read-only sandbox)
@@ -3523,22 +3633,11 @@ def create_cli_session(
             env=spawn_env,
         )
     except subprocess.TimeoutExpired as e:
-        sid = _extract_session_id_from_cli_output(
-            adapter_cls,
-            getattr(e, "stdout", ""),
-            getattr(e, "stderr", ""),
-            getattr(e, "output", ""),
+        sid, spath = _find_new_session_id(
+            start_ts,
+            cli_type,
             exclude_session_ids=existing_session_ids,
         )
-        spath = _find_session_path_by_id(adapter_cls, sid, after_ts=start_ts) if sid else ""
-        if sid and not spath:
-            spath = _find_session_path_by_id(adapter_cls, sid, after_ts=0.0)
-        if not sid:
-            sid, spath = _find_new_session_id(
-                start_ts,
-                cli_type,
-                exclude_session_ids=existing_session_ids,
-            )
         return {
             "ok": False,
             "error": "timeout",
@@ -3565,17 +3664,16 @@ def create_cli_session(
         cli_type,
         exclude_session_ids=existing_session_ids,
     )
-    if not sid:
-        sid = _extract_session_id_from_cli_output(
-            adapter_cls,
-            proc.stdout,
-            proc.stderr,
-            exclude_session_ids=existing_session_ids,
-        )
-        if sid and not spath:
-            spath = _find_session_path_by_id(adapter_cls, sid, after_ts=start_ts)
-        if sid and not spath:
-            spath = _find_session_path_by_id(adapter_cls, sid, after_ts=0.0)
+    if not sid and proc.returncode == 0:
+        combined_output = "\n".join(part for part in [proc.stdout, proc.stderr] if part)
+        try:
+            extractor = getattr(adapter_cls, "extract_session_id_from_output", None)
+            if callable(extractor):
+                sid = str(extractor(combined_output) or "").strip().lower()
+                if sid in existing_session_ids:
+                    sid = ""
+        except Exception:
+            sid = ""
     if proc.returncode != 0:
         err = (proc.stderr or "").strip() or (proc.stdout or "").strip()
         return {
@@ -3825,15 +3923,6 @@ class RunStore:
                 self._live_run_index_order.remove(run_id)
             except ValueError:
                 pass
-
-    def _run_sort_key(self, meta: dict[str, Any]) -> tuple[float, str]:
-        row = meta if isinstance(meta, dict) else {}
-        created_ts = _parse_rfc3339_ts(str(row.get("createdAt") or "").strip())
-        if created_ts <= 0:
-            started_ts = _parse_rfc3339_ts(str(row.get("startedAt") or "").strip())
-            finished_ts = _parse_rfc3339_ts(str(row.get("finishedAt") or "").strip())
-            created_ts = max(created_ts, started_ts, finished_ts)
-        return (created_ts, str(row.get("id") or ""))
 
     def _find_meta_path(self, run_id: str) -> Optional[Path]:
         hot = self._hot_paths(run_id)["meta"]
@@ -4299,86 +4388,6 @@ class RunStore:
             pass
         return meta, changed
 
-    def list_runs_for_sessions(
-        self,
-        *,
-        project_id: str,
-        session_ids: list[str],
-        per_session_limit: int = 24,
-        payload_mode: str = "light",
-    ) -> list[dict[str, Any]]:
-        pid = str(project_id or "").strip()
-        unique_ids = [str(item or "").strip() for item in session_ids if str(item or "").strip()]
-        unique_ids = list(dict.fromkeys(unique_ids))
-        if not pid or not unique_ids:
-            return []
-
-        resolved_payload_mode = str(payload_mode or "").strip().lower()
-        if resolved_payload_mode not in {"", "full", "light", "none"}:
-            resolved_payload_mode = "light"
-        if not resolved_payload_mode:
-            resolved_payload_mode = "light"
-        include_payload = resolved_payload_mode != "none"
-        hydrate_light = resolved_payload_mode in {"full", "light"}
-        hydrate_full = resolved_payload_mode == "full"
-        safe_per_session_limit = max(1, min(int(per_session_limit or 1), 120))
-        wanted = set(unique_ids)
-        counts: dict[str, int] = {sid: 0 for sid in unique_ids}
-        metas: list[dict[str, Any]] = []
-
-        snapshot = self._snapshot_live_run_index()
-        snapshot.sort(key=self._run_sort_key, reverse=True)
-        for meta in snapshot:
-            if bool(meta.get("hidden")):
-                continue
-            run_id = str(meta.get("id") or "").strip()
-            if run_id:
-                meta, changed = self.reconcile_meta(meta)
-                if changed:
-                    self.save_meta(run_id, meta)
-            if pid and str(meta.get("projectId") or "") != pid:
-                continue
-            related_ids = _run_meta_related_session_ids(meta)
-            matched_ids = [sid for sid in related_ids if sid in wanted and counts[sid] < safe_per_session_limit]
-            if not matched_ids:
-                continue
-
-            if include_payload:
-                run_cli_type = str(meta.get("cliType") or "codex").strip() or "codex"
-                if hydrate_light and (hydrate_full or not str(meta.get("messagePreview") or "").strip()):
-                    msg = self.read_msg(run_id, limit_chars=4000)
-                    if msg:
-                        meta["messagePreview"] = _safe_text(msg.replace("\r\n", "\n").strip(), 260)
-                if hydrate_light and (hydrate_full or not str(meta.get("lastPreview") or "").strip()):
-                    last = self.read_last(run_id, limit_chars=2000)
-                    if last:
-                        meta["lastPreview"] = _safe_text(last.replace("\r\n", "\n").strip(), 300)
-                if hydrate_full:
-                    log = self.read_log(run_id, limit_chars=2400)
-                    if not log:
-                        log = _fallback_log_from_meta(meta)
-                    if log:
-                        meta["logPreview"] = _safe_text(log.replace("\r\n", "\n").strip(), 420)
-                        am_preview = _extract_agent_messages(log, max_items=4, cli_type=run_cli_type)
-                        am_file = _extract_agent_messages_from_file(
-                            self._paths(run_id)["log"],
-                            max_items=4,
-                            cli_type=run_cli_type,
-                        )
-                        am = am_file if len(am_file) >= len(am_preview) else am_preview
-                        if am:
-                            prev_count = int(meta.get("agentMessagesCount") or 0)
-                            meta["agentMessagesCount"] = max(prev_count, len(am))
-                        if am and not str(meta.get("lastPreview") or "").strip():
-                            meta["partialPreview"] = _safe_text(am[-1], 300)
-
-            metas.append(meta)
-            for sid in matched_ids:
-                counts[sid] += 1
-            if all(count >= safe_per_session_limit for count in counts.values()):
-                break
-        return metas
-
     def list_runs(
         self,
         channel_id: str = "",
@@ -4404,10 +4413,7 @@ class RunStore:
         before_txt = str(before_created_at or "").strip()
         after_ts = _parse_rfc3339_ts(after_txt) if after_txt else 0.0
         before_ts = _parse_rfc3339_ts(before_txt) if before_txt else 0.0
-
-        snapshot = self._snapshot_live_run_index()
-        snapshot.sort(key=self._run_sort_key, reverse=True)
-        for meta in snapshot:
+        for meta in self._snapshot_live_run_index():
             if bool(meta.get("hidden")):
                 continue
             run_id = str(meta.get("id") or "").strip()
@@ -4419,7 +4425,7 @@ class RunStore:
                 continue
             if project_id and str(meta.get("projectId") or "") != project_id:
                 continue
-            if session_id and session_id not in _run_meta_related_session_ids(meta):
+            if session_id and str(meta.get("sessionId") or "") != session_id:
                 continue
             if cli_type and str(meta.get("cliType") or "codex") != cli_type:
                 continue
@@ -4744,6 +4750,20 @@ class SessionBindingStore:
 class Handler(BaseHTTPRequestHandler):
     server_version = "task-dashboard-ccb/1.0"
 
+    def _deny_remote_share_only_request(self, method: str) -> bool:
+        if not _is_remote_share_only_request_blocked(
+            getattr(self, "client_address", None),
+            method,
+            getattr(self, "path", ""),
+        ):
+            return False
+        path = urlparse(str(getattr(self, "path", "") or "")).path
+        if path == "/__health" or path.startswith("/api/"):
+            _json_response(self, 404, {"error": "not found"}, send_body=(self.command != "HEAD"))
+            return True
+        self.send_error(HTTPStatus.NOT_FOUND, "not found")
+        return True
+
     def _require_token(self) -> bool:
         tok = _server_token()
         if not tok:
@@ -4833,6 +4853,36 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             pass
         return store
+
+    def _share_mode_static_target(self, static_root: Path) -> Path:
+        rel = RUNTIME_SHARE_MODE_PAGE_PATH.lstrip("/")
+        return static_root / rel
+
+    def _maybe_redirect_legacy_share_page(
+        self,
+        static_root: Path,
+        request_path: str,
+        *,
+        query: str = "",
+    ) -> bool:
+        if str(request_path or "") not in {
+            RUNTIME_LEGACY_PROJECT_CHAT_PAGE_PATH,
+            RUNTIME_LEGACY_SHARE_SPACE_PAGE_PATH,
+        }:
+            return False
+        target = self._share_mode_static_target(static_root)
+        if not target.exists() or not target.is_file():
+            return False
+
+        location = RUNTIME_SHARE_MODE_PAGE_PATH + (("?" + query) if query else "")
+        self.send_response(HTTPStatus.FOUND)
+        self.send_header("Location", location)
+        self.send_header("Content-Length", "0")
+        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("Expires", "0")
+        self.end_headers()
+        return True
 
     def _build_route_context(
         self,
@@ -4948,7 +4998,6 @@ class Handler(BaseHTTPRequestHandler):
             normalize_heartbeat_task_id=_normalize_heartbeat_task_id,
             heartbeat_task_history_limit=_HEARTBEAT_TASK_HISTORY_LIMIT,
             build_runtime_bubbles_payload=_build_runtime_bubbles_payload,
-            build_project_schedule_queue_payload=_build_project_schedule_queue_payload,
             list_task_plans_response=list_task_plans_response,
             list_assist_requests_response=list_assist_requests_response,
             get_assist_request_response=get_assist_request_response,
@@ -5003,6 +5052,8 @@ class Handler(BaseHTTPRequestHandler):
         return RouteContext(**{key: value for key, value in ctx_kwargs.items() if key in allowed_keys})
 
     def do_HEAD(self) -> None:  # noqa: N802
+        if self._deny_remote_share_only_request("HEAD"):
+            return
         static_root: Path = self.server.static_root  # type: ignore[attr-defined]
         store: RunStore = self.server.store  # type: ignore[attr-defined]
         session_store: SessionStore = self.server.session_store  # type: ignore[attr-defined]
@@ -5056,9 +5107,14 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(HTTPStatus.NOT_FOUND, "not found")
             return
 
+        if self._maybe_redirect_legacy_share_page(static_root, u.path, query=u.query or ""):
+            return
+
         self._serve_static(static_root, u.path, send_body=False)
 
     def do_GET(self) -> None:  # noqa: N802
+        if self._deny_remote_share_only_request("GET"):
+            return
         static_root: Path = self.server.static_root  # type: ignore[attr-defined]
         store: RunStore = self.server.store  # type: ignore[attr-defined]
         session_store: SessionStore = self.server.session_store  # type: ignore[attr-defined]
@@ -5069,6 +5125,9 @@ class Handler(BaseHTTPRequestHandler):
         ctx = self._build_route_context(store, session_store, static_root, scheduler)
         if dispatch_get_request(self, ctx):
             return  # Route handled by dispatcher
+
+        if self._maybe_redirect_legacy_share_page(static_root, u.path, query=u.query or ""):
+            return
 
         if u.path == "/api/conversation-memos":
             qs = parse_qs(u.query or "")
@@ -5217,6 +5276,8 @@ class Handler(BaseHTTPRequestHandler):
         self._serve_static(static_root, u.path)
 
     def do_POST(self) -> None:  # noqa: N802
+        if self._deny_remote_share_only_request("POST"):
+            return
         store: RunStore = self.server.store  # type: ignore[attr-defined]
         session_store: SessionStore = self.server.session_store  # type: ignore[attr-defined]
         session_binding_store: SessionBindingStore = self.server.session_binding_store  # type: ignore[attr-defined]
@@ -5254,6 +5315,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_PUT(self) -> None:  # noqa: N802
         """Handle PUT requests for updating resources."""
+        if self._deny_remote_share_only_request("PUT"):
+            return
         store: RunStore = self.server.store  # type: ignore[attr-defined]
         session_store: SessionStore = self.server.session_store  # type: ignore[attr-defined]
         static_root: Path = self.server.static_root  # type: ignore[attr-defined]
@@ -5270,6 +5333,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_DELETE(self) -> None:  # noqa: N802
         """Handle DELETE requests for deleting resources."""
+        if self._deny_remote_share_only_request("DELETE"):
+            return
         store: RunStore = self.server.store  # type: ignore[attr-defined]
         session_store: SessionStore = self.server.session_store  # type: ignore[attr-defined]
         static_root: Path = self.server.static_root  # type: ignore[attr-defined]

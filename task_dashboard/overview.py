@@ -16,6 +16,10 @@ def _is_requirement_item(it: dict[str, Any]) -> bool:
     return str(it.get("type") or "").strip() == "需求"
 
 
+def _is_knowledge_item(it: dict[str, Any]) -> bool:
+    return str(it.get("type") or "").strip() in {"沉淀", "材料", "证据"}
+
+
 def _is_active_item(it: dict[str, Any]) -> bool:
     return bucket_key_for_status(str(it.get("status") or "")) not in {"已完成", "已暂停"}
 
@@ -127,6 +131,7 @@ def build_overview(projects_meta: list[dict[str, Any]], items_payload: list[dict
             citems_all = [it for it in pitems_all if str(it.get("channel") or "") == ch_name]
             citems = [it for it in citems_all if _is_task_item(it)]
             req_items = [it for it in citems_all if _is_requirement_item(it)]
+            knowledge_items = [it for it in citems_all if _is_knowledge_item(it)]
             primary_counts_payload = _primary_status_counts_payload(citems)
             req_enabled, req_source, req_config_value = _resolve_requirements_switch(
                 proj,
@@ -156,6 +161,7 @@ def build_overview(projects_meta: list[dict[str, Any]], items_payload: list[dict
                         "requirements_active": sum(
                             1 for it in req_items if _is_active_item(it)
                         ) if req_enabled else 0,
+                        "knowledge_total": len(knowledge_items),
                         "active": sum(1 for it in citems if _is_active_item(it)),
                         "done": counts["已完成"],
                         "supervised": counts["督办"],
@@ -196,6 +202,7 @@ def build_overview(projects_meta: list[dict[str, Any]], items_payload: list[dict
         project_primary_counts_payload = _primary_status_counts_payload(pitems)
         p_requirements_total = sum(int((c.get("totals") or {}).get("requirements_total") or 0) for c in chan_cards)
         p_requirements_active = sum(int((c.get("totals") or {}).get("requirements_active") or 0) for c in chan_cards)
+        p_knowledge_total = sum(int((c.get("totals") or {}).get("knowledge_total") or 0) for c in chan_cards)
 
         project_cards.append(
             {
@@ -208,6 +215,7 @@ def build_overview(projects_meta: list[dict[str, Any]], items_payload: list[dict
                     "total": len(pitems),
                     "requirements_total": p_requirements_total,
                     "requirements_active": p_requirements_active,
+                    "knowledge_total": p_knowledge_total,
                     "channels": len(chan_cards),
                     "active": sum(1 for it in pitems if _is_active_item(it)),
                     "done": p_counts["已完成"],
@@ -240,12 +248,14 @@ def build_overview(projects_meta: list[dict[str, Any]], items_payload: list[dict
     task_items = [it for it in all_items if _is_task_item(it)]
     global_requirements_total = sum(int((p.get("totals") or {}).get("requirements_total") or 0) for p in project_cards)
     global_requirements_active = sum(int((p.get("totals") or {}).get("requirements_active") or 0) for p in project_cards)
+    global_knowledge_total = sum(int((p.get("totals") or {}).get("knowledge_total") or 0) for p in project_cards)
     global_primary_counts_payload = _primary_status_counts_payload(task_items)
     global_counts = {
         "projects": len(project_cards),
         "total": len(task_items),
         "requirements_total": global_requirements_total,
         "requirements_active": global_requirements_active,
+        "knowledge_total": global_knowledge_total,
         "active": sum(1 for it in task_items if _is_active_item(it)),
         "done": sum(1 for it in task_items if _is_done_item(it)),
         "supervised": sum(1 for it in task_items if bucket_key_for_status(str(it.get("status") or "")) == "督办"),

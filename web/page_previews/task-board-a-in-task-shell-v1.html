@@ -1,0 +1,1156 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>任务板块 A 批 · 真实系统壳静态预演 v1</title>
+  <link rel="stylesheet" href="./task-shell-preview-base.css" />
+  <style>
+    .preview-mode-note {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      border: 1px solid rgba(47,111,237,0.16);
+      background: rgba(239,246,255,0.88);
+      color: #1d4ed8;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      white-space: nowrap;
+    }
+    .preview-shell-sub {
+      font-size: 12px;
+      color: var(--muted);
+      white-space: nowrap;
+    }
+    .preview-side-stack {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      padding: 2px;
+    }
+    .preview-side-nav {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .preview-side-nav .channel-item {
+      border-radius: 14px;
+      border: 1px solid rgba(0,0,0,0.05);
+      background: rgba(255,255,255,0.62);
+      padding: 12px 12px 11px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      text-align: left;
+      cursor: default;
+    }
+    .preview-side-nav .channel-item.active {
+      border-color: rgba(47,111,237,0.20);
+      background: linear-gradient(180deg, rgba(239,246,255,0.96), rgba(255,255,255,0.78));
+      box-shadow: 0 8px 20px rgba(47,111,237,0.08);
+    }
+    .preview-side-item-title {
+      font-size: 13px;
+      font-weight: 800;
+      color: var(--text);
+    }
+    .preview-side-item-sub {
+      font-size: 11px;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+    .preview-side-card {
+      border-radius: 18px;
+      border: 1px solid rgba(0,0,0,0.08);
+      background: rgba(255,255,255,0.72);
+      box-shadow: 0 10px 24px rgba(0,0,0,0.05);
+      padding: 14px 14px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .preview-side-card.is-focus {
+      border-color: rgba(47,111,237,0.22);
+      background: linear-gradient(180deg, rgba(239,246,255,0.96), rgba(255,255,255,0.78));
+    }
+    .preview-side-card.is-compact {
+      gap: 12px;
+      padding: 12px;
+      border-radius: 16px;
+      background: rgba(255,255,255,0.68);
+      box-shadow: none;
+    }
+    .preview-side-title {
+      font-size: 13px;
+      font-weight: 800;
+      color: var(--text);
+    }
+    .preview-side-meta {
+      font-size: 12px;
+      line-height: 1.55;
+      color: var(--muted);
+    }
+    .preview-metric-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .preview-metric {
+      border-radius: 14px;
+      background: rgba(255,255,255,0.82);
+      border: 1px solid rgba(0,0,0,0.06);
+      padding: 10px 12px;
+    }
+    .preview-metric-label {
+      font-size: 11px;
+      color: var(--muted2);
+      margin-bottom: 4px;
+    }
+    .preview-metric-value {
+      font-size: 18px;
+      font-weight: 800;
+      color: var(--text);
+    }
+    .preview-side-rule-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .preview-side-rule {
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.55;
+      padding-top: 8px;
+      border-top: 1px dashed rgba(0,0,0,0.08);
+    }
+    .preview-side-rule:first-child {
+      padding-top: 0;
+      border-top: 0;
+    }
+    .preview-side-rule strong {
+      color: var(--text);
+    }
+    .preview-board {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .preview-banner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 12px 14px;
+      border-radius: 16px;
+      border: 1px solid rgba(0,0,0,0.06);
+      background: rgba(255,255,255,0.72);
+      box-shadow: 0 10px 24px rgba(0,0,0,0.04);
+    }
+    .preview-banner-main {
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+      min-width: 0;
+    }
+    .preview-banner-title {
+      font-size: 13px;
+      font-weight: 800;
+      color: var(--text);
+    }
+    .preview-banner-desc {
+      font-size: 11px;
+      color: var(--muted);
+      line-height: 1.55;
+    }
+    .preview-toggle-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+      width: 100%;
+    }
+    .preview-toggle-group {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+    .preview-toggle {
+      min-height: 34px;
+      padding: 0 12px;
+      border-radius: 12px;
+      border: 1px solid rgba(0,0,0,0.08);
+      background: rgba(255,255,255,0.70);
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: 160ms ease;
+    }
+    .preview-toggle:hover {
+      transform: translateY(-1px);
+      color: var(--text);
+      box-shadow: 0 10px 24px rgba(0,0,0,0.05);
+    }
+    .preview-toggle.active {
+      border-color: rgba(47,111,237,0.18);
+      background: rgba(239,246,255,0.92);
+      color: #1d4ed8;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.88);
+    }
+    .preview-stage {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      min-height: 0;
+    }
+    .preview-list-panel {
+      border-radius: 20px;
+      border: 1px solid rgba(0,0,0,0.06);
+      background: rgba(255,255,255,0.78);
+      box-shadow: 0 12px 30px rgba(0,0,0,0.04);
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      min-height: 0;
+    }
+    .preview-list-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .preview-list-title {
+      font-size: 14px;
+      font-weight: 900;
+      color: var(--text);
+    }
+    .preview-list-sub {
+      font-size: 12px;
+      color: var(--muted2);
+    }
+    .preview-task-list {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .preview-task-card {
+      width: 100%;
+      border: 1px solid rgba(0,0,0,0.06);
+      background: rgba(255,255,255,0.88);
+      border-radius: 18px;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      text-align: left;
+      cursor: pointer;
+      transition: 160ms ease;
+    }
+    .preview-task-card:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 14px 28px rgba(0,0,0,0.06);
+      border-color: rgba(47,111,237,0.14);
+    }
+    .preview-task-card.active {
+      border-color: rgba(47,111,237,0.18);
+      background: linear-gradient(180deg, rgba(239,246,255,0.96), rgba(255,255,255,0.88));
+      box-shadow: 0 18px 32px rgba(47,111,237,0.08);
+    }
+    .preview-task-card-top {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .preview-task-card-main {
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      flex: 1;
+    }
+    .preview-task-card-title {
+      font-size: 17px;
+      font-weight: 900;
+      color: var(--text);
+      line-height: 1.45;
+    }
+    .preview-task-card-lead {
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.65;
+    }
+    .preview-next-owner {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 10px;
+      border-radius: 12px;
+      background: rgba(47,111,237,0.08);
+      border: 1px solid rgba(47,111,237,0.10);
+      font-size: 12px;
+      color: #1d4ed8;
+      max-width: max-content;
+    }
+    .preview-next-owner strong {
+      color: var(--text);
+    }
+    .preview-card-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .preview-card-cell {
+      border-radius: 14px;
+      border: 1px solid rgba(0,0,0,0.05);
+      background: rgba(255,255,255,0.82);
+      padding: 10px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .preview-cell-label {
+      font-size: 11px;
+      color: var(--muted2);
+    }
+    .preview-cell-value {
+      font-size: 12px;
+      color: var(--text);
+      line-height: 1.6;
+    }
+    .preview-card-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+      padding-top: 10px;
+      border-top: 1px dashed rgba(0,0,0,0.08);
+    }
+    .preview-agent-list {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+    .preview-agent-pill {
+      min-width: 24px;
+      height: 24px;
+      padding: 0 8px;
+      border-radius: 999px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(47,111,237,0.10);
+      color: #1d4ed8;
+      font-size: 11px;
+      font-weight: 700;
+      border: 1px solid rgba(47,111,237,0.12);
+    }
+    .preview-risk {
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.6;
+      text-align: right;
+      max-width: 360px;
+    }
+    .preview-risk strong {
+      color: var(--text);
+    }
+    .preview-empty {
+      border-radius: 16px;
+      border: 1px dashed rgba(0,0,0,0.10);
+      background: rgba(255,255,255,0.66);
+      padding: 18px;
+      font-size: 13px;
+      color: var(--muted);
+      text-align: center;
+    }
+    .preview-detail-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+    .preview-detail-card {
+      border-radius: 16px;
+      border: 1px solid rgba(0,0,0,0.06);
+      background: rgba(255,255,255,0.78);
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .preview-detail-card.span-2 {
+      grid-column: span 2;
+    }
+    .preview-detail-title {
+      font-size: 13px;
+      font-weight: 900;
+      color: var(--text);
+    }
+    .preview-detail-note {
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.65;
+    }
+    .preview-kv {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .preview-kv-row {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      padding-top: 8px;
+      border-top: 1px dashed rgba(0,0,0,0.08);
+    }
+    .preview-kv-row:first-child {
+      padding-top: 0;
+      border-top: 0;
+    }
+    .preview-kv-key {
+      font-size: 11px;
+      color: var(--muted2);
+    }
+    .preview-kv-value {
+      font-size: 12px;
+      color: var(--text);
+      line-height: 1.6;
+    }
+    .preview-timeline {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .preview-timeline-item {
+      display: grid;
+      grid-template-columns: 78px minmax(0, 1fr);
+      gap: 10px;
+      align-items: start;
+    }
+    .preview-timeline-time {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--muted2);
+      padding-top: 2px;
+    }
+    .preview-timeline-content {
+      border-radius: 14px;
+      border: 1px solid rgba(0,0,0,0.05);
+      background: rgba(255,255,255,0.84);
+      padding: 10px 12px;
+      font-size: 12px;
+      color: var(--text);
+      line-height: 1.6;
+    }
+    .preview-evidence-list {
+      margin: 0;
+      padding-left: 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.6;
+    }
+    .preview-evidence-list strong {
+      color: var(--text);
+    }
+    .preview-density-compact .preview-task-card {
+      padding: 12px;
+      gap: 10px;
+    }
+    .preview-density-compact .preview-task-card-title {
+      font-size: 15px;
+    }
+    .preview-density-compact .preview-task-card-lead,
+    .preview-density-compact .preview-cell-value,
+    .preview-density-compact .preview-risk,
+    .preview-density-compact .preview-detail-note,
+    .preview-density-compact .preview-kv-value,
+    .preview-density-compact .preview-timeline-content,
+    .preview-density-compact .preview-evidence-list {
+      font-size: 11px;
+      line-height: 1.55;
+    }
+    .preview-density-compact .preview-card-grid {
+      gap: 8px;
+    }
+    .preview-density-compact .preview-card-cell,
+    .preview-density-compact .preview-detail-card {
+      padding: 10px 11px;
+    }
+    @media (max-width: 1200px) {
+      .preview-card-grid,
+      .preview-detail-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+    @media (max-width: 900px) {
+      .shell {
+        height: auto;
+        min-height: 100vh;
+      }
+      .body {
+        display: block;
+      }
+      #channelAside,
+      .detail-view,
+      .list-view {
+        width: auto;
+        min-width: 0;
+        max-width: none;
+        border-right: 0;
+      }
+      #channelAside {
+        border-bottom: 1px solid var(--line);
+      }
+      .preview-mode-note,
+      .preview-shell-sub {
+        white-space: normal;
+      }
+      .preview-card-grid,
+      .preview-detail-grid {
+        grid-template-columns: 1fr;
+      }
+      .preview-detail-card.span-2 {
+        grid-column: auto;
+      }
+      .preview-risk {
+        text-align: left;
+        max-width: none;
+      }
+      .preview-timeline-item {
+        grid-template-columns: 1fr;
+        gap: 6px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="ambient-bg">
+    <div class="blob blob-1"></div>
+    <div class="blob blob-2"></div>
+    <div class="blob blob-3"></div>
+    <div class="blob blob-4"></div>
+    <div class="blob blob-5"></div>
+    <div class="blob blob-6"></div>
+    <div class="blob blob-7"></div>
+    <div class="blob blob-8"></div>
+  </div>
+
+  <div class="shell">
+    <header>
+      <div class="header-main">
+        <a class="back-link" href="/share/page-previews-index.html" title="返回预览入口">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" width="18" height="18">
+            <path d="M15 19l-7-7 7-7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <span>预览入口</span>
+        </a>
+        <div class="project-info">
+          <h1 class="project-title">Qoreon · 任务板块 A 批确认稿</h1>
+          <div class="project-meta-row">
+            <span class="project-desc">真实页面静态镜像预演，仅用于产品确认</span>
+            <span class="env-chip is-verify">Preview</span>
+          </div>
+        </div>
+      </div>
+      <div class="header-nav">
+        <div class="header-mode-tabs" role="tablist" aria-label="一级页面切换">
+          <button class="header-mode-btn">通道</button>
+          <button class="header-mode-btn active">任务</button>
+          <button class="header-mode-btn">对话</button>
+        </div>
+      </div>
+      <div class="hctrl">
+        <span class="preview-mode-note">复用真实 task 页骨架与基础样式资源</span>
+      </div>
+    </header>
+
+    <div class="body">
+      <aside id="channelAside">
+        <div class="aside-scroll">
+          <div class="asideh">
+            <div class="asideleft">
+              <h2 class="at">确认视角</h2>
+            </div>
+            <div class="am">A任务板块本体体验优化</div>
+          </div>
+          <div class="list preview-side-stack">
+            <div class="preview-side-nav">
+              <button class="channel-item active" type="button">
+                <span class="preview-side-item-title">首层阅读骨架</span>
+                <span class="preview-side-item-sub">任务标题、主状态、下一责任人保持同层直显。</span>
+              </button>
+              <button class="channel-item" type="button">
+                <span class="preview-side-item-title">中区主任务流</span>
+                <span class="preview-side-item-sub">继续保留纵向任务流，不回退到概念说明页结构。</span>
+              </button>
+              <button class="channel-item" type="button">
+                <span class="preview-side-item-title">右侧聚焦承接</span>
+                <span class="preview-side-item-sub">右侧只承接选中任务，不新开重详情区，也不接写操作。</span>
+              </button>
+            </div>
+
+            <div class="preview-side-card is-focus">
+              <div class="preview-side-title">本轮样本摘要</div>
+              <div class="preview-metric-grid">
+                <div class="preview-metric">
+                  <div class="preview-metric-label">主线任务</div>
+                  <div class="preview-metric-value">4</div>
+                </div>
+                <div class="preview-metric">
+                  <div class="preview-metric-label">可切换模式</div>
+                  <div class="preview-metric-value">2</div>
+                </div>
+              </div>
+              <div class="chips">
+                <span class="chip good">任务优先</span>
+                <span class="chip waiting">右侧承接</span>
+                <span class="chip queued">静态镜像</span>
+              </div>
+              <div class="preview-side-rule-list">
+                <div class="preview-side-rule"><strong>确认重点：</strong>首屏是不是先读任务本身，而不是先读说明文字。</div>
+                <div class="preview-side-rule"><strong>当前状态：</strong>只放行静态预演页制作，不放行真实研发实现。</div>
+              </div>
+            </div>
+
+            <div class="preview-side-card is-compact">
+              <div class="preview-side-title">冻结边界</div>
+              <div class="preview-side-meta">这版确认的是系统内真实表达效果，不是独立 Demo 语言。</div>
+              <div class="preview-side-rule-list">
+                <div class="preview-side-rule"><strong>共享：</strong>`task` 页 header / body / aside / detail 骨架关系与基础视觉语法。</div>
+                <div class="preview-side-rule"><strong>独立：</strong>静态样本数据、A 批专属任务卡层级与聚焦详情内容。</div>
+                <div class="preview-side-rule"><strong>不做：</strong>不接正式业务逻辑，不改正式页，不扩大到运行时或契约改造。</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      <div class="conv-resize-handle" aria-hidden="true"></div>
+
+      <main class="list-view" id="listView">
+        <div class="list-header">
+          <div class="channel-info">
+            <div class="channel-info-top">
+              <div class="channel-mainline">
+                <span class="channel-label">当前页面：</span>
+                <span class="channel-value">任务板块 A 批真实系统壳静态预演</span>
+              </div>
+              <div class="channel-info-actions">
+                <span class="preview-shell-sub">只读样本 · 不进入正式导航</span>
+              </div>
+            </div>
+            <div class="channel-subline">当前确认稿已经从“方案页式高保真 Demo”切到“真实页面静态镜像预演”。本页只模拟 A 批目标态，不接真实任务逻辑。</div>
+            <div class="chips channel-stats">
+              <span class="chip good" id="statAllChip">任务:4</span>
+              <span class="chip warn" id="statRunningChip">进行中:2</span>
+              <span class="chip waiting" id="statPendingChip">待验收:1</span>
+              <span class="chip good" id="statDoneChip">已完成:1</span>
+            </div>
+          </div>
+          <div class="filterbar">
+            <div class="preview-toggle-row">
+              <div class="preview-toggle-group" id="statusFilters" aria-label="任务状态筛选">
+                <button class="preview-toggle active" type="button" data-filter="all" aria-pressed="true">全部</button>
+                <button class="preview-toggle" type="button" data-filter="进行中" aria-pressed="false">进行中</button>
+                <button class="preview-toggle" type="button" data-filter="待验收" aria-pressed="false">待验收</button>
+                <button class="preview-toggle" type="button" data-filter="已完成" aria-pressed="false">已完成</button>
+              </div>
+              <div class="preview-toggle-group" id="densityFilters" aria-label="阅读密度切换">
+                <button class="preview-toggle active" type="button" data-density="comfortable" aria-pressed="true">标准阅读</button>
+                <button class="preview-toggle" type="button" data-density="compact" aria-pressed="false">高密度</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="filelist">
+          <div class="preview-board">
+            <div class="preview-banner">
+              <div class="preview-banner-main">
+                <div class="preview-banner-title">这版确认稿直接把“任务卡首层信息 + 次层进展摘要 + 右侧聚焦承接”放回真实任务页壳里，避免继续看一个需要脑补的方案页。</div>
+                <div class="preview-banner-desc">你现在确认的是系统内最终会出现的阅读节奏：任务标题更强、主状态和下一责任人同层直显、最近进展和证据摘要留在卡内弱层，右侧继续作为聚焦承接区。</div>
+              </div>
+              <span class="preview-shell-sub">系统壳静态镜像</span>
+            </div>
+
+            <div class="preview-stage" id="previewStage">
+              <section class="preview-list-panel">
+                <div class="preview-list-head">
+                  <div>
+                    <div class="preview-list-title">任务主画布</div>
+                    <div class="preview-list-sub" id="previewListSub">当前显示 4 张任务卡，点击任意卡片可切换右侧聚焦说明。</div>
+                  </div>
+                  <div class="chips" id="previewSummaryChips">
+                    <span class="chip good">任务优先</span>
+                    <span class="chip waiting">详情承接稳定</span>
+                    <span class="chip queued">静态自检通过后可用于确认</span>
+                  </div>
+                </div>
+                <div class="preview-task-list" id="previewTaskList"></div>
+                <div class="preview-empty" id="previewEmpty" hidden>当前筛选下暂无样本任务，请切换状态筛选查看。</div>
+              </section>
+
+              <div class="preview-banner">
+                <div class="preview-banner-main">
+                  <div class="preview-banner-title">本轮只回答三件事：方向对不对、层级顺不顺、右侧承接够不够。</div>
+                  <div class="preview-banner-desc">如果方向确认，下一步才会把这套表达结构迁回正式任务页实现；当前这张预演页本身不会直接并入正式导航。</div>
+                </div>
+                <span class="preview-shell-sub">产品确认前</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </main>
+
+      <section class="detail-view" id="detailView">
+        <div class="detailh">
+          <div class="detailh-main">
+            <div class="dk">Task Focus</div>
+            <div class="dt" id="detailTitle">任务板块本体体验优化编排</div>
+            <div class="dsub" id="detailSub">右侧聚焦区继续承担“当前判断 / 最近动作 / 证据摘要 / 协作角色”承接，不额外新增重详情层。</div>
+          </div>
+          <div class="detailh-actions">
+            <span class="chip queued">静态镜像</span>
+          </div>
+        </div>
+        <div class="detailb">
+          <div class="chips" id="detailMeta"></div>
+          <div id="detailExcerpt" class="mdview"></div>
+          <div class="preview-detail-grid">
+            <section class="preview-detail-card">
+              <div class="preview-detail-title">当前判断</div>
+              <div class="preview-kv" id="detailDecisionList"></div>
+            </section>
+            <section class="preview-detail-card">
+              <div class="preview-detail-title">协作角色</div>
+              <div class="preview-kv" id="detailRoleList"></div>
+            </section>
+            <section class="preview-detail-card span-2">
+              <div class="preview-detail-title">最近动作时间线</div>
+              <div class="preview-timeline" id="detailTimeline"></div>
+            </section>
+            <section class="preview-detail-card">
+              <div class="preview-detail-title">证据与说明</div>
+              <ul class="preview-evidence-list" id="detailEvidence"></ul>
+            </section>
+            <section class="preview-detail-card">
+              <div class="preview-detail-title">冻结边界</div>
+              <div class="preview-kv" id="detailBoundaries"></div>
+            </section>
+          </div>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <script>
+    const TASKS = [
+      {
+        id: "task_20260405_0035a001",
+        title: "任务板块本体体验优化编排",
+        status: "进行中",
+        statusTone: "warn",
+        nextOwner: "前端页面-规范策划",
+        summary: "当前真正用于产品确认的页面必须切到“真实系统壳静态镜像预演”，先把任务卡阅读骨架和右侧承接区在真实壳里看清楚。",
+        progress: "用户已否定方案页式高保真 Demo 作为确认稿，当前改为复用真实 task 页骨架与样式资源做只读预演。",
+        agents: ["产品策划", "前端", "数据治理", "测试"],
+        evidence: "产品方案 v1、实验页冻结方案、当前结构参考稿",
+        risk: "确认前不进入真实研发实现，也不混入 B/C/D/E 批次。",
+        stage: "产品确认中",
+        focusLabel: "A批主线",
+        decision: [
+          ["首层阅读", "标题、主状态、下一责任人必须固定同层出现，不再把下一动作藏进正文段落。"],
+          ["信息密度", "保留标准阅读与高密度两档，只调整节奏，不改任务结构。"],
+          ["右侧承接", "右侧只承接当前聚焦任务的判断、证据和时间线，不再额外加重详情层。"],
+        ],
+        roles: [
+          ["主负责", "产品策划-任务派发"],
+          ["下一责任人", "前端页面-规范策划"],
+          ["协同位", "数据治理-任务监控 / 测试验收"],
+        ],
+        timeline: [
+          ["2026-04-05 00:35", "A 批正式建档，阶段定位为产品方案确认中。"],
+          ["2026-04-05 01:55", "用户明确要求把确认稿改为真实页面静态镜像预演。"],
+          ["当前", "等待前端交付新的系统壳静态预演页，再做产品确认。"],
+        ],
+        evidenceList: [
+          "当前主任务：`【进行中】【任务】20260405-任务板块本体体验优化编排.md`。",
+          "产品方案：`2026-04-05-任务板块本体体验优化产品方案-v1.md`。",
+          "模式依据：`2026-04-02-demo实验页存放区与任务观察台P0实验页方案-v1.md`。",
+        ],
+        boundaries: [
+          ["只读优先", "只做静态样本预演，不接正式写操作。"],
+          ["不改正式页", "预演页与正式 `task` 页面源码隔离。"],
+          ["不扩运行时", "不新增接口、契约或调度逻辑。"],
+        ],
+      },
+      {
+        id: "task_card_density_and_status",
+        title: "任务卡阅读密度与状态层级确认",
+        status: "待验收",
+        statusTone: "waiting",
+        nextOwner: "产品策划-任务派发",
+        summary: "任务卡第二层需要稳定呈现最近进展、参与 Agent 和证据摘要，同时避免首屏被说明文字挤占。",
+        progress: "结构已经收敛到三层：首层判断、次层摘要、弱层证据；当前等这版壳内节奏是否顺眼。",
+        agents: ["产品策划", "前端"],
+        evidence: "阅读模式切换样本、状态 chip 层级样本",
+        risk: "若层级仍不顺，后续真实实现会继续出现“信息堆在一起”的问题。",
+        stage: "表达校准",
+        focusLabel: "卡片层级",
+        decision: [
+          ["标题主位", "标题字号和留白继续拉高，保证扫读时先读到任务是什么。"],
+          ["状态识别", "主状态 chip 与下一责任人形成一组快速判断，不再靠段落理解。"],
+          ["弱层信息", "最近进展、证据摘要和参与 Agent 仍保留，但降到次层与弱层。"],
+        ],
+        roles: [
+          ["主负责", "前端页面-规范策划"],
+          ["确认位", "产品策划-任务派发"],
+          ["验证位", "测试验收"],
+        ],
+        timeline: [
+          ["上一轮", "高保真结构稿已证明方向可表达，但不够接近真实系统。"],
+          ["当前", "在真实任务壳里验证阅读密度与状态层级。"],
+          ["下一步", "若这版确认，真实实现只需要迁移表达层，不必再反推结构。"],
+        ],
+        evidenceList: [
+          "标准阅读与高密度模式都保留，差异仅在卡片密度与行高。",
+          "状态筛选仍保留在顶层轻工具条，不新增概念入口。",
+          "任务卡次层字段限制为：最近进展 / 参与 Agent / 最近证据。"
+        ],
+        boundaries: [
+          ["不做新信息层", "不把 Agent 独立中心或进程计数混入当前卡片。"],
+          ["不变排序", "切换阅读模式不改变排序和任务结构。"],
+          ["不加写动作", "只确认读侧层级，不新增编辑按钮。"],
+        ],
+      },
+      {
+        id: "task_focus_detail_carry",
+        title: "聚焦详情区承接与证据摘要校正",
+        status: "进行中",
+        statusTone: "warn",
+        nextOwner: "数据治理-任务监控",
+        summary: "右侧详情区要回答“当前聚焦任务关键判断是什么”，而不是再复制一遍卡片信息或塞进技术性日志。",
+        progress: "当前右侧已收敛为判断、时间线、证据、协作角色四块，避免和中区任务卡重复。",
+        agents: ["前端", "数据治理"],
+        evidence: "右侧时间线样本、证据摘要样本、角色承接样本",
+        risk: "若右侧继续堆技术日志，任务主画布会重新失焦。",
+        stage: "右侧承接校准",
+        focusLabel: "聚焦详情",
+        decision: [
+          ["承接职责", "右侧只承接当前聚焦任务的补充判断，不替代中区主列表。"],
+          ["时间线表达", "最近动作采用时间线，避免碎片化句子散落。"],
+          ["证据摘要", "证据用短列表承接，保持可扫读，不拉成长文说明。"],
+        ],
+        roles: [
+          ["主负责", "前端页面-规范策划"],
+          ["协同位", "数据治理-任务监控"],
+          ["回执目标", "产品策划-任务派发"],
+        ],
+        timeline: [
+          ["当前", "右侧承接区已从“说明页感”压回到系统详情栏关系。"],
+          ["自检", "聚焦任务切换后，右侧信息跟随切换，但不引入业务逻辑写操作。"],
+          ["下一步", "确认承接层稳定后，再进入真实实现评审。"],
+        ],
+        evidenceList: [
+          "右侧当前固定四块：当前判断、协作角色、最近动作时间线、证据与说明。",
+          "不再新开重详情弹层，也不复刻旧方案页的解释式布局。",
+          "保留真实 `detail-view` 结构关系，便于后续迁回正式页。"
+        ],
+        boundaries: [
+          ["不复制卡片", "右侧不把中区卡片整块重复一遍。"],
+          ["不接运行时", "时间线和证据用静态样本，不连真实数据。"],
+          ["不做写入口", "无编辑、派发或状态变更按钮。"],
+        ],
+      },
+      {
+        id: "task_pre_impl_gate",
+        title: "实施前评审切口准备",
+        status: "已完成",
+        statusTone: "good",
+        nextOwner: "总控-项目经理",
+        summary: "在真实实现前，先把产品确认、前端壳内预演和数据侧评审切口排清楚，避免方向还没确认就直接开改。",
+        progress: "实施评审尚未放行，但评审切口和角色链路已整理完整。",
+        agents: ["总控", "产品策划", "前端", "数据治理"],
+        evidence: "实施方案 v1、协同路由校正、当前预演页交付要求",
+        risk: "如果预演页没过确认，实施评审会失去明确目标态。",
+        stage: "切口已准备",
+        focusLabel: "实施前置",
+        decision: [
+          ["先确认后实施", "新的真实系统壳静态预演页是实施前唯一确认稿。"],
+          ["协同路由", "A 批正式回执目标已校正为产品策划-任务派发主会话。"],
+          ["实现边界", "通过评审前，任何 live 改造都不能视为已启动。"],
+        ],
+        roles: [
+          ["管理位", "总控-项目经理"],
+          ["主回执目标", "产品策划-任务派发"],
+          ["执行协同", "前端页面-规范策划 / 数据治理-任务监控"],
+        ],
+        timeline: [
+          ["已完成", "A 批协同路由已校正，回执目标已明确。"],
+          ["当前", "等待静态预演确认稿交付。"],
+          ["后续", "确认通过后再进入实施评审，不反向倒逼结构。"],
+        ],
+        evidenceList: [
+          "实施方案 `2026-04-05-任务板块本体体验优化实施方案-v1.md` 已存在。",
+          "本轮预演页只作为产品确认稿，不代表真实功能已实现。",
+          "A 批仍严格独立，不与 B/C、D、E 混批。"
+        ],
+        boundaries: [
+          ["不提前开改", "当前完成不代表真实任务页已改造。"],
+          ["不回退旧线", "不回到概念说明页模式做确认。"],
+          ["不混批次", "只处理 A 批任务板块本体体验优化。"],
+        ],
+      }
+    ];
+
+    const state = {
+      filter: "all",
+      density: "comfortable",
+      selectedId: TASKS[0].id,
+    };
+
+    const taskListEl = document.getElementById("previewTaskList");
+    const emptyEl = document.getElementById("previewEmpty");
+    const listSubEl = document.getElementById("previewListSub");
+    const detailTitleEl = document.getElementById("detailTitle");
+    const detailSubEl = document.getElementById("detailSub");
+    const detailMetaEl = document.getElementById("detailMeta");
+    const detailExcerptEl = document.getElementById("detailExcerpt");
+    const detailDecisionListEl = document.getElementById("detailDecisionList");
+    const detailRoleListEl = document.getElementById("detailRoleList");
+    const detailTimelineEl = document.getElementById("detailTimeline");
+    const detailEvidenceEl = document.getElementById("detailEvidence");
+    const detailBoundariesEl = document.getElementById("detailBoundaries");
+
+    function filteredTasks() {
+      if (state.filter === "all") return TASKS;
+      return TASKS.filter((task) => task.status === state.filter);
+    }
+
+    function ensureSelection(tasks) {
+      if (!tasks.some((task) => task.id === state.selectedId)) {
+        state.selectedId = tasks.length ? tasks[0].id : "";
+      }
+    }
+
+    function makeChip(text, tone) {
+      const span = document.createElement("span");
+      span.className = "chip" + (tone ? (" " + tone) : "");
+      span.textContent = text;
+      return span;
+    }
+
+    function makeKVRow(label, value) {
+      const row = document.createElement("div");
+      row.className = "preview-kv-row";
+      const key = document.createElement("div");
+      key.className = "preview-kv-key";
+      key.textContent = label;
+      const val = document.createElement("div");
+      val.className = "preview-kv-value";
+      val.textContent = value;
+      row.appendChild(key);
+      row.appendChild(val);
+      return row;
+    }
+
+    function renderCards() {
+      const tasks = filteredTasks();
+      ensureSelection(tasks);
+      taskListEl.innerHTML = "";
+      emptyEl.hidden = tasks.length !== 0;
+      listSubEl.textContent = tasks.length
+        ? ("当前显示 " + tasks.length + " 张任务卡，点击任意卡片可切换右侧聚焦说明。")
+        : "当前筛选下没有匹配任务卡。";
+      tasks.forEach((task) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "preview-task-card" + (task.id === state.selectedId ? " active" : "");
+        button.setAttribute("aria-pressed", task.id === state.selectedId ? "true" : "false");
+        button.addEventListener("click", () => {
+          state.selectedId = task.id;
+          render();
+        });
+
+        const top = document.createElement("div");
+        top.className = "preview-task-card-top";
+
+        const main = document.createElement("div");
+        main.className = "preview-task-card-main";
+        const title = document.createElement("div");
+        title.className = "preview-task-card-title";
+        title.textContent = task.title;
+        const lead = document.createElement("div");
+        lead.className = "preview-task-card-lead";
+        lead.textContent = task.summary;
+        const owner = document.createElement("span");
+        owner.className = "preview-next-owner";
+        owner.innerHTML = "<span>下一责任人</span><strong>" + task.nextOwner + "</strong>";
+        main.appendChild(title);
+        main.appendChild(owner);
+        main.appendChild(lead);
+
+        const statusWrap = document.createElement("div");
+        statusWrap.className = "chips";
+        statusWrap.appendChild(makeChip(task.status, task.statusTone));
+        statusWrap.appendChild(makeChip(task.focusLabel, task.status === "已完成" ? "good" : "queued"));
+
+        top.appendChild(main);
+        top.appendChild(statusWrap);
+
+        const grid = document.createElement("div");
+        grid.className = "preview-card-grid";
+        [
+          ["当前阶段", task.stage],
+          ["最近进展", task.progress],
+          ["证据摘要", task.evidence],
+          ["风险提醒", task.risk],
+        ].forEach(([label, value]) => {
+          const cell = document.createElement("div");
+          cell.className = "preview-card-cell";
+          const key = document.createElement("div");
+          key.className = "preview-cell-label";
+          key.textContent = label;
+          const val = document.createElement("div");
+          val.className = "preview-cell-value";
+          val.textContent = value;
+          cell.appendChild(key);
+          cell.appendChild(val);
+          grid.appendChild(cell);
+        });
+
+        const footer = document.createElement("div");
+        footer.className = "preview-card-footer";
+        const agents = document.createElement("div");
+        agents.className = "preview-agent-list";
+        task.agents.forEach((agent) => {
+          const pill = document.createElement("span");
+          pill.className = "preview-agent-pill";
+          pill.textContent = agent;
+          agents.appendChild(pill);
+        });
+        const risk = document.createElement("div");
+        risk.className = "preview-risk";
+        risk.innerHTML = "<strong>卡内定位：</strong>第一层先判断，第二层再看进展和证据，风险留在弱层但仍可扫读。";
+
+        footer.appendChild(agents);
+        footer.appendChild(risk);
+
+        button.appendChild(top);
+        button.appendChild(grid);
+        button.appendChild(footer);
+        taskListEl.appendChild(button);
+      });
+    }
+
+    function renderDetail() {
+      const task = TASKS.find((item) => item.id === state.selectedId) || TASKS[0];
+      detailTitleEl.textContent = task.title;
+      detailSubEl.textContent = task.summary;
+      detailMetaEl.innerHTML = "";
+      detailMetaEl.appendChild(makeChip(task.status, task.statusTone));
+      detailMetaEl.appendChild(makeChip(task.focusLabel, task.status === "已完成" ? "good" : "queued"));
+      detailMetaEl.appendChild(makeChip("下一责任人:" + task.nextOwner, "waiting"));
+
+      detailExcerptEl.innerHTML =
+        "<p>当前聚焦任务的右侧承接区，只回答“当前判断是什么、最近动作到哪一步、有哪些证据、谁在协同”。它不是额外新开的说明页，而是继续沿用真实 `detail-view` 的阅读关系。</p>" +
+        "<p>这样你在中区选中任务后，右侧能稳定承接补充判断，但不会把主任务流重新压成说明文档。</p>";
+
+      detailDecisionListEl.innerHTML = "";
+      task.decision.forEach(([label, value]) => {
+        detailDecisionListEl.appendChild(makeKVRow(label, value));
+      });
+
+      detailRoleListEl.innerHTML = "";
+      task.roles.forEach(([label, value]) => {
+        detailRoleListEl.appendChild(makeKVRow(label, value));
+      });
+
+      detailTimelineEl.innerHTML = "";
+      task.timeline.forEach(([time, text]) => {
+        const item = document.createElement("div");
+        item.className = "preview-timeline-item";
+        const timeEl = document.createElement("div");
+        timeEl.className = "preview-timeline-time";
+        timeEl.textContent = time;
+        const contentEl = document.createElement("div");
+        contentEl.className = "preview-timeline-content";
+        contentEl.textContent = text;
+        item.appendChild(timeEl);
+        item.appendChild(contentEl);
+        detailTimelineEl.appendChild(item);
+      });
+
+      detailEvidenceEl.innerHTML = "";
+      task.evidenceList.forEach((item) => {
+        const li = document.createElement("li");
+        li.innerHTML = item;
+        detailEvidenceEl.appendChild(li);
+      });
+
+      detailBoundariesEl.innerHTML = "";
+      task.boundaries.forEach(([label, value]) => {
+        detailBoundariesEl.appendChild(makeKVRow(label, value));
+      });
+    }
+
+    function renderStats() {
+      const counts = TASKS.reduce((acc, task) => {
+        acc.all += 1;
+        acc[task.status] = (acc[task.status] || 0) + 1;
+        return acc;
+      }, { all: 0, "进行中": 0, "待验收": 0, "已完成": 0 });
+      document.getElementById("statAllChip").textContent = "任务:" + counts.all;
+      document.getElementById("statRunningChip").textContent = "进行中:" + counts["进行中"];
+      document.getElementById("statPendingChip").textContent = "待验收:" + counts["待验收"];
+      document.getElementById("statDoneChip").textContent = "已完成:" + counts["已完成"];
+    }
+
+    function syncToggleState(groupEl, key, value) {
+      groupEl.querySelectorAll("[data-" + key + "]").forEach((button) => {
+        const active = button.getAttribute("data-" + key) === value;
+        button.classList.toggle("active", active);
+        button.setAttribute("aria-pressed", active ? "true" : "false");
+      });
+    }
+
+    document.getElementById("statusFilters").addEventListener("click", (event) => {
+      const button = event.target.closest("[data-filter]");
+      if (!button) return;
+      state.filter = button.getAttribute("data-filter");
+      render();
+    });
+
+    document.getElementById("densityFilters").addEventListener("click", (event) => {
+      const button = event.target.closest("[data-density]");
+      if (!button) return;
+      state.density = button.getAttribute("data-density");
+      render();
+    });
+
+    function render() {
+      document.body.classList.toggle("preview-density-compact", state.density === "compact");
+      syncToggleState(document.getElementById("statusFilters"), "filter", state.filter);
+      syncToggleState(document.getElementById("densityFilters"), "density", state.density);
+      renderStats();
+      renderCards();
+      renderDetail();
+    }
+
+    render();
+  </script>
+</body>
+</html>

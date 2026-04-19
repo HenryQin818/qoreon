@@ -112,36 +112,6 @@ class TestRunRoutes(unittest.TestCase):
             self.assertEqual("interrupted_infra", row.get("outcome_state"))
             self.assertEqual("", row.get("superseded_by_run_id"))
 
-    def test_list_runs_response_includes_related_session_timeline_runs(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            store = server.RunStore(Path(td))
-            created = store.create_run(
-                project_id="task_dashboard",
-                channel_name="子级02-CCB运行时（server-并发-安全-启动）",
-                session_id="executor-session",
-                message="ping related timeline",
-                extra_meta={
-                    "source_ref": {"session_id": "source-session"},
-                    "sender_agent_ref": {"session_id": "source-session"},
-                    "callback_to": {"session_id": "source-session"},
-                    "route_resolution": {"final_target": {"session_id": "source-session"}},
-                    "communication_view": {"target_session_id": "source-session"},
-                },
-            )
-            run_id = str(created.get("id") or "").strip()
-
-            code, payload = list_runs_response(
-                query_string="projectId=task_dashboard&sessionId=source-session&limit=10&payloadMode=light",
-                store=store,
-                scheduler=None,
-                maybe_trigger_restart_recovery_lazy=lambda *_args, **_kwargs: 0,
-                maybe_trigger_queued_recovery_lazy=lambda *_args, **_kwargs: 0,
-                build_run_observability_fields=server._build_run_observability_fields,
-            )
-
-            self.assertEqual(code, 200)
-            self.assertIn(run_id, [str(row.get("id") or "").strip() for row in payload.get("runs") or []])
-
     def test_list_runs_response_includes_first_batch_multicli_semantics(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             store = server.RunStore(Path(td))

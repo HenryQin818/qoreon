@@ -1,33 +1,2241 @@
+version = 1
+
+[runtime]
+max_concurrency = 16
+
 [dashboard]
-title = "Qoreon"
-subtitle = "连接人类意图与 AI 执行的本地协同与控制层"
+title = "项目任务看板"
+subtitle = "伴生系统：只读扫描 + 可视化检视 + session_id 续跑"
+
+[execution_profiles.sandboxed]
+label = "受限执行"
+description = "只允许临时 runner 和只读排查"
+writable_roots = []
+allow_launchctl = false
+allow_service_hub_write = false
+allow_localhost_admin = false
+allowed_commands = []
+
+[execution_profiles.privileged]
+label = "项目执行"
+description = "允许真实项目仓执行，但不含全局注册目录"
+writable_roots = [
+  "/Users/liutingqzh/workspace/xiaomishu/项目管理-小秘书/项目看板/task-dashboard",
+  "/Users/liutingqzh/workspace/xiaomishu/项目管理-小秘书/项目看板/task-dashboard/.runtime",
+]
+allow_launchctl = false
+allow_service_hub_write = false
+allow_localhost_admin = false
+allowed_commands = []
+
+[execution_profiles.project_privileged_full]
+label = "完全放开"
+description = "按当前用户态直接放开，覆盖项目、Codex 会话、Service Hub、LaunchAgents 和本机管理动作"
+option_label = "project_privileged_full · 完全放开（当前用户态）"
+writable_roots = [
+  "/Users/liutingqzh",
+]
+allow_launchctl = true
+allow_service_hub_write = true
+allow_localhost_admin = true
+allowed_commands = ["launchctl", "lsof", "kill", "curl", "python3", "bash", "sh", "mkdir", "mv", "cp", "rm", "ln"]
 
 [[projects]]
-id = "standard_project"
-name = "Qoreon Standard Project"
-description = "公开版唯一标准项目入口，补齐治理辅助通道、长期协作结构与公开安全知识卡片。"
-color = "#0f4c81"
-project_root_rel = "examples/standard-project"
-task_root_rel = "examples/standard-project/tasks"
-runtime_root_rel = "examples/standard-project/.runtime/demo"
-execution_context = { profile = "sandboxed", environment = "demo", worktree_root = "examples/standard-project", workdir = "examples/standard-project", runtime_root = "examples/standard-project/.runtime/demo", sessions_root = "examples/standard-project/.runtime/demo/.sessions", runs_root = "examples/standard-project/.runtime/demo/.runs", server_port = "18770", health_source = "/__health" }
-channels = [
-  { name = "主体-总控", desc = "收敛范围、冻结节奏、发起验收。", cli_type = "codex", enable_requirements = true },
-  { name = "辅助01-结构治理与项目接入", desc = "负责结构接入、通讯录更新与真源边界。", cli_type = "codex", enable_requirements = true },
-  { name = "子级01-运行时与后端", desc = "负责 bootstrap、build、server 与最小 API 链路。", cli_type = "codex" },
-  { name = "子级02-前端与交互", desc = "负责页面入口、可见结果与用户操作路径。", cli_type = "codex" },
-  { name = "子级03-数据与契约", desc = "负责 seed、契约字段与引用校验。", cli_type = "codex" },
-  { name = "子级04-测试与验收", desc = "负责 bootstrap 与健康验收。", cli_type = "codex" },
-  { name = "辅助02-文档与知识沉淀", desc = "维护 README、Bootstrap 文档与知识索引。", cli_type = "codex" },
-  { name = "辅助03-用户镜像与业务判断", desc = "提供用户视角、启动顺序和业务判断支撑。", cli_type = "codex" },
-  { name = "辅助04-Git桥接与发布同步", desc = "只读核查标准项目同步边界。", cli_type = "codex" },
-  { name = "辅助05-团队协作Skills治理", desc = "负责技能升级、技能培训与技能集维护。", cli_type = "codex" },
-  { name = "辅助06-项目运维", desc = "负责会话健康巡检、轮换建议与运行检查。", cli_type = "codex" },
-  { name = "系统01-信息梳理", desc = "负责任务文件健康检查、知识盘点和只读转派。", cli_type = "codex" }
+id = "sijing"
+name = "思境PPT"
+color = "#6C8354"
+project_root_rel = "项目管理-小秘书/【项目】思境PPT"
+task_root_rel = "项目管理-小秘书/【项目】思境PPT/任务规划"
+description = "AI 驱动的 PPT 创作与翻新平台（平台研发 + 内容生产 + 本地调试 + 运营获客）。"
+
+[[projects.links]]
+label = "官网"
+url = "https://ppt.jsonout.com/"
+
+[[projects.links]]
+label = "翻新场景"
+url = "https://presenthought.com/refurbish"
+
+# 通道配置：只包含业务定义，会话信息存储在 .sessions/ 目录
+[[projects.channels]]
+name = "业务01-平台前端"
+desc = "Web 端页面与交互能力交付"
+
+[[projects.channels]]
+name = "业务02-平台后端"
+desc = "接口、任务编排与服务稳定性"
+
+[[projects.channels]]
+name = "业务03-算法引擎"
+desc = "生成/翻新效果调优与质量评估"
+
+[[projects.channels]]
+name = "业务04-内容生产交付"
+desc = "平台接单生产与交付闭环"
+
+[[projects.channels]]
+name = "业务05-本地版适配调试"
+desc = "本地版可用化与环境适配调试"
+
+[[projects.channels]]
+name = "业务06-运营获客（小红书公众号）"
+desc = "案例运营发布与线索获客"
+
+[[projects.channels]]
+name = "业务07-测试通道"
+desc = "日常测验、联通性校验与实验性验证工作的专用通道"
+
+[[projects.channels]]
+name = "总控08-整体事务"
+desc = "项目整体事务统筹、批次推进、验收口径与风险收口"
+
+[[projects.channels]]
+name = "辅助09-项目管理"
+desc = "辅助总控处理日常杂项事务、跟进协作与推进收口"
+
+
+[projects.execution_context]
+profile = "project_privileged_full"
+environment = "stable"
+
+[[projects.channels]]
+name = "辅助02-skills管理"
+desc = "用来专门管理当前项目中的skills，并跟踪和优化他们"
+
+[[projects.channels]]
+name = "子级06-内容标注管理"
+desc = "为我们现在的内容业务提供一个标注功能，可以用来标注我们的这个内容，并且可以集中管理标注"
+[[projects]]
+id = "local_service_hub"
+name = "本机服务监控台"
+color = "#2F7A6B"
+project_root_rel = "项目管理-小秘书/【项目】本机服务监控台"
+task_root_rel = "项目管理-小秘书/【项目】本机服务监控台/任务规划"
+runtime_root_rel = "项目管理-小秘书/项目看板/task-dashboard/.runtime/stable"
+session_json_rel = "项目管理-小秘书/项目看板/task-dashboard/.sessions/local_service_hub.json"
+description = "统一入口系统：本机服务注册、状态查看、日志入口与接入运维收口。"
+
+[[projects.links]]
+label = "工作空间"
+url = "file:项目管理-小秘书/【项目】本机服务监控台"
+
+[[projects.links]]
+label = "任务规划"
+url = "file:项目管理-小秘书/【项目】本机服务监控台/任务规划"
+
+[[projects.links]]
+label = "README"
+url = "file:项目管理-小秘书/【项目】本机服务监控台/README.md"
+
+[[projects.links]]
+label = "会话真源"
+url = "file:项目管理-小秘书/项目看板/task-dashboard/.sessions/local_service_hub.json"
+
+[[projects.links]]
+label = "监控台"
+url = "http://127.0.0.1:17373/"
+
+[[projects.channels]]
+name = "主体-总控（统一入口规划-接入收口-发布验收）"
+desc = "统一入口规划、接入收口与发布验收主控"
+
+[[projects.channels]]
+name = "子级01-入口体验与展示资产（首页结构-分组导航-缩略图视觉）"
+desc = "首页结构、分组导航、能力入口与缩略图展示资产"
+
+[[projects.channels]]
+name = "子级02-注册真源与展示映射（registry-schema-卡片元数据-分类映射）"
+desc = "registry 真源、服务 schema、卡片元数据与分类映射"
+
+[[projects.channels]]
+name = "子级03-运行控制与状态诊断（启停控制-健康检查-端口进程-日志故障）"
+desc = "服务启停、健康检查、端口进程与日志故障诊断"
+
+[[projects.channels]]
+name = "子级04-托管发布与环境运维（安装脚本-launchd-自启动-发布同步）"
+desc = "安装脚本、launchd、自启动与发布同步运维"
+
+[[projects.channels]]
+name = "子级05-能力开放与生态接入（demo类型-能力页-CLI协同-接入模板）"
+desc = "demo 类型、能力页、CLItools 协同与项目接入模板"
+
+[[projects.channels]]
+name = "子级06-治理审计与生命周期（retire归档-recovery恢复-责任回溯）"
+desc = "服务生命周期、归档恢复、责任回溯与治理审计"
+
+[[projects.channels]]
+name = "辅助01-文档验收与知识沉淀（README-验收发布-沉淀索引）"
+desc = "README、验收发布、对外口径与沉淀索引"
+
+
+[projects.execution_context]
+profile = "project_privileged_full"
+environment = "stable"
+worktree_root = "/Users/liutingqzh/projects/本机服务监控台"
+workdir = "/Users/liutingqzh/projects/本机服务监控台"
+branch = "main"
+runtime_root = "/Users/liutingqzh/workspace/xiaomishu/项目管理-小秘书/项目看板/task-dashboard/.runtime/stable"
+sessions_root = "/Users/liutingqzh/workspace/xiaomishu/项目管理-小秘书/项目看板/task-dashboard/.runtime/stable/.sessions"
+runs_root = "/Users/liutingqzh/workspace/xiaomishu/项目管理-小秘书/项目看板/task-dashboard/.runtime/stable/.runs"
+server_port = "18765"
+health_source = "http://127.0.0.1:18765/__health"
+[[projects]]
+id = "culture"
+name = "企业文化诊断"
+color = "#FF2442"
+project_root_rel = "项目管理-小秘书/【项目】企业文化诊断/诊断智能体（共享）"
+task_root_rel = "项目管理-小秘书/【项目】企业文化诊断/诊断智能体（共享）/任务规划"
+description = "对话式采集员工声音，生成文化分析与报告看板，并支持持续监测与复测闭环。"
+
+[[projects.links]]
+label = "工作空间"
+url = "file:项目管理-小秘书/【项目】企业文化诊断/诊断智能体（共享）"
+
+[[projects.links]]
+label = "任务规划"
+url = "file:项目管理-小秘书/【项目】企业文化诊断/诊断智能体（共享）/任务规划"
+
+[[projects.links]]
+label = "README"
+url = "file:项目管理-小秘书/【项目】企业文化诊断/诊断智能体（共享）/README.md"
+
+[[projects.links]]
+label = "报告页"
+url = "https://report.cultruetest.com/index.html"
+
+[[projects.links]]
+label = "对话ID清单"
+url = "file:项目管理-小秘书/【项目】企业文化诊断/诊断智能体（共享）/任务规划/对话ID清单.md"
+
+[[projects.links]]
+label = "项目会话真源"
+url = "file:项目管理-小秘书/【项目】企业文化诊断/诊断智能体（共享）/.sessions/culture.json"
+
+[[projects.links]]
+label = "项目通讯录"
+url = "file:项目管理-小秘书/【项目】企业文化诊断/诊断智能体（共享）/registry/collab-registry.view.md"
+
+[[projects.channels]]
+name = "主体-总任务批次"
+desc = "冻结业务主线范围、阶段目标与最终收口口径"
+structure_layer = "现役主干"
+requires_primary = true
+formal_dispatch_entry = true
+
+[[projects.channels]]
+name = "主体01-技术架构"
+desc = "负责整体技术架构、工程分层和关键技术约束裁决"
+structure_layer = "现役主干"
+requires_primary = true
+formal_dispatch_entry = true
+
+[[projects.channels]]
+name = "主体02-数据架构"
+desc = "负责数据规格、对象层与业务数据口径统一"
+structure_layer = "现役主干"
+requires_primary = true
+formal_dispatch_entry = true
+
+[[projects.channels]]
+name = "主体03-产品业务"
+desc = "负责业务形态、产品范围裁决、页级验收与版本冻结"
+structure_layer = "现役主干"
+requires_primary = true
+formal_dispatch_entry = true
+
+[[projects.channels]]
+name = "主体04-前端样式管理"
+desc = "负责样式语言、阅读节奏、展示层结构与前端样式验收"
+structure_layer = "现役主干"
+requires_primary = true
+formal_dispatch_entry = true
+
+[[projects.channels]]
+name = "主体05-业务专家"
+desc = "负责文化诊断与访谈专家视角的业务判断、专业口径与方案审校"
+structure_layer = "现役主干"
+requires_primary = true
+formal_dispatch_entry = true
+
+[[projects.channels]]
+name = "智能体系统开发01-工程环境与启动"
+desc = "负责工程环境准备、启动脚本与依赖接线"
+structure_layer = "现役主干"
+requires_primary = true
+formal_dispatch_entry = true
+
+[[projects.channels]]
+name = "智能体系统开发02-后端API与数据库"
+desc = "负责后端接口、数据存储与服务逻辑"
+structure_layer = "现役主干"
+requires_primary = true
+formal_dispatch_entry = true
+
+[[projects.channels]]
+name = "智能体系统开发03-前端管理台与测评端"
+desc = "负责管理台、测评端与共享前端壳，不承接专项企业页定制"
+structure_layer = "现役主干"
+requires_primary = true
+formal_dispatch_entry = true
+
+[[projects.channels]]
+name = "智能体系统开发04-发布与运维"
+desc = "负责平台打包发布、唯一地址、整链验收与运行维护"
+structure_layer = "现役主干"
+requires_primary = true
+formal_dispatch_entry = true
+
+[[projects.channels]]
+name = "智能体系统开发05-工程测试与质量保障"
+desc = "负责测试、回归、质量门禁与验收"
+structure_layer = "现役主干"
+requires_primary = true
+formal_dispatch_entry = true
+
+[[projects.channels]]
+name = "智能体系统开发06-代码仓库管理"
+desc = "负责代码仓库结构、分支策略、提交规范、仓治理与协作边界"
+structure_layer = "现役主干"
+requires_primary = true
+formal_dispatch_entry = true
+
+[[projects.channels]]
+name = "诊断看板01-总负责"
+desc = "负责专项总控、业务主线冻结、继续分派与阶段放行"
+structure_layer = "现役主干"
+requires_primary = true
+formal_dispatch_entry = true
+
+[[projects.channels]]
+name = "诊断看板02-打包发布"
+desc = "负责企业诊断专项的打包发布、交付地址与整链验收"
+structure_layer = "现役主干"
+requires_primary = true
+formal_dispatch_entry = true
+
+[[projects.channels]]
+name = "诊断看板03-企业维度系统侧"
+desc = "负责企业维度专题的数据与业务页面、企业详情/文化总览等专项页面"
+structure_layer = "现役主干"
+requires_primary = true
+formal_dispatch_entry = true
+
+[[projects.channels]]
+name = "诊断看板04-文化诊断报告"
+desc = "负责文化诊断报告内容、洞察结构与页面表达"
+structure_layer = "现役主干"
+requires_primary = true
+formal_dispatch_entry = true
+
+[[projects.channels]]
+name = "诊断看板05-AI组织文化"
+desc = "负责 AI 组织文化专题内容、独立页面与专题口径"
+structure_layer = "现役主干"
+requires_primary = true
+formal_dispatch_entry = true
+
+[[projects.channels]]
+name = "辅助01-项目结构管理"
+desc = "负责项目结构治理、入口索引、会话绑定与通讯录维护"
+structure_layer = "现役主干"
+requires_primary = true
+formal_dispatch_entry = true
+
+[[projects.channels]]
+name = "辅助02-项目运维"
+desc = "负责运行异常排障、会话治理协同与运维问题收口"
+structure_layer = "现役主干"
+requires_primary = true
+formal_dispatch_entry = true
+
+[[projects.channels]]
+name = "【skills】专注于优化skills"
+desc = "项目内 skills 治理与提示词优化支撑通道，沿用项目原名"
+structure_layer = "低频通道"
+requires_primary = true
+formal_dispatch_entry = false
+
+[[projects.channels]]
+name = "配置工作01-Agent编排"
+desc = "负责诊断智能体角色设计、persona 与提示词编排"
+structure_layer = "低频通道"
+requires_primary = true
+formal_dispatch_entry = false
+
+[[projects.channels]]
+name = "配置工作02-场景编排"
+desc = "负责访谈、问卷与诊断场景流程编排及上下文规则"
+structure_layer = "低频通道"
+requires_primary = true
+formal_dispatch_entry = false
+
+[[projects.channels]]
+name = "配置工作03-任务蓝图"
+desc = "负责诊断任务蓝图、问题树与执行步骤设计"
+structure_layer = "低频通道"
+requires_primary = true
+formal_dispatch_entry = false
+
+[[projects.channels]]
+name = "配置工作04-模型与安全"
+desc = "负责模型选择、安全边界与风险控制"
+structure_layer = "低频通道"
+requires_primary = true
+formal_dispatch_entry = false
+
+[[projects.channels]]
+name = "配置工作05-验证与指标"
+desc = "负责诊断效果验证、测评指标与质量评估"
+structure_layer = "低频通道"
+requires_primary = true
+formal_dispatch_entry = false
+
+[[projects.channels]]
+name = "辅助02-客户沟通PPT"
+desc = "客户沟通物料与 PPT 准备待启用入口，当前不纳入默认派发"
+structure_layer = "待启用通道"
+requires_primary = false
+formal_dispatch_entry = false
+
+[[projects.channels]]
+name = "辅助03-项目史官"
+desc = "项目事件、经验与失误沉淀通道，当前按待启用保留"
+structure_layer = "待启用通道"
+requires_primary = false
+formal_dispatch_entry = false
+
+[[projects.channels]]
+name = "子级06-客户沟通训练"
+desc = "客户沟通训练备用通道，当前待启用"
+structure_layer = "待启用通道"
+requires_primary = false
+formal_dispatch_entry = false
+
+[[projects.channels]]
+name = "子级06-智能体系统-客户沟通训练"
+desc = "智能体客户沟通训练备用通道，当前待启用"
+structure_layer = "待启用通道"
+requires_primary = false
+formal_dispatch_entry = false
+
+[[projects.channels]]
+name = "子级07-业务运营-诊断报告与洞察"
+desc = "文化诊断报告运营线备用通道，当前待启用"
+structure_layer = "待启用通道"
+requires_primary = false
+formal_dispatch_entry = false
+
+[[projects.channels]]
+name = "子级08-业务运营-用户接洽与事务推进"
+desc = "用户接洽与事务推进备用通道，当前待启用"
+structure_layer = "待启用通道"
+requires_primary = false
+formal_dispatch_entry = false
+
+[[projects.channels]]
+name = "子级09-业务运营-项目经营与里程碑"
+desc = "项目经营与里程碑备用通道，当前待启用"
+structure_layer = "待启用通道"
+requires_primary = false
+formal_dispatch_entry = false
+
+[[projects.channels]]
+name = "子级01-智能体系统-Agent编排"
+desc = "历史重名壳，仅保留兼容入口，不再作为正式派发通道"
+structure_layer = "历史壳"
+requires_primary = false
+formal_dispatch_entry = false
+
+[[projects.channels]]
+name = "子级02-智能体系统-场景编排"
+desc = "历史重名壳，仅保留兼容入口，不再作为正式派发通道"
+structure_layer = "历史壳"
+requires_primary = false
+formal_dispatch_entry = false
+
+[[projects.channels]]
+name = "子级03-智能体系统-任务蓝图"
+desc = "历史重名壳，仅保留兼容入口，不再作为正式派发通道"
+structure_layer = "历史壳"
+requires_primary = false
+formal_dispatch_entry = false
+
+[[projects.channels]]
+name = "子级04-模型与安全"
+desc = "历史配置工作壳，仅保留兼容入口，不再作为正式派发通道"
+structure_layer = "历史壳"
+requires_primary = false
+formal_dispatch_entry = false
+
+[[projects.channels]]
+name = "子级04-智能体系统-模型与安全"
+desc = "历史重名壳，仅保留兼容入口，不再作为正式派发通道"
+structure_layer = "历史壳"
+requires_primary = false
+formal_dispatch_entry = false
+
+[[projects.channels]]
+name = "子级05-验证与指标"
+desc = "历史配置工作壳，仅保留兼容入口，不再作为正式派发通道"
+structure_layer = "历史壳"
+requires_primary = false
+formal_dispatch_entry = false
+
+[[projects.channels]]
+name = "子级05-智能体系统-验证与指标"
+desc = "历史重名壳，仅保留兼容入口，不再作为正式派发通道"
+structure_layer = "历史壳"
+requires_primary = false
+formal_dispatch_entry = false
+
+[[projects.channels]]
+name = "子级10-工程环境与启动"
+desc = "历史工程执行壳，仅保留兼容入口，不再作为正式派发通道"
+structure_layer = "历史壳"
+requires_primary = false
+formal_dispatch_entry = false
+
+[[projects.channels]]
+name = "子级11-后端API与数据库"
+desc = "历史工程执行壳，仅保留兼容入口，不再作为正式派发通道"
+structure_layer = "历史壳"
+requires_primary = false
+formal_dispatch_entry = false
+
+[[projects.channels]]
+name = "子级12-前端管理台与测评端"
+desc = "历史工程执行壳，仅保留兼容入口，不再作为正式派发通道"
+structure_layer = "历史壳"
+requires_primary = false
+formal_dispatch_entry = false
+
+[[projects.channels]]
+name = "子级13-发布与运维"
+desc = "历史工程执行壳，仅保留兼容入口，不再作为正式派发通道"
+structure_layer = "历史壳"
+requires_primary = false
+formal_dispatch_entry = false
+
+[[projects.channels]]
+name = "子级14-工程测试与质量保障"
+desc = "历史工程执行壳，仅保留兼容入口，不再作为正式派发通道"
+structure_layer = "历史壳"
+requires_primary = false
+formal_dispatch_entry = false
+
+[[projects.channels]]
+name = "子级15-诊断报告"
+desc = "历史专项拆分壳，仅保留兼容入口，不再作为正式派发通道"
+structure_layer = "历史壳"
+requires_primary = false
+formal_dispatch_entry = false
+
+[[projects.channels]]
+name = "子级16-专项打包发布"
+desc = "历史专项拆分壳，仅保留兼容入口，不再作为正式派发通道"
+structure_layer = "历史壳"
+requires_primary = false
+formal_dispatch_entry = false
+
+[[projects.channels]]
+name = "子级17-专项企业维度系统侧"
+desc = "历史专项拆分壳，仅保留兼容入口，不再作为正式派发通道"
+structure_layer = "历史壳"
+requires_primary = false
+formal_dispatch_entry = false
+
+[[projects.channels]]
+name = "子级18-专项文化诊断报告"
+desc = "历史专项拆分壳，仅保留兼容入口，不再作为正式派发通道"
+structure_layer = "历史壳"
+requires_primary = false
+formal_dispatch_entry = false
+
+[[projects.channels]]
+name = "子级19-专项AI组织文化"
+desc = "历史专项拆分壳，仅保留兼容入口，不再作为正式派发通道"
+structure_layer = "历史壳"
+requires_primary = false
+formal_dispatch_entry = false
+
+[projects.execution_context]
+profile = "project_privileged_full"
+environment = "stable"
+worktree_root = "/Users/liutingqzh/workspace/xiaomishu/项目管理-小秘书/【项目】企业文化诊断/诊断智能体（共享）"
+workdir = "/Users/liutingqzh/workspace/xiaomishu/项目管理-小秘书/【项目】企业文化诊断/诊断智能体（共享）"
+branch = ""
+runtime_root = "/Users/liutingqzh/workspace/xiaomishu/项目管理-小秘书/【项目】企业文化诊断/诊断智能体（共享）/.runtime/stable"
+sessions_root = "/Users/liutingqzh/workspace/xiaomishu/项目管理-小秘书/【项目】企业文化诊断/诊断智能体（共享）/.runtime/stable/.sessions"
+runs_root = "/Users/liutingqzh/workspace/xiaomishu/项目管理-小秘书/【项目】企业文化诊断/诊断智能体（共享）/.runtime/stable/.runs"
+[projects.session_health]
+enabled = true
+interval_minutes = 120
+[[projects]]
+id = "video_edit"
+name = "视频剪辑"
+color = "#0F63F2"
+project_root_rel = "项目管理-小秘书/【项目】视频剪辑-协作治理"
+task_root_rel = "项目管理-小秘书/【项目】视频剪辑-协作治理/任务规划"
+runtime_root_rel = "项目管理-小秘书/项目看板/task-dashboard/.runtime/stable"
+session_json_rel = "项目管理-小秘书/项目看板/task-dashboard/.sessions/video_edit.json"
+description = "视频制作项目：按 2026-04 最新项目管理标准重置为轻量协作治理壳，旧媒体壳只保留历史学习与回溯。"
+
+[[projects.links]]
+label = "治理工作区"
+url = "file:项目管理-小秘书/【项目】视频剪辑-协作治理"
+
+[[projects.links]]
+label = "任务规划"
+url = "file:项目管理-小秘书/【项目】视频剪辑-协作治理/任务规划"
+
+[[projects.links]]
+label = "外部视频工作区"
+url = "file:/Users/liutingqzh/Movies/视频剪辑"
+
+[[projects.links]]
+label = "历史任务规划（legacy）"
+url = "file:/Users/liutingqzh/Movies/视频剪辑/任务规划"
+
+[[projects.links]]
+label = "会话真源"
+url = "file:项目管理-小秘书/项目看板/task-dashboard/.sessions/video_edit.json"
+
+[[projects.channels]]
+name = "主体-总控（选题编导-跨线排期-验收收口）"
+desc = "统一管理视频选题编导、跨通道排期、最终验收与收口"
+
+[[projects.channels]]
+name = "子级01-选题脚本与口播结构（AI skills选题-脚本提纲-5分钟干货视频）"
+desc = "负责视频题目规划、脚本结构、口播提纲与干货表达"
+
+[[projects.channels]]
+name = "子级02-稿件工作站与模板可视化（工作站检视-MVP-模板资产）"
+desc = "负责稿件工作站状态检视、模板资产与外部看板能力"
+
+[[projects.channels]]
+name = "子级03-研究材料与视觉资产（资料研究-配图字幕封面-场景素材）"
+desc = "负责研究资料、例证素材、配图、字幕、封面与视觉场景资产"
+
+[[projects.channels]]
+name = "子级04-制作技能与流程自动化（skills升级-workflow-工具链沉淀）"
+desc = "负责视频制作 skills 升级、workflow 固化与自动化链路沉淀"
+
+[[projects.channels]]
+name = "子级05-Remotion工程与成片导出（布局舞台-配音字幕-渲染导出）"
+desc = "负责 Remotion 场景、配音字幕接入、渲染导出与成片交付"
+
+[[projects.channels]]
+name = "辅助01-Git与提交治理（版本清理-提交门禁-大文件风险）"
+desc = "负责版本洁净、提交门禁、大文件风险与工程提交节奏"
+
+[[projects.channels]]
+name = "辅助02-Skills检视与知识索引（skills inspector-关系图谱-全局入口）"
+desc = "负责 skills-inspector、技能关系索引、入口联通与知识说明"
+
+[[projects.channels]]
+name = "辅助03-项目管理"
+desc = "项目结构管理，打杂"
+cli_type = "codex"
+[projects.execution_context]
+profile = "project_privileged_full"
+environment = "stable"
+worktree_root = "/Users/liutingqzh/Movies/视频剪辑"
+workdir = "/Users/liutingqzh/Movies/视频剪辑"
+branch = ""
+
+# --- AUTO: xms-onboard worklog start ---
+
+[[projects]]
+id = 'worklog'
+name = '工作日志'
+color = '#E07A2D'
+project_root_rel = '项目管理-小秘书/【项目】工作日志'
+task_root_rel = '项目管理-小秘书/【项目】工作日志'
+session_json_rel = '项目管理-小秘书/【项目】工作日志/codex-sessions.json'
+description = '工作日志：已按小秘书看板标准接入（软链触达 + 任务空间 + 会话 JSON + 看板配置 + 构建刷新）。'
+
+[[projects.links]]
+label = '工作空间'
+url = 'file:项目管理-小秘书/【项目】工作日志'
+
+[[projects.links]]
+label = '任务规划'
+url = 'file:项目管理-小秘书/【项目】工作日志'
+
+[[projects.links]]
+label = '会话配置'
+url = 'file:项目管理-小秘书/【项目】工作日志/codex-sessions.json'
+
+[[projects.channels]]
+name = '主体-总任务批次'
+desc = '冻结契约与里程碑，统一验收口径，控制合并节奏与风险收敛'
+
+[[projects.channels]]
+name = '日志-01_日常整理'
+desc = '日常记录收集、整理、去重压缩与入库'
+
+[[projects.channels]]
+name = '日志-02_结构化数据'
+desc = '结构化字段/索引/检索口径建设与数据维护'
+
+[[projects.channels]]
+name = '日志-03_可视化展示'
+desc = '数据可视化展示、汇总页与产出物模板化'
+
+[[projects.channels]]
+name = '日志-04_行业沉淀'
+desc = '行业案例与方法论沉淀、可复用资产库'
+
+[[projects.channels]]
+name = '日志-05_业务探索发现'
+desc = '新场景探索、需求发现与验证'
+
+[[projects.channels]]
+name = '日志-06_scripts'
+desc = '自动化脚本、批处理工具与工程化维护'
+
+# --- AUTO: xms-onboard worklog end ---
+
+# --- AUTO: xms-onboard task_dashboard start ---
+
+
+[projects.execution_context]
+profile = "project_privileged_full"
+environment = "stable"
+
+[[projects.channels]]
+name = "主体02-系统架构"
+desc = "主管系统整体架构业务"
+
+[[projects.channels]]
+name = "主体03-业务产品"
+desc = "管理业务和检查需求"
+
+[[projects.channels]]
+name = "辅助01-项目管理"
+desc = "管理项目杂事"
+
+[[projects.channels]]
+name = "项目开发01-项目开发-总控"
+desc = "主要负责项目开发的任务管理"
+
+[[projects.channels]]
+name = "项目开发02-业务开发"
+desc = "逻辑性的开发工作"
+
+[[projects.channels]]
+name = "项目开发03-可视化开发"
+desc = "偏向于界面开发的一些工作内容"
+
+[[projects]]
+id = 'task_dashboard'
+name = 'Qoreon·生产主项目'
+color = '#2E6F8E'
+project_root_rel = '项目管理-小秘书/项目看板/task-dashboard'
+task_root_rel = '项目管理-小秘书/项目看板/task-dashboard/任务规划'
+session_json_rel = '项目管理-小秘书/项目看板/task-dashboard/任务规划/codex-sessions.json'
+description = 'Qoreon 稳定主操作面：正式生产盘面与日常协作默认从这里进入。'
+
+[[projects.links]]
+label = '工作空间'
+url = 'file:项目管理-小秘书/项目看板/task-dashboard'
+
+[[projects.links]]
+label = '任务规划'
+url = 'file:项目管理-小秘书/项目看板/task-dashboard/任务规划'
+
+[[projects.links]]
+label = '会话配置'
+url = 'file:项目管理-小秘书/项目看板/task-dashboard/任务规划/codex-sessions.json'
+
+[[projects.channels]]
+name = '主体-总控（合并与验收）'
+desc = '冻结契约与里程碑，统一验收口径，控制合并节奏与风险收敛'
+
+[[projects.channels]]
+name = '子级01-Build引擎（扫描-解析-聚合-渲染）'
+desc = '扫描/解析/聚合/渲染：稳定生成 task/overview 静态页'
+
+[[projects.channels]]
+name = '子级02-CCB运行时（server-并发-安全-启动）'
+desc = '同源 API + codex exec resume 运行时（并发/安全/启动一致性）'
+
+[[projects.channels]]
+name = '子级03-多CLI适配器（codex-claude-opencode）'
+desc = '多 CLI 适配层：统一接口、命令构建、回溯/回收口径'
+
+[[projects.channels]]
+name = '子级04-前端体验（task-overview 页面交互）'
+desc = '任务/总览页交互体验：看-选-发-回溯-重试/回收'
+
+[[projects.channels]]
+name = '游戏可视化'
+desc = 'Web 游戏化方案与界面分队：负责激励机制、交互表达、可视化玩法落地'
+cli_type = 'codex'
+
+[[projects.channels]]
+name = '子级05-任务巡检与留痕（自动化）'
+desc = '跨通道巡检与任务留痕自动化：2小时增量检查、反向补录、风险汇总'
+cli_type = 'codex'
+
+[[projects.channels]]
+name = '子级06-数据治理与契约（规格-校验-修复）'
+desc = '项目数据规格治理与契约一致性：字段字典、巡检校验、自动修复与问题流转'
+cli_type = 'codex'
+
+[[projects.channels]]
+name = '辅助01-项目结构治理（配置-目录-契约-迁移）'
+desc = '辅助总控推进结构治理：通道扩建、会话绑定、配置一致性、迁移回滚'
+cli_type = 'codex'
+
+[[projects.channels]]
+name = "子级07-可视化看板（全局任务-通道-agent资源关系）"
+desc = "结构化全局任务、通道与Agent资源关系可视化"
+
+[[projects.channels]]
+name = "子级08-测试与验收（功能-回归-发布）"
+desc = "负责功能测试、回归测试、发布前验收与缺陷分流，不直接改研发代码。"
+cli_type = "codex"
+model = "gpt-5.4-mini"
+
+[[projects.channels]]
+name = "辅助03-用户镜像（意识-价值观-业务判断-规划支撑）"
+desc = "学习用户历史对话与决策偏好，提供价值观一致性判断与业务规划支撑，不替代最终拍板。"
+cli_type = "codex"
+
+[[projects.channels]]
+name = "辅助02-团队协作Skills治理（审查-升级-规范）"
+desc = "团队协作skills的审查、升级与规范治理通道"
+cli_type = "codex"
+
+[[projects.channels]]
+name = "辅助04-原型设计与Demo可视化（静态数据填充-业务规格确认）"
+desc = "负责原型绘制、静态数据填充与Demo可视化输出，用于业务规格确认。"
+cli_type = "codex"
+
+[[projects.channels]]
+name = "辅助05-督办PMO（排期-巡查-催办-升级）"
+desc = "负责排期治理、自动巡查、催办升级与收口推进，不承担研发实施编码。"
+cli_type = "codex"
+
+[projects.auto_inspection]
+
+# --- AUTO: xms-onboard task_dashboard end ---
+
+active_inspection_task_id = ""
+
+enabled = false
+channel_name = "辅助05-督办PMO（排期-巡查-催办-升级）"
+session_id = "019ca897-461e-7d11-b077-819b27128de8"
+interval_minutes = 15
+prompt_template = "请按任务看板主任务时间轴中的当前顺序推进巡查。优先关注待开始与进行中的主任务：若任务待开始，推动负责人启动并补齐分工、协同与执行路径；若任务进行中，检查最近进展并提醒下一步。若最近聊天出现停滞或异常，请联系对应协作通道协助处理。若本轮无可推进任务，请联系辅助04-原型设计与Demo可视化（静态数据填充-业务规格确认）补充下一项任务。"
+auto_inspections = [
+  { object_key = "ins-todo", object_type = "todo", display_name = "待开始", enabled = true, source = "auto_inspections", match_values = [] },
+  { object_key = "ins-in_progress", object_type = "in_progress", display_name = "进行中", enabled = true, source = "auto_inspections", match_values = [] },
+  { object_key = "ins-pending", object_type = "pending", display_name = "待处理", enabled = false, source = "auto_inspections", match_values = [] },
 ]
-links = [
-  { label = "AI Bootstrap", url = "docs/public/ai-bootstrap.md" },
-  { label = "Standard Project", url = "examples/standard-project/README.md" },
-  { label = "Start Standard Project", url = "scripts/start_standard_project.py" },
-  { label = "Project Worksplit", url = "docs/onboarding/project-worksplit-playbook.md" }
+inspection_targets = ["todo", "in_progress"]
+
+inspection_tasks = [
+  { inspection_task_id = "default", title = "默认巡查任务", enabled = false, channel_name = "辅助05-督办PMO（排期-巡查-催办-升级）", session_id = "019ca895-42a8-7651-b1d8-cb9d27123139", interval_minutes = 15, prompt_template = "请按任务看板主任务时间轴中的当前顺序推进巡查。优先关注待开始与进行中的主任务：若任务待开始，推动负责人启动并补齐分工、协同与执行路径；若任务进行中，检查最近进展并提醒下一步。若最近聊天出现停滞或异常，请联系对应协作通道协助处理。若本轮无可推进任务，请联系辅助04-原型设计与Demo可视化（静态数据填充-业务规格确认）补充下一项任务。", inspection_targets = ["todo", "in_progress"], auto_inspections = [{ object_key = "ins-todo", object_type = "todo", display_name = "待开始", enabled = true, source = "auto_inspections", match_values = [] }, { object_key = "ins-in_progress", object_type = "in_progress", display_name = "进行中", enabled = true, source = "auto_inspections", match_values = [] }, { object_key = "ins-pending", object_type = "pending", display_name = "待处理", enabled = false, source = "auto_inspections", match_values = [] }] },
+  { inspection_task_id = "board-1772613184463", title = "巡查任务 2", enabled = false, channel_name = "辅助05-督办PMO（排期-巡查-催办-升级）", session_id = "019ca895-42a8-7651-b1d8-cb9d27123139", interval_minutes = 15, prompt_template = "请按任务看板主任务时间轴中的当前顺序推进巡查。优先关注待开始与进行中的主任务：若任务待开始，推动负责人启动并补齐分工、协同与执行路径；若任务进行中，检查最近进展并提醒下一步。若最近聊天出现停滞或异常，请联系对应协作通道协助处理。若本轮无可推进任务，请联系辅助04-原型设计与Demo可视化（静态数据填充-业务规格确认）补充下一项任务。", inspection_targets = ["todo", "in_progress"], auto_inspections = [{ object_key = "ins-todo", object_type = "todo", display_name = "待开始", enabled = true, source = "auto_inspections", match_values = [] }, { object_key = "ins-in_progress", object_type = "in_progress", display_name = "进行中", enabled = true, source = "auto_inspections", match_values = [] }, { object_key = "ins-pending", object_type = "pending", display_name = "待处理", enabled = false, source = "auto_inspections", match_values = [] }] },
 ]
+[projects.scheduler]
+
+# --- AUTO: xms-onboard website_work start ---
+
+enabled = false
+scan_interval_seconds = 300
+retry_on_boot = true
+[projects.reminder]
+
+interval_minutes = 15
+enabled = false
+[projects.auto_dispatch]
+
+enabled = false
+[[projects.channels]]
+name = "辅助06-项目运维（运行巡检-异常告警-会话修复）"
+desc = "项目运维：定时巡检运行状态、异常告警、会话健康修复与回收"
+
+[projects.heartbeat]
+
+enabled = true
+scan_interval_seconds = 30
+tasks = [{ heartbeat_task_id = "gate-release-precheck", title = "发布前门禁检查", enabled = false, channel_name = "主体-总控（合并与验收）", session_id = "019cdb7f-1c8f-7280-970e-a50c2e114cef", preset_key = "ops_inspection", prompt_template = "当前准备把 refactor 的改动发布到 stable。请先完成发布前门禁检查，只输出：1) 测试是否通过 2) 总控是否验收通过 3) 产品是否验收通过 4) 回滚动作是否明确 5) 是否允许发布（允许/不允许） 6) 若不允许，仅保留唯一阻塞。未全部通过前，不得推进 stable。", schedule_type = "interval", interval_minutes = 10080, daily_time = "", weekdays = [1, 2, 3, 4, 5, 6, 7], busy_policy = "skip_if_busy", max_execute_count = 0, context_scope = { recent_tasks_limit = 5, recent_runs_limit = 5, include_task_counts = true, include_recent_tasks = true, include_recent_runs = true } }, { heartbeat_task_id = "gate-release-postsmoke", title = "发布后回归检查", enabled = false, channel_name = "主体-总控（合并与验收）", session_id = "019cdb7f-1c8f-7280-970e-a50c2e114cef", preset_key = "ops_inspection", prompt_template = "当前 stable 已完成一次发布。请做发布后回归检查，只输出：1) __health 是否正常 2) 页面是否正常打开 3) 关键 API 是否正常 4) 最近 run 是否正常写入/回看 5) 是否需要回滚（需要/不需要） 6) 若需要回滚，仅保留唯一原因。", schedule_type = "interval", interval_minutes = 10080, daily_time = "", weekdays = [1, 2, 3, 4, 5, 6, 7], busy_policy = "skip_if_busy", max_execute_count = 0, context_scope = { recent_tasks_limit = 10, recent_runs_limit = 10, include_task_counts = true, include_recent_tasks = true, include_recent_runs = true } }]
+[[projects.channels]]
+name = "系统01-信息梳理"
+desc = "系统级信息梳理与结构化收敛"
+
+
+[projects.session_health]
+
+enabled = true
+interval_minutes = 120
+[projects.execution_context]
+environment = "stable"
+profile = "project_privileged_full"
+worktree_root = "/Users/liutingqzh/workspace/xiaomishu/项目管理-小秘书/项目看板/task-dashboard"
+workdir = "/Users/liutingqzh/workspace/xiaomishu/项目管理-小秘书/项目看板/task-dashboard"
+
+runtime_root = "/Users/liutingqzh/workspace/xiaomishu/项目管理-小秘书/项目看板/task-dashboard/.runtime/stable"
+sessions_root = "/Users/liutingqzh/workspace/xiaomishu/项目管理-小秘书/项目看板/task-dashboard/.runtime/stable/.sessions"
+runs_root = "/Users/liutingqzh/workspace/xiaomishu/项目管理-小秘书/项目看板/task-dashboard/.runtime/stable/.runs"
+server_port = "18765"
+health_source = "http://127.0.0.1:18765/__health"
+
+branch = "checkpoint/20260314-baseline-reset"
+[[projects.channels]]
+name = "辅助07-Git仓库管理（管理本地仓库以及远程仓库）"
+desc = "管理本地仓库以及远程仓库"
+
+[[projects.channels]]
+name = "主体01-业务联络"
+desc = "现在agent分工太多了，我要找到联络员来沟通需求，由他来协助我完成需求的分发。"
+
+[[projects.channels]]
+name = "主体04-开源筹备联控（65主操作面）"
+desc = "作为 18765 主操作面的开源筹备统一入口，负责收件、分派、催办与跨项目验收，不直接替代 69 执行层实施。"
+alias = "开源联控（65）"
+cli_type = "codex"
+
+[[projects.channels]]
+name = "辅助08-项目史官"
+desc = "专门记录项目的工作开展情况留下记录，为后续工作开展提供方向审核和便利"
+
+
+[[projects.channels]]
+name = "业务01-视觉设计"
+desc = "负责 Qoreon 产品与官网/公开材料的视觉方向、视觉规范、页面美术、品牌资产、截图与展示物料设计支持。"
+alias = "视觉设计"
+cli_type = "codex"
+structure_layer = "现役主干"
+requires_primary = true
+formal_dispatch_entry = true
+[projects.perf_governance]
+
+enabled = true
+sessions_cache_ttl_ms = 1500
+sessions_inflight_wait_ms = 5000
+sessions_poll_interval_ms = 3000
+sessions_hidden_poll_interval_ms = 15000
+sessions_backoff_step_ms = 2000
+sessions_backoff_max_ms = 15000
+sessions_pause_when_hidden = true
+sessions_cross_tab_dedupe_enabled = true
+[[projects]]
+id = 'task_dashboard_dev_control'
+name = '小秘书-开发项目（stable宿主）'
+color = '#1F7A5A'
+project_root_rel = '项目管理-小秘书/项目看板/task-dashboard'
+task_root_rel = '项目管理-小秘书/项目看板/task-dashboard/任务规划'
+session_json_rel = '项目管理-小秘书/项目看板/task-dashboard/任务规划/codex-sessions.task_dashboard_dev_control.json'
+runtime_root_rel = '项目管理-小秘书/项目看板/task-dashboard/.runtime/stable'
+runtime_role = 'dev_control'
+description = '稳定环境中的正式开发项目，默认承接后续研发、联调与功能改造。'
+
+[[projects.links]]
+label = '工作空间'
+url = 'file:项目管理-小秘书/项目看板/task-dashboard'
+
+[[projects.links]]
+label = '任务规划'
+url = 'file:项目管理-小秘书/项目看板/task-dashboard/任务规划'
+
+[[projects.links]]
+label = '会话配置'
+url = 'file:项目管理-小秘书/项目看板/task-dashboard/任务规划/codex-sessions.task_dashboard_dev_control.json'
+
+[[projects.links]]
+label = '开发项目入口'
+url = 'http://127.0.0.1:18768/share/project-overview-dashboard.html'
+
+[projects.execution_context]
+profile = 'project_privileged_full'
+environment = 'stable'
+worktree_root = '/Users/liutingqzh/workspace/xiaomishu/项目管理-小秘书/项目看板/task-dashboard'
+workdir = '/Users/liutingqzh/workspace/xiaomishu/项目管理-小秘书/项目看板/task-dashboard'
+branch = 'checkpoint/20260314-baseline-reset'
+runtime_root = '/Users/liutingqzh/workspace/xiaomishu/项目管理-小秘书/项目看板/task-dashboard/.runtime/stable'
+sessions_root = '/Users/liutingqzh/workspace/xiaomishu/项目管理-小秘书/项目看板/task-dashboard/.runtime/stable/.sessions'
+runs_root = '/Users/liutingqzh/workspace/xiaomishu/项目管理-小秘书/项目看板/task-dashboard/.runtime/stable/.runs'
+server_port = '18768'
+health_source = 'http://127.0.0.1:18768/__health'
+
+[[projects]]
+id = 'website_work'
+name = '网站工作'
+color = '#2563EB'
+project_root_rel = '项目管理-小秘书/【项目】网站工作'
+task_root_rel = '项目管理-小秘书/【项目】网站工作/宜宾-南溪政府-置标工作/工作开展'
+description = '网站工作：已按小秘书看板标准接入（软链触达 + 任务空间 + 会话 JSON + 看板配置 + 构建刷新）。'
+
+[[projects.links]]
+label = '工作空间'
+url = 'file:项目管理-小秘书/【项目】网站工作'
+
+[[projects.links]]
+label = '任务规划'
+url = 'file:项目管理-小秘书/【项目】网站工作/宜宾-南溪政府-置标工作/工作开展'
+
+[[projects.links]]
+label = '会话配置'
+url = 'file:项目管理-小秘书/项目看板/task-dashboard/.sessions/website_work.json'
+
+[[projects.links]]
+label = '项目会话真源'
+url = 'file:项目管理-小秘书/【项目】网站工作/.sessions/website_work.json'
+
+[[projects.channels]]
+name = '00-主体-总任务批次'
+desc = '冻结契约与里程碑，统一验收口径，控制合并节奏与风险收敛'
+alias = '00-主体-总任务批次'
+
+[[projects.channels]]
+name = '01-子级-站点管理'
+desc = '维护站点业务规格、栏目ID与数据映射，作为置标与Mock基础输入'
+alias = '01-子级-站点管理'
+
+[[projects.channels]]
+name = '02-子级-置标资产'
+desc = '维护置标规范、标签资产库与覆盖矩阵，统一参数写法'
+alias = '02-子级-置标资产'
+
+[[projects.channels]]
+name = '03-子级-SSI环境'
+desc = '维护本地SSI预览服务、basePath与路径映射，保障页面可预览'
+alias = '03-子级-SSI环境'
+
+[[projects.channels]]
+name = '04-子级-Mock数据'
+desc = '维护mock数据结构与trs-render渲染逻辑，保障本地稳定出数'
+alias = '04-子级-Mock数据'
+
+[[projects.channels]]
+name = '05-子级-搜索对接'
+desc = '维护搜索接口标准、字段映射与本地/海云对接验证'
+alias = '05-子级-搜索对接'
+
+[[projects.channels]]
+name = '06-子级-置标-首页等主要页面'
+desc = '负责首页与核心页面内容拆解、置标落地与日志反馈'
+alias = '06-子级-置标-首页等主要页面'
+
+[[projects.channels]]
+name = '07-子级-置标-信息流'
+desc = '负责列表、卡片、聚合区等信息流页面置标与字段补齐'
+alias = '07-子级-置标-信息流'
+
+[[projects.channels]]
+name = '08-子级-置标-政策文件'
+desc = '负责政策文件、通知公告类页面置标与附件字段对齐'
+alias = '08-子级-置标-政策文件'
+
+[[projects.channels]]
+name = '09-子级-置标-互动板块'
+desc = '负责咨询、信箱、问卷等互动入口与页面置标及接口口径'
+alias = '09-子级-置标-互动板块'
+
+[[projects.channels]]
+name = '10-子级-置标-业务梳理'
+desc = '输出页面级业务对标清单、数据源判断与ID依据'
+alias = '10-子级-置标-业务梳理'
+
+[[projects.channels]]
+name = '11-子级-测试与验收'
+desc = '负责本地预览与海云验收、复测记录、交付口径与回滚留痕'
+alias = '11-子级-测试与验收'
+
+[[projects.channels]]
+name = '12-子级-海云数据操作'
+desc = '负责海云在线数据录入与基础操作执行，沉淀操作记录'
+alias = '12-子级-海云数据操作'
+
+[[projects.channels]]
+name = '13-子级-海云数据操作-并发01'
+desc = '海云数据操作并发执行位，承接指定页面、栏目或模块录入'
+alias = '13-子级-海云数据操作-并发01'
+
+[[projects.channels]]
+name = '14-子级-海云数据操作-并发02'
+desc = '海云数据操作并发执行位，承接指定页面、栏目或模块录入'
+alias = '14-子级-海云数据操作-并发02'
+
+[[projects.channels]]
+name = '15-子级-海云页面测试'
+desc = '负责海云页面结构验证、回归测试与异常校验'
+alias = '15-子级-海云页面测试'
+
+[[projects.channels]]
+name = '16-子级-海云实施与发布'
+desc = '负责海云发布构建、前缀处理、上线实施与回滚记录'
+alias = '16-子级-海云实施与发布'
+
+[[projects.channels]]
+name = '17-子级-问题发现与探索'
+desc = '负责规范检索、问题排查、差异记录与处理建议输出'
+alias = '17-子级-问题发现与探索'
+
+[[projects.channels]]
+name = '97-经验-项目运作总结'
+desc = '负责协作经验复盘、流程总结与项目运作沉淀'
+alias = '97-经验-项目运作总结'
+
+[[projects.channels]]
+name = '98-辅助-数据页面标记'
+desc = '负责页面标记与TRS映射清单生成，辅助调试与定位'
+alias = '98-辅助-数据页面标记'
+
+[[projects.channels]]
+name = '96-辅助-项目skills管理'
+desc = '负责项目Skills治理、差异复盘与优化建议沉淀'
+alias = '96-辅助-项目skills管理'
+
+[[projects.channels]]
+name = '99-辅助-智能助理跟进'
+desc = '辅助总控做规范同步、协作提醒与分工跟进'
+alias = '99-辅助-智能助理跟进'
+
+# --- AUTO: xms-onboard website_work end ---
+
+# --- AUTO: xms-onboard social_platform start ---
+
+
+[[projects.channels]]
+name = "业务10-CLI工具开发"
+desc = "开发trs CLI 工具的通道"
+cli_type = "codex"
+[projects.execution_context]
+profile = "project_privileged_full"
+environment = "stable"
+worktree_root = "/Users/liutingqzh/workspace/xiaomishu/项目管理-小秘书/【项目】网站工作"
+workdir = "/Users/liutingqzh/workspace/xiaomishu/项目管理-小秘书/【项目】网站工作"
+branch = ""
+runtime_root = "/Users/liutingqzh/workspace/xiaomishu/项目管理-小秘书/【项目】网站工作/.runtime/stable"
+sessions_root = "/Users/liutingqzh/workspace/xiaomishu/项目管理-小秘书/【项目】网站工作/.runtime/stable/.sessions"
+runs_root = "/Users/liutingqzh/workspace/xiaomishu/项目管理-小秘书/【项目】网站工作/.runtime/stable/.runs"
+[[projects]]
+id = 'social_platform'
+name = '社交平台'
+color = '#0B6E99'
+project_root_rel = '项目管理-小秘书/【项目】社交平台'
+task_root_rel = '项目管理-小秘书/【项目】社交平台/协同空间/任务规划'
+description = '社交平台：已按小秘书看板标准接入（软链触达 + 任务空间 + 会话 JSON + 看板配置 + 构建刷新）。'
+
+[[projects.links]]
+label = '工作空间'
+url = 'file:项目管理-小秘书/【项目】社交平台'
+
+[[projects.links]]
+label = '任务规划'
+url = 'file:项目管理-小秘书/【项目】社交平台/协同空间/任务规划'
+
+[[projects.links]]
+label = '会话配置'
+url = 'file:项目管理-小秘书/项目看板/task-dashboard/.sessions/social_platform.json'
+
+[[projects.channels]]
+name = '00-主体-总任务批次'
+desc = '冻结契约与里程碑，统一验收口径，控制合并节奏与风险收敛'
+alias = ""
+cli_type = 'codex'
+
+[[projects.channels]]
+name = '01-子级-产品策划与需求范围'
+desc = '（待补充）'
+alias = ""
+cli_type = 'codex'
+
+[[projects.channels]]
+name = '02-子级-Demo信息架构与交互流'
+desc = '（待补充）'
+alias = ""
+cli_type = 'codex'
+
+[[projects.channels]]
+name = '03-子级-Demo界面原型与视觉规范'
+desc = '（待补充）'
+alias = ""
+cli_type = 'claude'
+
+[[projects.channels]]
+name = '04-子级-Demo前端实现与集成'
+desc = '任务/总览页交互体验：看-选-发-回溯-重试/回收'
+alias = ""
+cli_type = 'claude'
+
+[[projects.channels]]
+name = '05-子级-演示脚本与验收准备'
+desc = '（待补充）'
+alias = ""
+cli_type = 'codex'
+
+# --- AUTO: xms-onboard social_platform end ---
+
+# --- AUTO: xms-onboard global_task_ops start ---
+
+[[projects]]
+id = 'global_task_ops'
+name = '全局任务统筹'
+color = '#1F7A5C'
+project_root_rel = '项目管理-小秘书/【项目】全局任务统筹'
+task_root_rel = '项目管理-小秘书/【项目】全局任务统筹/任务规划'
+description = '全局任务统筹：已按小秘书看板标准接入（软链触达 + 任务空间 + 会话 JSON + 看板配置 + 构建刷新）。'
+
+[[projects.links]]
+label = '工作空间'
+url = 'file:项目管理-小秘书/【项目】全局任务统筹'
+
+[[projects.links]]
+label = '任务规划'
+url = 'file:项目管理-小秘书/【项目】全局任务统筹/任务规划'
+
+[[projects.links]]
+label = '会话配置'
+url = 'file:项目管理-小秘书/项目看板/task-dashboard/.sessions/global_task_ops.json'
+
+[[projects.channels]]
+name = '主体-全局任务标准总控'
+desc = '冻结契约与里程碑，统一验收口径，控制合并节奏与风险收敛'
+alias = ""
+cli_type = 'codex'
+
+[[projects.channels]]
+name = '01-子级-全局任务分配与派发'
+desc = '（待补充）'
+alias = ""
+cli_type = 'codex'
+
+[[projects.channels]]
+name = '02-子级-任务规格与字段词典'
+desc = '（待补充）'
+alias = ""
+cli_type = 'codex'
+
+[[projects.channels]]
+name = '03-子级-命名模板与状态流转治理'
+desc = '（待补充）'
+alias = ""
+cli_type = 'codex'
+
+[[projects.channels]]
+name = '04-子级-跨项目巡检与合规报表'
+desc = '（待补充）'
+alias = ""
+cli_type = 'codex'
+
+[[projects.channels]]
+name = '05-子级-例外审批与版本发布'
+desc = '（待补充）'
+alias = ""
+cli_type = 'codex'
+
+# --- AUTO: xms-onboard global_task_ops end ---
+
+# --- AUTO: xms-onboard ga_prototype start ---
+
+[[projects]]
+id = 'ga_prototype'
+name = 'GA原型'
+color = '#1F4B99'
+project_root_rel = '项目管理-小秘书/【项目】GA原型'
+task_root_rel = '项目管理-小秘书/【项目】GA原型/工作开展'
+description = 'GA原型：已按单源会话标准接入（.sessions 主数据 + 任务空间 + 看板配置 + 构建刷新）。'
+
+[[projects.links]]
+label = '工作空间'
+url = 'file:项目管理-小秘书/【项目】GA原型'
+
+[[projects.links]]
+label = '任务规划'
+url = 'file:项目管理-小秘书/【项目】GA原型/工作开展'
+
+[[projects.links]]
+label = '会话配置'
+url = 'file:项目管理-小秘书/项目看板/task-dashboard/.sessions/ga_prototype.json'
+
+[[projects.channels]]
+name = '主体-总任务批次'
+desc = '冻结契约与里程碑，统一验收口径，控制合并节奏与风险收敛'
+alias = "GA-BCP"
+cli_type = 'codex'
+
+[[projects.channels]]
+name = '子级-A-演示与集成'
+desc = '（待补充）'
+alias = "GA-BCP-story"
+cli_type = 'codex'
+
+[[projects.channels]]
+name = '子级-B-数据规格与建模'
+desc = '（待补充）'
+alias = "GA-BCP-data"
+cli_type = 'codex'
+
+[[projects.channels]]
+name = '子级-C-PCWeb前端与交互'
+desc = '任务/总览页交互体验：看-选-发-回溯-重试/回收'
+alias = "GA-BCP-front"
+cli_type = 'codex'
+
+[[projects.channels]]
+name = '子级-D-周边支撑与归属'
+desc = '（待补充）'
+alias = "GA-BCP-collaboration"
+cli_type = 'codex'
+
+# --- AUTO: xms-onboard ga_prototype end ---
+
+# --- AUTO: xms-onboard wx_industry_demo start ---
+
+[[projects]]
+id = 'wx_industry_demo'
+name = 'WX行业demo'
+color = '#0B7A75'
+project_root_rel = '项目管理-小秘书/【项目】WX行业demo'
+task_root_rel = '项目管理-小秘书/【项目】WX行业demo/工作开展'
+description = 'WX行业demo：已按小秘书看板标准接入（软链触达 + 任务空间 + 会话 JSON + 看板配置 + 构建刷新）。'
+
+[[projects.links]]
+label = '工作空间'
+url = 'file:项目管理-小秘书/【项目】WX行业demo'
+
+[[projects.links]]
+label = '任务规划'
+url = 'file:项目管理-小秘书/【项目】WX行业demo/工作开展'
+
+[[projects.links]]
+label = '会话配置'
+url = 'file:项目管理-小秘书/项目看板/task-dashboard/.sessions/wx_industry_demo.json'
+
+[[projects.channels]]
+name = '00-主体-总任务批次'
+desc = '冻结契约与里程碑，统一验收口径，控制合并节奏与风险收敛'
+alias = ""
+cli_type = 'codex'
+
+[[projects.channels]]
+name = '01-子级-行业研究与业务分析'
+desc = '（待补充）'
+alias = ""
+cli_type = 'codex'
+
+[[projects.channels]]
+name = '02-子级-会议需求管理与业务策划'
+desc = '（待补充）'
+alias = ""
+cli_type = 'codex'
+
+[[projects.channels]]
+name = '03-子级-行业数据分析与指标模型'
+desc = '（待补充）'
+alias = ""
+cli_type = 'codex'
+
+[[projects.channels]]
+name = '04-子级-知识库沉淀与需求资产管理'
+desc = '（待补充）'
+alias = ""
+cli_type = 'codex'
+
+[[projects.channels]]
+name = '05-子级-POC方案与技术验证'
+desc = '（待补充）'
+alias = ""
+cli_type = 'codex'
+
+[[projects.channels]]
+name = '06-子级-静态Demo制作与演示交付'
+desc = '（待补充）'
+alias = ""
+cli_type = 'codex'
+
+[[projects.channels]]
+name = '99-辅助-杂项协作支持'
+desc = '承接临时杂项、跨通道协作与非主链路支撑事项'
+alias = ""
+cli_type = 'codex'
+
+# --- AUTO: xms-onboard wx_industry_demo end ---
+
+[[projects]]
+id = "task_dashboard_open_source_execution"
+name = "Qoreon·开源执行项目"
+color = "#0E7490"
+project_root_rel = "项目管理-小秘书/【项目】task_dashboard开源执行层（65）"
+task_root_rel = "项目管理-小秘书/【项目】task_dashboard开源执行层（65）/任务规划"
+description = "Qoreon 开源执行主盘面：当前唯一用户可见的开源日常执行项目，承接导出脱敏、文档示例、测试验收与 Git 发布同步。"
+
+[[projects.links]]
+label = "工作空间"
+url = "file:项目管理-小秘书/【项目】task_dashboard开源执行层（65）"
+
+[[projects.links]]
+label = "任务规划"
+url = "file:项目管理-小秘书/【项目】task_dashboard开源执行层（65）/任务规划"
+
+[[projects.links]]
+label = "README"
+url = "file:项目管理-小秘书/【项目】task_dashboard开源执行层（65）/README.md"
+
+[[projects.links]]
+label = "项目会话真源"
+url = "file:项目管理-小秘书/项目看板/task-dashboard/.runtime/stable/.sessions/task_dashboard_open_source_execution.json"
+
+[[projects.links]]
+label = "兼容会话镜像"
+url = "file:项目管理-小秘书/【项目】task_dashboard开源执行层（65）/.sessions/task_dashboard_open_source_execution.json"
+
+[[projects.links]]
+label = "项目通讯录"
+url = "file:项目管理-小秘书/【项目】task_dashboard开源执行层（65）/registry/collab-registry.view.md"
+
+[[projects.channels]]
+name = "主体-总控（开源筹备-合并与发布）"
+desc = "冻结开源筹备范围、发布批次、合并门禁与最终收口口径"
+alias = "开源筹备总控"
+cli_type = "codex"
+
+[[projects.channels]]
+name = "子级01-开源仓导出与脱敏"
+desc = "负责私有主仓到公开仓的白名单导出、脱敏清理与边界校验"
+alias = "开源导出脱敏"
+cli_type = "codex"
+
+[[projects.channels]]
+name = "子级02-文档与示例工程"
+desc = "负责公开版文档、示例工程、示例配置与开源说明材料"
+alias = "开源文档示例"
+cli_type = "codex"
+
+[[projects.channels]]
+name = "子级03-测试与验收（开源发布）"
+desc = "负责开源版 smoke、回归、发布验收与质量门禁"
+alias = "开源测试验收"
+cli_type = "codex"
+
+[[projects.channels]]
+name = "辅助01-结构治理与项目接入"
+desc = "负责项目结构、会话真源、配置契约、CCR 与初始化训练支撑"
+alias = "开源结构治理"
+cli_type = "codex"
+
+[[projects.channels]]
+name = "辅助02-Git桥接与发布同步"
+desc = "负责私有仓、公开仓与开源筹备项目之间的 Git 桥接与发布同步"
+alias = "开源Git桥接"
+cli_type = "codex"
+
+[[projects.channels]]
+name = "子级04-远程安装交付与客户接入"
+desc = "负责远程安装需求收件、环境预审、远程安装交付、验收、回访与升级包跟进。"
+alias = "开源远程安装交付"
+cli_type = "codex"
+[projects.execution_context]
+profile = "project_privileged_full"
+environment = "stable"
+worktree_root = "/Users/liutingqzh/workspace/xiaomishu/项目管理-小秘书/【项目】task_dashboard开源执行层（65）"
+workdir = "/Users/liutingqzh/workspace/xiaomishu/项目管理-小秘书/【项目】task_dashboard开源执行层（65）"
+branch = ""
+runtime_root = "/Users/liutingqzh/workspace/xiaomishu/项目管理-小秘书/项目看板/task-dashboard/.runtime/stable"
+sessions_root = "/Users/liutingqzh/workspace/xiaomishu/项目管理-小秘书/项目看板/task-dashboard/.runtime/stable/.sessions"
+runs_root = "/Users/liutingqzh/workspace/xiaomishu/项目管理-小秘书/项目看板/task-dashboard/.runtime/stable/.runs"
+server_port = "18765"
+health_source = "http://127.0.0.1:18765/__health"
+
+
+[projects.heartbeat]
+
+enabled = true
+scan_interval_seconds = 30
+tasks = [{ heartbeat_task_id = "qoreon-community-watch-6h", title = "Qoreon社区巡检与答疑（6h）", enabled = true, channel_name = "子级02-文档与示例工程", session_id = "019d08d3-8a2c-72b3-aba5-c14ad73d0747", preset_key = "ops_inspection", prompt_template = "请执行一轮 Qoreon 在线社区巡检与答疑。你当前身份是 `开源社区收件与回复`。必须完成：1) 检查 GitHub Issues / Discussions / PR 与外部社区待回复项；2) 收集新增或无人响应的问题；3) 能直接回答的直接回复，回复结尾统一使用 `Qoreon-开源执行项目-开源社区收件与回复（Agent）`；4) 若需要其他 Agent 直接上线回复，要求其使用 `Qoreon-开源执行项目-<实际回复Agent名>（Agent）`；5) 任何涉及“已发布 / 已修复 / 已可升级”的表述，先联系 `开发/开源仓库同步` 核对公开提交、tag 或 release 状态；6) 有阻塞时回 `开源筹备总控`（session_id=019d08d3-2f65-7c53-96fd-a464c870e23f）；7) 无新增问题也要输出：当前结论 / 是否通过或放行 / 唯一阻塞 / 关键路径或 run_id / 下一步动作。", schedule_type = "interval", interval_minutes = 360, daily_time = "", weekdays = [1, 2, 3, 4, 5, 6, 7], busy_policy = "run_on_next_idle", context_scope = { recent_tasks_limit = 5, recent_runs_limit = 5, include_task_counts = true, include_recent_tasks = true, include_recent_runs = true } }]
+[[projects]]
+id = "requirementsreviewsystem"
+name = "需求评审系统"
+color = "#0F63F2"
+project_root_rel = "Requirements-Review-System"
+task_root_rel = "Requirements-Review-System/任务规划"
+description = "可以对外展示其他项目的demo页面，并且可以收集需求的项目，跟进关联需求处理情况的系统"
+
+[[projects.links]]
+label = "工作空间"
+url = "file:Requirements-Review-System"
+
+[[projects.links]]
+label = "任务规划"
+url = "file:Requirements-Review-System/任务规划"
+
+[[projects.links]]
+label = "README"
+url = "file:Requirements-Review-System/README.md"
+
+[[projects.links]]
+label = "项目会话真源"
+url = "file:.runtime/stable/.sessions/requirementsreviewsystem.json"
+
+[[projects.channels]]
+name = "主体-总控"
+desc = "负责项目方向、边界、真源、关键裁决和最终验收"
+cli_type = "codex"
+structure_layer = "主体"
+requires_primary = true
+formal_dispatch_entry = true
+
+[[projects.channels]]
+name = "辅助01-项目管理"
+desc = "负责任务拆解、节奏推进、协作收口与归档"
+cli_type = "codex"
+structure_layer = "辅助"
+requires_primary = true
+formal_dispatch_entry = true
+
+[[projects.channels]]
+name = "业务01-产品方案与信息架构"
+desc = "负责产品规则、需求模型、页面 IA 与业务边界"
+cli_type = "codex"
+structure_layer = "业务"
+requires_primary = true
+formal_dispatch_entry = true
+
+[[projects.channels]]
+name = "业务02-插件接入与宿主集成"
+desc = "负责悬浮插件、宿主接入、上下文采集与身份透传"
+cli_type = "codex"
+structure_layer = "业务"
+requires_primary = true
+formal_dispatch_entry = true
+
+[[projects.channels]]
+name = "业务03-平台实现与数据集成"
+desc = "负责后台实现、接口、数据模型、任务关联与身份闭环"
+cli_type = "codex"
+structure_layer = "业务"
+requires_primary = true
+formal_dispatch_entry = true
+
+[[projects.channels]]
+name = "辅助02-测试验收与上线保障"
+desc = "负责链路验证、接入验收、回归检查和上线前确认"
+cli_type = "codex"
+structure_layer = "辅助"
+requires_primary = true
+formal_dispatch_entry = true
+
+[[projects.channels]]
+name = "辅助03-方案质疑与评审"
+desc = "负责独立质疑、反证评审、风险拦截与反向验证"
+cli_type = "codex"
+structure_layer = "辅助"
+requires_primary = true
+formal_dispatch_entry = true
+[projects.execution_context]
+profile = "project_privileged_full"
+environment = "stable"
+worktree_root = "/Users/liutingqzh/workspace/xiaomishu/Requirements-Review-System"
+workdir = "/Users/liutingqzh/workspace/xiaomishu/Requirements-Review-System"
+runtime_root = "/Users/liutingqzh/workspace/xiaomishu/项目管理-小秘书/项目看板/task-dashboard/.runtime/stable"
+sessions_root = "/Users/liutingqzh/workspace/xiaomishu/.runtime/stable/.sessions"
+runs_root = "/Users/liutingqzh/workspace/xiaomishu/.runtime/stable/.runs"
+
+[projects.heartbeat]
+
+enabled = true
+scan_interval_seconds = 30
+tasks = [{ heartbeat_task_id = "requirementsreviewsystem-m06-pulse", title = "M06批次心跳提醒", enabled = false, channel_name = "辅助01-项目管理", session_id = "019d51f6-9f4f-7df2-b471-af75c684617b", preset_key = "ops_inspection", prompt_template = "这是一条心跳任务，目标是完成 M06-专业化视觉改版与方案选型实施推进 任务，请继续推进。", schedule_type = "interval", interval_minutes = 20, daily_time = "", weekdays = [1, 2, 3, 4, 5, 6, 7], busy_policy = "run_on_next_idle", max_execute_count = 8, context_scope = { recent_tasks_limit = 3, recent_runs_limit = 3, include_task_counts = true, include_recent_tasks = true, include_recent_runs = true } }]
+[[projects]]
+id = "talent_management"
+name = "人才管理与面试评估"
+color = "#176B87"
+project_root_rel = "项目管理-小秘书/【项目】人才管理与面试评估"
+task_root_rel = "项目管理-小秘书/【项目】人才管理与面试评估/任务规划"
+description = "用于统一管理现有团队成员资料、候选人资料、面试评价结论与可视化展示，并为后续权限、流程与人才盘点扩展预留结构。"
+
+[[projects.links]]
+label = "工作空间"
+url = "file:项目管理-小秘书/【项目】人才管理与面试评估"
+
+[[projects.links]]
+label = "任务规划"
+url = "file:项目管理-小秘书/【项目】人才管理与面试评估/任务规划"
+
+[[projects.links]]
+label = "README"
+url = "file:项目管理-小秘书/【项目】人才管理与面试评估/README.md"
+
+[[projects.links]]
+label = "项目会话真源"
+url = "file:.runtime/stable/.sessions/talent_management.json"
+
+[[projects.channels]]
+name = "主体-总控（范围-排期-验收）"
+desc = "负责需求收敛、节奏推进、验收与跨通道协调。"
+cli_type = "codex"
+
+[[projects.channels]]
+name = "子级01-团队成员档案（资料-角色-履历）"
+desc = "负责现有团队成员资料、角色画像、履历和状态维护。"
+cli_type = "codex"
+
+[[projects.channels]]
+name = "子级02-候选人档案（简历-来源-附件）"
+desc = "负责候选人资料接收、来源跟踪、简历与附件归档。"
+cli_type = "codex"
+
+[[projects.channels]]
+name = "子级03-面试评估与结论（流程-评分-反馈）"
+desc = "负责面试流程、评价维度、评分记录与录用结论整理。"
+cli_type = "codex"
+
+[[projects.channels]]
+name = "子级04-可视化看板（统计-分析-展示）"
+desc = "负责成员与候选人统计、评估结果可视化与展示页面。"
+cli_type = "codex"
+
+[[projects.channels]]
+name = "子级05-规则与模板（标准-表单-题库）"
+desc = "负责评分标准、表单模板、面试题库与流程规则沉淀。"
+cli_type = "codex"
+
+[[projects.channels]]
+name = "子级01-候选人资料评分和整理"
+desc = "将候选人的材料中的简历以及作品进行评估和评分，形成对于候选人的自动评价工作"
+cli_type = "codex"
+
+[[projects.channels]]
+name = "子级01-简历评估"
+desc = "人才的简历和经历评估"
+cli_type = "codex"
+
+[[projects.channels]]
+name = "子级06-数据台账与导入导出（字段-权限-同步）"
+desc = "负责字段模型、台账结构、导入导出和后续权限边界预留。"
+cli_type = "codex"
+
+[[projects]]
+id = "zhongtai"
+name = "中台统计类型"
+color = "#0F63F2"
+project_root_rel = "projects/zhongtaitongji"
+task_root_rel = "projects/zhongtaitongji/任务规划"
+description = "中台数据治理，以及统计分析"
+
+[[projects.links]]
+label = "工作空间"
+url = "file:projects/zhongtaitongji"
+
+[[projects.links]]
+label = "任务规划"
+url = "file:projects/zhongtaitongji/任务规划"
+
+[[projects.links]]
+label = "README"
+url = "file:projects/zhongtaitongji/README.md"
+
+[[projects.links]]
+label = "项目会话真源"
+url = "file:.runtime/stable/.sessions/zhongtai.json"
+
+[[projects.channels]]
+name = "主体-总控"
+desc = "总控通道"
+cli_type = "codex"
+
+[[projects.channels]]
+name = "辅助01-项目管理"
+desc = "负责项目管理与启动协调。"
+cli_type = "codex"
+structure_layer = "现役主干"
+requires_primary = true
+formal_dispatch_entry = false
+
+[[projects.channels]]
+name = "业务01-数据治理"
+desc = "负责样本数据、字段字典、指标口径与演示样例数据。"
+cli_type = "codex"
+structure_layer = "现役主干"
+requires_primary = true
+formal_dispatch_entry = false
+
+[[projects.channels]]
+name = "业务02-产品Demo"
+desc = "负责页面结构、模块定义、Demo 原型与演示脚本。"
+cli_type = "codex"
+structure_layer = "现役主干"
+requires_primary = true
+formal_dispatch_entry = false
+
+[[projects.channels]]
+name = "业务03-研发实现"
+desc = "负责前端展示、接口适配与联调实现。"
+cli_type = "codex"
+structure_layer = "现役主干"
+requires_primary = true
+formal_dispatch_entry = false
+
+[[projects.channels]]
+name = "业务04-测试验收"
+desc = "负责测试方案、缺陷回归与验收清单。"
+cli_type = "codex"
+structure_layer = "现役主干"
+requires_primary = true
+formal_dispatch_entry = false
+
+[[projects.channels]]
+name = "业务05-部署发布"
+desc = "负责环境部署、发布窗口与回滚管理。"
+cli_type = "codex"
+structure_layer = "待启用通道"
+requires_primary = false
+formal_dispatch_entry = false
+
+[[projects.channels]]
+name = "专题01-非遗数据储备"
+desc = "负责非遗专题的数据储备、样例准备与后续扩展预研。"
+cli_type = "codex"
+structure_layer = "待启用通道"
+requires_primary = false
+formal_dispatch_entry = false
+
+[projects.execution_context]
+profile = "project_privileged_full"
+environment = "stable"
+worktree_root = "/Users/liutingqzh/workspace/xiaomishu/projects/zhongtaitongji"
+workdir = "/Users/liutingqzh/workspace/xiaomishu/projects/zhongtaitongji"
+runtime_root = "/Users/liutingqzh/workspace/xiaomishu/.runtime/stable"
+sessions_root = "/Users/liutingqzh/workspace/xiaomishu/.runtime/stable/.sessions"
+runs_root = "/Users/liutingqzh/workspace/xiaomishu/.runtime/stable/.runs"
+
+[[projects.channels]]
+name = "主体02-业务管理"
+desc = "业务专家，站在业务的角度上，提供审查和建议视角"
+cli_type = "codex"
+structure_layer = "现役主干"
+requires_primary = true
+formal_dispatch_entry = false
+
+[[projects]]
+id = "clitools"
+name = "工具集合（CLI）"
+color = "#0F63F2"
+project_root_rel = "projects/CLItools"
+task_root_rel = "projects/CLItools/任务规划"
+description = "管理和制造CLI工具，以便全局项目使用"
+
+[[projects.links]]
+label = "工作空间"
+url = "file:projects/CLItools"
+
+[[projects.links]]
+label = "任务规划"
+url = "file:projects/CLItools/任务规划"
+
+[[projects.links]]
+label = "README"
+url = "file:projects/CLItools/README.md"
+
+[[projects.links]]
+label = "项目会话真源"
+url = "file:.runtime/stable/.sessions/clitools.json"
+
+[[projects.channels]]
+name = "主体-总控"
+desc = "总控通道"
+cli_type = "codex"
+
+[[projects.channels]]
+name = "CLI规范与注册中心"
+desc = "负责 CLI 规范、命名约束、注册中心与元数据治理"
+cli_type = "codex"
+
+[[projects.channels]]
+name = "网站转CLI适配"
+desc = "负责将现有网站能力转换为 CLI 可执行入口与操作流"
+cli_type = "codex"
+
+[[projects.channels]]
+name = "现有CLI接入与封装"
+desc = "负责现有 CLI 的接入、统一封装与调用适配"
+cli_type = "codex"
+
+[[projects.channels]]
+name = "认证与运行治理"
+desc = "负责认证、权限、环境约束与运行异常治理"
+cli_type = "codex"
+
+[[projects.channels]]
+name = "分发安装与项目接入"
+desc = "负责分发安装、项目接入与落地初始化路径"
+cli_type = "codex"
+
+[projects.execution_context]
+profile = "project_privileged_full"
+environment = "stable"
+worktree_root = "/Users/liutingqzh/workspace/xiaomishu/projects/CLItools"
+workdir = "/Users/liutingqzh/workspace/xiaomishu/projects/CLItools"
+
+
+[projects.perf_governance]
+enabled = true
+sessions_cache_ttl_ms = 1500
+sessions_inflight_wait_ms = 5000
+sessions_poll_interval_ms = 3000
+sessions_hidden_poll_interval_ms = 15000
+sessions_backoff_step_ms = 2000
+sessions_backoff_max_ms = 15000
+sessions_pause_when_hidden = true
+sessions_cross_tab_dedupe_enabled = true
+[[projects]]
+id = "qoreon_official_site"
+name = "【项目】Qoreon官方网站建设与维护"
+color = "#0F766E"
+project_root_rel = "项目管理-小秘书/【项目】Qoreon官方网站建设与维护"
+task_root_rel = "项目管理-小秘书/【项目】Qoreon官方网站建设与维护/任务规划"
+description = "Qoreon 官方对外承接站与后续网站建设维护项目，首期聚焦项目介绍、GitHub 导流、远程安装服务承接、需求收集与基础流量分析。"
+
+[[projects.links]]
+label = "工作空间"
+url = "file:项目管理-小秘书/【项目】Qoreon官方网站建设与维护"
+
+[[projects.links]]
+label = "任务规划"
+url = "file:项目管理-小秘书/【项目】Qoreon官方网站建设与维护/任务规划"
+
+[[projects.links]]
+label = "README"
+url = "file:项目管理-小秘书/【项目】Qoreon官方网站建设与维护/README.md"
+
+[[projects.links]]
+label = "项目会话真源"
+url = "file:.runtime/stable/.sessions/qoreon_official_site.json"
+
+[[projects.links]]
+label = "GitHub"
+url = "https://github.com"
+
+[[projects.links]]
+label = "官网"
+url = "https://qoreon.com"
+
+[[projects.channels]]
+name = "主体-总控（官网专项范围-优先级-验收）"
+desc = "负责官网专项范围、优先级、验收与维护节奏。"
+cli_type = "codex"
+structure_layer = "现役主干"
+requires_primary = true
+formal_dispatch_entry = true
+
+[[projects.channels]]
+name = "子级01-产品与信息架构（定位-栏目-承接路径）"
+desc = "负责官网定位、栏目结构、承接路径与文案框架。"
+cli_type = "codex"
+structure_layer = "现役主干"
+requires_primary = true
+formal_dispatch_entry = true
+
+[[projects.channels]]
+name = "子级03-内容与转化（介绍-服务说明-FAQ-CTA）"
+desc = "负责项目介绍、服务说明、FAQ、案例与 CTA。"
+cli_type = "codex"
+structure_layer = "现役主干"
+requires_primary = true
+formal_dispatch_entry = true
+
+[[projects.channels]]
+name = "子级04-反馈与运营回流（线索-表单-数据复盘）"
+desc = "负责线索收集、表单整理、问题回流与数据复盘。"
+cli_type = "codex"
+structure_layer = "现役主干"
+requires_primary = true
+formal_dispatch_entry = true
+
+[[projects.channels]]
+name = "子级02-网站实现开发（前端-页面-交互实现）"
+desc = "负责官网页面开发实现、组件交付、前端联调与研发迭代。"
+cli_type = "codex"
+structure_layer = "现役主干"
+requires_primary = true
+formal_dispatch_entry = true
+
+[[projects.channels]]
+name = "子级05-网站发布与运维（部署-监控-安全巡检）"
+desc = "负责官网部署发布、运行监控、安全巡检、域名证书与线上稳定性保障。"
+cli_type = "codex"
+structure_layer = "现役主干"
+requires_primary = true
+formal_dispatch_entry = true
+
+[[projects.channels]]
+name = "主体01-用户"
+desc = "站在用户的视角，提出意见和思考问题，对当前正在开展的工作纠偏，替用户发声"
+cli_type = "codex"
+[projects.execution_context]
+profile = "project_privileged_full"
+environment = "stable"
+worktree_root = "/Users/liutingqzh/workspace/xiaomishu/项目管理-小秘书/【项目】Qoreon官方网站建设与维护"
+workdir = "/Users/liutingqzh/workspace/xiaomishu/项目管理-小秘书/【项目】Qoreon官方网站建设与维护"
+runtime_root = "/Users/liutingqzh/workspace/xiaomishu/项目管理-小秘书/项目看板/task-dashboard/.runtime/stable"
+sessions_root = "/Users/liutingqzh/workspace/xiaomishu/项目管理-小秘书/项目看板/task-dashboard/.runtime/stable/.sessions"
+runs_root = "/Users/liutingqzh/workspace/xiaomishu/项目管理-小秘书/项目看板/task-dashboard/.runtime/stable/.runs"
+
+[projects.heartbeat]
+
+enabled = true
+scan_interval_seconds = 30
+tasks = []
+
+[projects.perf_governance]
+enabled = true
+sessions_cache_ttl_ms = 1500
+sessions_inflight_wait_ms = 5000
+sessions_poll_interval_ms = 3000
+sessions_hidden_poll_interval_ms = 15000
+sessions_backoff_step_ms = 2000
+sessions_backoff_max_ms = 15000
+sessions_pause_when_hidden = true
+sessions_cross_tab_dedupe_enabled = true
+
+[[projects]]
+id = "ndt"
+name = "NDT"
+color = "#0F63F2"
+project_root_rel = "projects/NDT"
+task_root_rel = "projects/NDT/任务规划"
+description = "数字孪生构建平台"
+
+[[projects.links]]
+label = "工作空间"
+url = "file:projects/NDT"
+
+[[projects.links]]
+label = "任务规划"
+url = "file:projects/NDT/任务规划"
+
+[[projects.links]]
+label = "README"
+url = "file:projects/NDT/README.md"
+
+[[projects.links]]
+label = "项目会话真源"
+url = "file:.runtime/stable/.sessions/ndt.json"
+
+[[projects.channels]]
+name = "主体-总控"
+desc = "历史兼容入口；用于当前主会话与团队初始化过渡。"
+cli_type = "codex"
+
+[[projects.channels]]
+name = "主体01-产品方案与业务结构"
+desc = "负责产品方案、业务结构、演示主线与投标业务口径。"
+cli_type = "codex"
+
+[[projects.channels]]
+name = "主体02-平台架构与标准治理"
+desc = "负责平台分层、动态本体与数据中台标准治理。"
+cli_type = "codex"
+
+[[projects.channels]]
+name = "主体03-视觉主题与展示规范"
+desc = "负责浅色投标主题、整体视觉方向与展示规范。"
+cli_type = "codex"
+
+[[projects.channels]]
+name = "业务01-赛事场景与演示规划"
+desc = "负责赛前赛时赛后场景脚本与演示主线。"
+cli_type = "codex"
+
+[[projects.channels]]
+name = "业务02-动态本体与实体语义规划"
+desc = "负责实体、关系、事件、状态与语义口径。"
+cli_type = "codex"
+
+[[projects.channels]]
+name = "业务03-指标体系与预案评估规划"
+desc = "负责指标体系、预案验证与漂移检测业务口径。"
+cli_type = "codex"
+
+[[projects.channels]]
+name = "开发01-前端Demo与可视化实现"
+desc = "负责前端 Demo 页面、交互与可视化实现。"
+cli_type = "codex"
+
+[[projects.channels]]
+name = "开发02-场景流程与交互编排实现"
+desc = "负责场景流程落地、交互编排与联动。"
+cli_type = "codex"
+
+[[projects.channels]]
+name = "开发03-Mock接口与服务编排实现"
+desc = "负责 mock API、服务编排与事件串联。"
+cli_type = "codex"
+
+[[projects.channels]]
+name = "开发04-模拟数据与数据接入实现"
+desc = "负责模拟数据生成、字段映射与数据接入。"
+cli_type = "codex"
+
+[[projects.channels]]
+name = "开发05-推演算法与规划引擎实现"
+desc = "负责规划算法、推演逻辑与最小可演示引擎。"
+cli_type = "codex"
+
+[[projects.channels]]
+name = "开发06-服务器发布与部署实施"
+desc = "负责服务器发布、部署执行、上线校验与回滚收口。"
+cli_type = "codex"
+
+[[projects.channels]]
+name = "测试01-功能测试与联调回归"
+desc = "负责功能链路、接口联调与回归验证。"
+cli_type = "codex"
+
+[[projects.channels]]
+name = "测试02-用户体验与演示验收"
+desc = "负责演示流畅度、用户体验与展示验收。"
+cli_type = "codex"
+
+[[projects.channels]]
+name = "测试03-数据结果与业务口径验证"
+desc = "负责数据结果、指标输出与业务口径校验。"
+cli_type = "codex"
+
+[[projects.channels]]
+name = "辅助01-项目助理与任务协同"
+desc = "负责打杂协同、催办、进度同步与台账维护。"
+cli_type = "codex"
+
+[[projects.channels]]
+name = "辅助02-文档沉淀与投标材料整理"
+desc = "负责 MD 文档、架构说明与投标材料整理。"
+cli_type = "codex"
+
+[[projects.channels]]
+name = "辅助03-Git仓库管理"
+desc = "负责 Git 仓库治理、分支策略、提交规范与发布前仓库收口。"
+cli_type = "codex"
+
+[[projects.channels]]
+name = "辅助04-项目日志"
+desc = "负责项目日常记录、阶段汇报整理、关键事件留痕与日志台账维护。"
+cli_type = "codex"
+[projects.execution_context]
+profile = "project_privileged_full"
+environment = "stable"
+worktree_root = "/Users/liutingqzh/workspace/xiaomishu/projects/NDT"
+workdir = "/Users/liutingqzh/workspace/xiaomishu/projects/NDT"
+runtime_root = "/Users/liutingqzh/workspace/xiaomishu/项目管理-小秘书/项目看板/task-dashboard/.runtime/stable"
+sessions_root = "/Users/liutingqzh/workspace/xiaomishu/项目管理-小秘书/项目看板/task-dashboard/.runtime/stable/.sessions"
+runs_root = "/Users/liutingqzh/workspace/xiaomishu/项目管理-小秘书/项目看板/task-dashboard/.runtime/stable/.runs"
+
+[[projects]]
+id = "xqxt"
+name = "选情系统"
+color = "#0F63F2"
+project_root_rel = "projects/xqxt"
+task_root_rel = "projects/xqxt/任务规划"
+description = "选情系统，帮助测试"
+
+[[projects.links]]
+label = "工作空间"
+url = "file:projects/xqxt"
+
+[[projects.links]]
+label = "任务规划"
+url = "file:projects/xqxt/任务规划"
+
+[[projects.links]]
+label = "README"
+url = "file:projects/xqxt/README.md"
+
+[[projects.links]]
+label = "项目会话真源"
+url = "file:.runtime/stable/.sessions/xqxt.json"
+
+[[projects.channels]]
+name = "总控分工"
+desc = "项目默认总控分工"
+cli_type = "codex"
+
+[projects.execution_context]
+profile = "project_privileged_full"
+environment = "stable"
+worktree_root = "/Users/liutingqzh/workspace/xiaomishu/projects/xqxt"
+workdir = "/Users/liutingqzh/workspace/xiaomishu/projects/xqxt"
+runtime_root = "/Users/liutingqzh/workspace/xiaomishu/.runtime/stable"
+sessions_root = "/Users/liutingqzh/workspace/xiaomishu/.runtime/stable/.sessions"
+runs_root = "/Users/liutingqzh/workspace/xiaomishu/.runtime/stable/.runs"
+
+[[projects]]
+id = "techtools"
+name = "教育培训"
+color = "#0F63F2"
+project_root_rel = "projects/techtools"
+task_root_rel = "projects/techtools/任务规划"
+description = "使用开源的项目搭建云端智能体，帮助学员掌握智能体的使用和跑通项目开发上线的流程。"
+
+[[projects.links]]
+label = "工作空间"
+url = "file:projects/techtools"
+
+[[projects.links]]
+label = "任务规划"
+url = "file:projects/techtools/任务规划"
+
+[[projects.links]]
+label = "README"
+url = "file:projects/techtools/README.md"
+
+[[projects.links]]
+label = "项目会话真源"
+url = "file:项目管理-小秘书/项目看板/task-dashboard/.runtime/stable/.sessions/techtools.json"
+
+[[projects.channels]]
+name = "总控分工"
+desc = "项目默认总控分工"
+cli_type = "codex"
+agent_name = "项目总负责"
+structure_layer = "现役主干"
+requires_primary = true
+formal_dispatch_entry = true
+
+[[projects.channels]]
+name = "辅助01-项目协同与任务台账"
+desc = "项目启动、任务台账、CCR与回执协调"
+cli_type = "codex"
+agent_name = "项目助理"
+structure_layer = "现役主干"
+requires_primary = true
+formal_dispatch_entry = true
+
+[[projects.channels]]
+name = "主体01-产品策划与教学流程"
+desc = "教学链路、角色交互、页面范围、PRD 与流程规格"
+cli_type = "codex"
+agent_name = "产品策划"
+structure_layer = "现役主干"
+requires_primary = true
+formal_dispatch_entry = true
+
+[[projects.channels]]
+name = "主体02-平台架构与协作治理"
+desc = "Qoreon/opencode/CCB/session 契约、权限边界、协作规范"
+cli_type = "codex"
+agent_name = "架构治理"
+structure_layer = "现役主干"
+requires_primary = true
+formal_dispatch_entry = true
+
+[[projects.channels]]
+name = "业务01-任务机制与验收状态机"
+desc = "任务流转、状态机、阻塞口径、验收门禁、证据规则"
+cli_type = "codex"
+agent_name = "任务机制"
+structure_layer = "现役主干"
+requires_primary = true
+formal_dispatch_entry = true
+
+[[projects.channels]]
+name = "开发01-教学工作台前端"
+desc = "讲师端、学员端、观察舱页面与交互实现"
+cli_type = "codex"
+agent_name = "教学前端"
+structure_layer = "现役主干"
+requires_primary = true
+formal_dispatch_entry = true
+
+[[projects.channels]]
+name = "开发02-Session编排与CCB控制面"
+desc = "session 创建、派发、观察、干预与控制面实现"
+cli_type = "codex"
+agent_name = "编排控制面"
+structure_layer = "现役主干"
+requires_primary = true
+formal_dispatch_entry = true
+
+[[projects.channels]]
+name = "开发03-Docker沙盒与工作区隔离"
+desc = "组级容器、卷、网络、工作区与执行隔离"
+cli_type = "codex"
+agent_name = "沙盒隔离"
+structure_layer = "现役主干"
+requires_primary = true
+formal_dispatch_entry = true
+
+[[projects.channels]]
+name = "开发04-预览发布与移动访问"
+desc = "局域网/手机访问、预览发布链路与访问入口"
+cli_type = "codex"
+agent_name = "预览发布"
+structure_layer = "现役主干"
+requires_primary = true
+formal_dispatch_entry = true
+
+[[projects.channels]]
+name = "开发05-示例工程与模板资产"
+desc = "销售 App 样例工程、模板资产、种子数据"
+cli_type = "codex"
+agent_name = "案例工程"
+structure_layer = "现役主干"
+requires_primary = true
+formal_dispatch_entry = true
+
+[[projects.channels]]
+name = "测试01-功能联调与流程回归"
+desc = "功能联调、主链路回归、状态推进验证"
+cli_type = "codex"
+agent_name = "联调回归"
+structure_layer = "现役主干"
+requires_primary = true
+formal_dispatch_entry = true
+
+[[projects.channels]]
+name = "辅助02-文档沉淀与课程资料"
+desc = "工程文档、课程资料、共享沉淀与复用资料库"
+cli_type = "codex"
+agent_name = "文档沉淀"
+structure_layer = "现役主干"
+requires_primary = true
+formal_dispatch_entry = true
+
+[[projects.channels]]
+name = "主体03-体验交互与可视化规范"
+desc = "小人动画、教学可视化、动效与界面规范"
+cli_type = "codex"
+agent_name = "体验规范"
+structure_layer = "待启用通道"
+requires_primary = true
+formal_dispatch_entry = false
+
+[[projects.channels]]
+name = "业务02-课程案例与教学模板"
+desc = "多课程案例模板、课程剧本与任务模板包"
+cli_type = "codex"
+agent_name = "课程模板"
+structure_layer = "待启用通道"
+requires_primary = true
+formal_dispatch_entry = false
+
+[[projects.channels]]
+name = "测试02-教学体验与课堂验收"
+desc = "讲师侧/学员侧教学体验与课堂感知验收"
+cli_type = "codex"
+agent_name = "课堂验收"
+structure_layer = "待启用通道"
+requires_primary = true
+formal_dispatch_entry = false
+
+[[projects.channels]]
+name = "辅助03-Git与发布治理"
+desc = "仓库治理、分支发布、回滚与版本口径"
+cli_type = "codex"
+agent_name = "发布治理"
+structure_layer = "待启用通道"
+requires_primary = true
+formal_dispatch_entry = false
+[projects.execution_context]
+profile = "project_privileged_full"
+environment = "stable"
+worktree_root = "/Users/liutingqzh/workspace/xiaomishu/projects/techtools"
+workdir = "/Users/liutingqzh/workspace/xiaomishu/projects/techtools"
+runtime_root = "/Users/liutingqzh/workspace/xiaomishu/.runtime/stable"
+sessions_root = "/Users/liutingqzh/workspace/xiaomishu/项目管理-小秘书/项目看板/task-dashboard/.runtime/stable/.sessions"
+runs_root = "/Users/liutingqzh/workspace/xiaomishu/项目管理-小秘书/项目看板/task-dashboard/.runtime/stable/.runs"

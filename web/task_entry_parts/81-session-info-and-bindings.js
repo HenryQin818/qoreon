@@ -125,7 +125,6 @@
       channelName: "",
       mode: "create",
       legacyBindingEntry: false,
-      retryPendingBlockId: "",
       initMessageDirty: false,
       advancedOpen: false,
       advancedBound: false,
@@ -202,7 +201,7 @@
         "- 至少重点学习：agent-init-training-playbook、collab-message-send（或当前项目等效的正式消息技能）、当前通道自己的专项 skill。",
         "",
         "4. 学会怎么发正式消息",
-        "- 跨 Agent / 跨通道协作只能走系统正式 announce 接口（announce_to_channel），不能把内部草稿、内部 spawn、非正式 resume 当成“已通知通道”。",
+        "- 跨 Agent / 跨通道协作只能走 http://127.0.0.1:18765/api/codex/announce（announce_to_channel），不能把内部草稿、内部 spawn、非正式 resume 当成“已通知通道”。",
         "- 正式消息默认用你当前执行 Agent 自己的身份发送，不借用项目主会话、总控或其他通道 Agent 身份。",
         "- 没有 announce_run_id 时，不得写已发出 / 已送达 / 已通知通道。",
         "- 正式通知成功至少分三层判断：已生成待发送正文 / 已提交发送，待验证 / 已完成证据闭环。",
@@ -437,38 +436,6 @@
       syncNewConvAdvancedSummary();
     }
 
-    function applyNewConvDraftToFields(draft) {
-      const source = (draft && typeof draft === "object") ? draft : {};
-      const cliSelect = document.getElementById("newConvCliType");
-      const modelInput = document.getElementById("newConvModel");
-      const aliasInput = document.getElementById("newConvAlias");
-      const purposeInput = document.getElementById("newConvPurpose");
-      const roleSelect = document.getElementById("newConvSessionRole");
-      const reuseSelect = document.getElementById("newConvReuseStrategy");
-      const envSelect = document.getElementById("newConvEnvironment");
-      const worktreeInput = document.getElementById("newConvWorktreeRoot");
-      const workdirInput = document.getElementById("newConvWorkdir");
-      const branchInput = document.getElementById("newConvBranch");
-      const initMessageInput = document.getElementById("newConvInitMessage");
-
-      if (cliSelect && source.cliType) cliSelect.value = String(source.cliType || "codex");
-      if (modelInput) modelInput.value = normalizeSessionModel(source.model);
-      if (aliasInput) aliasInput.value = String(source.alias || "");
-      if (purposeInput) purposeInput.value = String(source.purpose || "");
-      if (roleSelect && source.sessionRole) roleSelect.value = String(source.sessionRole || "child");
-      if (reuseSelect && source.reuseStrategy) reuseSelect.value = String(source.reuseStrategy || "create_new");
-      if (envSelect && source.environment) envSelect.value = normalizeSessionEnvironmentValue(source.environment);
-      if (worktreeInput) worktreeInput.value = String(source.worktreeRoot || "");
-      if (workdirInput) workdirInput.value = String(source.workdir || "");
-      if (branchInput) branchInput.value = String(source.branch || "");
-      if (initMessageInput) {
-        initMessageInput.value = String(source.initMessage || "");
-        NEW_CONV_UI.initMessageDirty = !!String(source.initMessage || "").trim();
-      }
-      syncNewConvModelUI();
-      syncNewConvAdvancedSummary();
-    }
-
     function syncNewConvModelUI() {
       const cliSelect = document.getElementById("newConvCliType");
       const modelInput = document.getElementById("newConvModel");
@@ -480,17 +447,12 @@
     function openNewConvModal(preProjectId, preChannelName, preferredMode = "create", options = {}) {
       const pid = String(preProjectId || STATE.project || "");
       const ch = String(preChannelName || STATE.channel || "");
-      const presetDraft = (options && options.presetDraft && typeof options.presetDraft === "object")
-        ? options.presetDraft
-        : null;
-      const forceAdvancedOpen = !!(options && options.forceAdvancedOpen);
       bindNewConvAdvancedControls();
       NEW_CONV_UI.open = true;
       NEW_CONV_UI.projectId = pid;
       NEW_CONV_UI.channelName = ch;
       NEW_CONV_UI.mode = normalizeNewConvMode(preferredMode);
       NEW_CONV_UI.legacyBindingEntry = !!(options && options.legacyBindingEntry);
-      NEW_CONV_UI.retryPendingBlockId = String((options && options.retryPendingBlockId) || "").trim();
       NEW_CONV_UI.advancedOpen = false;
 
       newConvModalError("");
@@ -521,14 +483,10 @@
       if (cliSelect) cliSelect.value = "codex";
       applyNewConvBindingPreset();
       syncNewConvContextFields();
-      if (presetDraft) {
-        applyNewConvDraftToFields(presetDraft);
-      } else {
-        NEW_CONV_UI.initMessageDirty = false;
-        syncNewConvInitMessage(true);
-      }
+      NEW_CONV_UI.initMessageDirty = false;
+      syncNewConvInitMessage(true);
       setNewConvMode(NEW_CONV_UI.mode);
-      setNewConvAdvancedOpen(forceAdvancedOpen);
+      setNewConvAdvancedOpen(false);
 
       const mask = document.getElementById("newConvMask");
       if (mask) mask.classList.add("show");
@@ -564,7 +522,6 @@
     function closeNewConvModal() {
       NEW_CONV_UI.open = false;
       NEW_CONV_UI.legacyBindingEntry = false;
-      NEW_CONV_UI.retryPendingBlockId = "";
       const mask = document.getElementById("newConvMask");
       if (mask) mask.classList.remove("show");
       const errEl = document.getElementById("newConvErr");
@@ -931,7 +888,7 @@
       );
       if (draft) {
         const heartbeatTaskId = String(draft.heartbeatTaskId || "").trim().replace(/[^a-zA-Z0-9._-]+/g, "-");
-        // 普通会话保存只允许覆写已存在的 session 任务，不能把默认草稿新建进真源。
+        // 普通会话保存只允许覆写已存在的会话级任务，不能把默认草稿新建进真源。
         if (heartbeatTaskId && existingTaskIds.has(heartbeatTaskId)) {
           const normalized = normalizeHeartbeatTaskClient({
             heartbeat_task_id: heartbeatTaskId,

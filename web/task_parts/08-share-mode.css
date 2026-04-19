@@ -1,0 +1,12 @@
+body.share-mode #headerNav,
+body.share-mode #mobileModeBar,
+body.share-mode #backToOverview,
+body.share-mode #channelSelector,
+body.share-mode #systemSettingsWrap {
+  display: none !important;
+}
+
+body.share-mode .system-settings-popover,
+body.share-mode .channel-dropdown {
+  display: none !important;
+}

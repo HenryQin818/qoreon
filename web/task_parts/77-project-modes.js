@@ -1,3 +1,889 @@
+    const TASK_OBSERVATORY_PAGE_SIZE = 10;
+    const TASK_OBSERVATORY_STYLE_ID = "taskObservatoryModeStylesV1";
+    const TASK_OBSERVATORY_UI = {
+      detailRequestedByProject: Object.create(null),
+      visibleLimitByProject: Object.create(null),
+      specialFilterByProject: Object.create(null),
+    };
+
+    function taskObservatoryProjectKey(projectId = "") {
+      const direct = String(projectId || "").trim();
+      if (direct) return direct;
+      const currentProject = (typeof STATE === "object" && STATE) ? String(STATE.project || "").trim() : "";
+      return currentProject;
+    }
+
+    function taskObservatorySessionNeedsCreatedAtHydration(session) {
+      const tracking = typeof normalizeTaskTrackingClient === "function"
+        ? normalizeTaskTrackingClient(session && session.task_tracking)
+        : null;
+      if (!tracking || !tracking.current_task_ref) return false;
+      return false;
+    }
+
+    function taskObservatoryShouldLoadDetailForSession(session, projectId = "") {
+      const row = (session && typeof session === "object") ? session : {};
+      const sessionId = String(row.id || row.session_id || "").trim();
+      if (!sessionId) return false;
+      const pid = taskObservatoryProjectKey(projectId);
+      if (!pid || pid === "overview") return false;
+      if (sessionId === String((typeof STATE === "object" && STATE && STATE.selectedSessionId) || "").trim()) return false;
+      if (taskObservatorySessionNeedsCreatedAtHydration(row)) return true;
+      const ui = (typeof TASK_OBSERVATORY_UI === "object" && TASK_OBSERVATORY_UI) ? TASK_OBSERVATORY_UI : null;
+      const requestedByProject = ui && ui.detailRequestedByProject && typeof ui.detailRequestedByProject === "object"
+        ? ui.detailRequestedByProject
+        : null;
+      const requested = requestedByProject && requestedByProject[pid] && typeof requestedByProject[pid] === "object"
+        ? requestedByProject[pid]
+        : null;
+      return !!(requested && requested[sessionId]);
+    }
+
+    function taskObservatoryScheduleDetailLoads(projectId, sessions, visibleLimit = 0) {
+      if (typeof ensureConversationSessionDetailLoaded !== "function") return [];
+      const pid = taskObservatoryProjectKey(projectId);
+      if (!pid || pid === "overview") return [];
+      const rows = Array.isArray(sessions) ? sessions : [];
+      const limit = Math.max(0, Number(visibleLimit) || 0);
+      const visible = limit > 0 ? rows.slice(0, limit) : rows.slice();
+      const pending = visible
+        .filter((row) => taskObservatoryShouldLoadDetailForSession(row, pid))
+        .map((row) => {
+          const sessionId = String((row && (row.id || row.session_id)) || "").trim();
+          if (!sessionId) return null;
+          return Promise.resolve(ensureConversationSessionDetailLoaded(sessionId, { maxAgeMs: 15_000 }))
+            .then(() => {
+              if (typeof render === "function") render();
+            })
+            .catch(() => {});
+        })
+        .filter(Boolean);
+      return pending;
+    }
+
+    function taskObservatoryVisibleLimit(projectId = "") {
+      const pid = taskObservatoryProjectKey(projectId);
+      if (!pid) return TASK_OBSERVATORY_PAGE_SIZE;
+      const raw = Number(TASK_OBSERVATORY_UI.visibleLimitByProject[pid] || 0);
+      return Number.isFinite(raw) && raw > 0 ? Math.max(TASK_OBSERVATORY_PAGE_SIZE, Math.round(raw)) : TASK_OBSERVATORY_PAGE_SIZE;
+    }
+
+    function resetTaskObservatoryVisibleLimit(projectId = "") {
+      const pid = taskObservatoryProjectKey(projectId);
+      if (!pid) return TASK_OBSERVATORY_PAGE_SIZE;
+      TASK_OBSERVATORY_UI.visibleLimitByProject[pid] = TASK_OBSERVATORY_PAGE_SIZE;
+      return TASK_OBSERVATORY_PAGE_SIZE;
+    }
+
+    function increaseTaskObservatoryVisibleLimit(projectId = "", step = TASK_OBSERVATORY_PAGE_SIZE) {
+      const pid = taskObservatoryProjectKey(projectId);
+      if (!pid) return TASK_OBSERVATORY_PAGE_SIZE;
+      const current = taskObservatoryVisibleLimit(pid);
+      const delta = Number.isFinite(Number(step)) ? Math.max(1, Number(step)) : TASK_OBSERVATORY_PAGE_SIZE;
+      const next = current + delta;
+      TASK_OBSERVATORY_UI.visibleLimitByProject[pid] = next;
+      return next;
+    }
+
+    function taskObservatorySpecialFilter(projectId = "") {
+      const pid = taskObservatoryProjectKey(projectId);
+      if (!pid) return "";
+      return String(TASK_OBSERVATORY_UI.specialFilterByProject[pid] || "").trim().toLowerCase();
+    }
+
+    function setTaskObservatoryFilter(projectId = "", lane = "全部", opts = {}) {
+      const pid = taskObservatoryProjectKey(projectId);
+      if (!pid) return;
+      const allowed = new Set(["全部", ...taskLaneOrderList()]);
+      const nextLane = allowed.has(String(lane || "").trim()) ? String(lane || "").trim() : "全部";
+      const special = String((opts && opts.special) || "").trim().toLowerCase();
+      STATE.taskLane = nextLane;
+      TASK_OBSERVATORY_UI.specialFilterByProject[pid] = special;
+      resetTaskObservatoryVisibleLimit(pid);
+      setHash();
+      render();
+    }
+
+    function taskObservatoryTimelineDateKey(rawValue = "") {
+      const text = String(rawValue || "").trim();
+      if (!text) return "未标记日期";
+      const direct = text.match(/\d{4}-\d{2}-\d{2}/);
+      if (direct && direct[0]) return direct[0];
+      const parsed = new Date(text);
+      if (Number.isFinite(parsed.getTime())) {
+        const y = parsed.getFullYear();
+        const m = String(parsed.getMonth() + 1).padStart(2, "0");
+        const d = String(parsed.getDate()).padStart(2, "0");
+        return y + "-" + m + "-" + d;
+      }
+      return text.slice(0, 10) || "未标记日期";
+    }
+
+    function taskObservatoryGroupHasBlocked(group) {
+      const masterFlags = typeof taskStatusFlags === "function"
+        ? taskStatusFlags(group && group.master)
+        : {};
+      if (masterFlags && masterFlags.blocked) return true;
+      const children = Array.isArray(group && group.children) ? group.children : [];
+      return children.some((child) => {
+        const flags = typeof taskStatusFlags === "function" ? taskStatusFlags(child) : {};
+        return !!(flags && flags.blocked);
+      });
+    }
+
+    function buildTaskObservatoryModel(groupsAll, opts = {}) {
+      const groups = Array.isArray(groupsAll) ? groupsAll.slice() : [];
+      const laneFilter = String((opts && opts.laneFilter) || "全部").trim() || "全部";
+      const specialFilter = String((opts && opts.specialFilter) || "").trim().toLowerCase();
+      const visibleLimit = Number.isFinite(Number(opts && opts.visibleLimit))
+        ? Math.max(1, Number(opts.visibleLimit))
+        : TASK_OBSERVATORY_PAGE_SIZE;
+      const timelineSource = groups
+        .slice()
+        .sort((a, b) => Number(b && b.latestTs || 0) - Number(a && a.latestTs || 0));
+      let filtered = timelineSource;
+      if (specialFilter === "blocked") {
+        filtered = timelineSource.filter((group) => taskObservatoryGroupHasBlocked(group));
+      } else if (laneFilter !== "全部") {
+        filtered = timelineSource.filter((group) => String((group && group.lane) || "") === laneFilter);
+      }
+      const visibleGroups = filtered.slice(0, visibleLimit);
+      const days = [];
+      const dayMap = new Map();
+      visibleGroups.forEach((group) => {
+        const key = taskObservatoryTimelineDateKey((group && group.latestAt) || (group && group.master && group.master.updated_at) || "");
+        if (!dayMap.has(key)) {
+          const day = { key, label: key, items: [] };
+          dayMap.set(key, day);
+          days.push(day);
+        }
+        dayMap.get(key).items.push(group);
+      });
+      const totalTaskCount = groups.reduce((sum, group) => {
+        const total = Number(group && group.total || 0);
+        if (Number.isFinite(total) && total > 0) return sum + total;
+        const children = Array.isArray(group && group.children) ? group.children.length : 0;
+        return sum + children + ((group && group.master) ? 1 : 0);
+      }, 0);
+      const countLane = (lane) => groups.filter((group) => String((group && group.lane) || "") === lane).length;
+      return {
+        groups,
+        filteredGroups: filtered,
+        visibleGroups,
+        visibleLimit,
+        totalTaskCount,
+        totalGroupCount: groups.length,
+        filteredGroupCount: filtered.length,
+        visibleGroupCount: visibleGroups.length,
+        hasMore: filtered.length > visibleGroups.length,
+        days,
+        counts: {
+          running: countLane("进行中"),
+          todo: countLane("待办"),
+          acceptance: countLane("待验收"),
+          done: countLane("已完成"),
+          paused: countLane("暂缓"),
+          archived: countLane("已归档"),
+          blocked: groups.filter((group) => taskObservatoryGroupHasBlocked(group)).length,
+        },
+      };
+    }
+
+    function ensureTaskObservatoryStyles() {
+      if (typeof document === "undefined" || !document.head) return;
+      if (document.getElementById(TASK_OBSERVATORY_STYLE_ID)) return;
+      const style = document.createElement("style");
+      style.id = TASK_OBSERVATORY_STYLE_ID;
+      style.textContent = `
+        .task-observatory-page{
+          display:flex;
+          flex-direction:column;
+          gap:16px;
+          padding:12px 16px 20px;
+        }
+        .task-observatory-head{
+          display:flex;
+          flex-direction:column;
+          gap:12px;
+          padding:14px 16px;
+          border-radius:20px;
+          border:1px solid rgba(15,23,42,0.06);
+          background:linear-gradient(180deg, rgba(255,255,255,0.92), rgba(245,248,252,0.92));
+          box-shadow:0 16px 36px rgba(15,23,42,0.05);
+          backdrop-filter:blur(12px);
+        }
+        .task-observatory-head-main{
+          display:flex;
+          align-items:flex-end;
+          justify-content:space-between;
+          gap:14px 18px;
+          flex-wrap:wrap;
+        }
+        .task-observatory-head-copy{
+          display:grid;
+          gap:8px;
+          min-width:0;
+          flex:1 1 320px;
+        }
+        .task-observatory-head-kicker{
+          font-size:11px;
+          font-weight:700;
+          letter-spacing:0.08em;
+          text-transform:uppercase;
+          color:var(--muted2);
+        }
+        .task-observatory-head-title-row{
+          display:flex;
+          align-items:center;
+          gap:10px;
+          flex-wrap:wrap;
+        }
+        .task-observatory-head-title{
+          font-size:22px;
+          line-height:1.1;
+          font-weight:900;
+          color:var(--text);
+        }
+        .task-observatory-head-pill{
+          display:inline-flex;
+          align-items:center;
+          gap:6px;
+          padding:5px 10px;
+          border-radius:999px;
+          border:1px solid rgba(47,111,237,0.16);
+          background:rgba(244,248,255,0.96);
+          color:rgba(28,59,130,0.92);
+          font-size:12px;
+          font-weight:700;
+          white-space:nowrap;
+        }
+        .task-observatory-head-pill.is-warn{
+          border-color:rgba(234,179,8,0.18);
+          background:rgba(255,248,224,0.96);
+          color:#9a6200;
+        }
+        .task-observatory-head-meta{
+          display:flex;
+          flex-wrap:wrap;
+          gap:8px;
+        }
+        .task-observatory-head-meta-item{
+          display:inline-flex;
+          align-items:center;
+          padding:6px 10px;
+          border-radius:999px;
+          border:1px solid rgba(15,23,42,0.06);
+          background:rgba(255,255,255,0.82);
+          color:var(--muted);
+          font-size:12px;
+          font-weight:700;
+          white-space:nowrap;
+        }
+        .task-observatory-board{
+          border-radius:22px;
+          border:1px solid rgba(0,0,0,0.06);
+          background:linear-gradient(180deg, rgba(255,255,255,0.92), rgba(247,249,253,0.88));
+          box-shadow:0 16px 40px rgba(15,23,42,0.05);
+        }
+        .task-observatory-card-actions,
+        .task-observatory-card-meta,
+        .task-observatory-card-foot,
+        .task-observatory-day-meta{
+          display:flex;
+          align-items:center;
+          gap:8px;
+          flex-wrap:wrap;
+        }
+        .task-observatory-stats{
+          display:flex;
+          align-items:center;
+          gap:10px;
+          flex-wrap:wrap;
+          overflow:visible;
+          padding:0;
+          min-width:0;
+        }
+        .task-observatory-stat{
+          border-radius:999px;
+          border:1px solid rgba(0,0,0,0.06);
+          background:rgba(255,255,255,0.84);
+          box-shadow:0 10px 24px rgba(15,23,42,0.04);
+          padding:0 14px;
+          min-height:42px;
+          min-width:102px;
+          display:inline-flex;
+          align-items:center;
+          gap:8px;
+          justify-content:center;
+          flex:0 0 auto;
+          text-align:center;
+          white-space:nowrap;
+          box-sizing:border-box;
+        }
+        .task-observatory-stat.is-button{
+          cursor:pointer;
+          transition:border-color 150ms ease, box-shadow 150ms ease, transform 150ms ease, background 150ms ease;
+        }
+        .task-observatory-stat.is-button:hover{
+          transform:translateY(-1px);
+          border-color:rgba(47,111,237,0.18);
+          box-shadow:0 14px 28px rgba(15,23,42,0.06);
+        }
+        .task-observatory-stat.is-active{
+          border-color:rgba(47,111,237,0.24);
+          background:linear-gradient(180deg, rgba(244,248,255,0.98), rgba(237,243,252,0.92));
+          box-shadow:0 14px 28px rgba(47,111,237,0.08);
+        }
+        .task-observatory-stat-label{
+          font-size:12px;
+          font-weight:700;
+          color:var(--muted2);
+          line-height:1;
+        }
+        .task-observatory-stat-value{
+          font-size:15px;
+          color:var(--text);
+          font-weight:900;
+          line-height:1;
+        }
+        .task-observatory-board{
+          padding:16px;
+          display:flex;
+          flex-direction:column;
+          gap:14px;
+        }
+        .task-observatory-scroll{
+          overflow-x:auto;
+          overflow-y:visible;
+          padding-bottom:6px;
+        }
+        .task-observatory-canvas{
+          min-width:1320px;
+          width:max-content;
+          display:flex;
+          flex-direction:column;
+          gap:22px;
+          padding-right:20px;
+        }
+        .task-observatory-day{
+          display:flex;
+          flex-direction:column;
+          gap:14px;
+          align-items:flex-start;
+        }
+        .task-observatory-day-head{
+          display:flex;
+          align-items:center;
+          justify-content:flex-start;
+          gap:12px;
+          flex-wrap:wrap;
+          width:fit-content;
+          max-width:100%;
+          padding:0 8px 2px 2px;
+        }
+        .task-observatory-day-title{
+          display:inline-flex;
+          align-items:center;
+          gap:10px;
+          font-size:16px;
+          font-weight:900;
+          color:var(--text);
+        }
+        .task-observatory-day-title::before{
+          content:"";
+          width:10px;
+          height:10px;
+          border-radius:999px;
+          background:rgba(47,111,237,0.22);
+          box-shadow:0 0 0 5px rgba(47,111,237,0.08);
+          flex:0 0 auto;
+        }
+        .task-observatory-day-meta{
+          gap:6px;
+        }
+        .task-observatory-day-meta .chip{
+          background:rgba(255,255,255,0.82);
+          border-color:rgba(15,23,42,0.06);
+          box-shadow:none;
+        }
+        .task-observatory-row{
+          display:flex;
+          gap:14px;
+          align-items:stretch;
+          width:max-content;
+        }
+        .task-observatory-track{
+          position:relative;
+          width:24px;
+          flex:0 0 24px;
+          display:flex;
+          justify-content:center;
+          padding-top:20px;
+        }
+        .task-observatory-track::before{
+          content:"";
+          position:absolute;
+          top:0;
+          bottom:-22px;
+          width:2px;
+          background:linear-gradient(180deg, rgba(47,111,237,0.28), rgba(47,111,237,0.04));
+        }
+        .task-observatory-day:last-child .task-observatory-row:last-child .task-observatory-track::before{
+          bottom:18px;
+        }
+        .task-observatory-track-dot{
+          position:relative;
+          z-index:1;
+          width:14px;
+          height:14px;
+          border-radius:999px;
+          background:#2f6fed;
+          border:3px solid rgba(255,255,255,0.96);
+          box-shadow:0 0 0 4px rgba(47,111,237,0.12);
+        }
+        .task-observatory-cards-row{
+          display:flex;
+          gap:12px;
+          align-items:stretch;
+          width:max-content;
+        }
+        .task-observatory-card{
+          text-align:left;
+          border-radius:20px;
+          border:1px solid rgba(0,0,0,0.06);
+          background:rgba(255,255,255,0.90);
+          box-shadow:0 12px 28px rgba(15,23,42,0.04);
+          padding:16px;
+          display:flex;
+          flex-direction:column;
+          gap:12px;
+          min-height:100%;
+          transition:transform 150ms ease, box-shadow 150ms ease, border-color 150ms ease, background 150ms ease;
+        }
+        .task-observatory-card:hover{
+          transform:translateY(-1px);
+          box-shadow:0 16px 34px rgba(15,23,42,0.06);
+          border-color:rgba(47,111,237,0.18);
+        }
+        .task-observatory-card.is-parent{
+          width:360px;
+          background:linear-gradient(180deg, rgba(255,255,255,0.98), rgba(245,249,255,0.92));
+          border-color:rgba(47,111,237,0.16);
+        }
+        .task-observatory-card.is-child{
+          width:248px;
+          padding:14px;
+          gap:10px;
+        }
+        .task-observatory-card.active{
+          border-color:rgba(47,111,237,0.28);
+          box-shadow:0 16px 34px rgba(47,111,237,0.12);
+        }
+        .task-observatory-card-top{
+          display:flex;
+          align-items:flex-start;
+          justify-content:space-between;
+          gap:10px;
+        }
+        .task-observatory-card-title{
+          font-size:16px;
+          line-height:1.45;
+          font-weight:900;
+          color:var(--text);
+          min-width:0;
+        }
+        .task-observatory-card-role{
+          flex:0 0 auto;
+        }
+        .task-observatory-card.is-child .task-observatory-card-title{
+          font-size:14px;
+          font-weight:800;
+        }
+        .task-observatory-card-note{
+          border-radius:16px;
+          background:rgba(243,246,252,0.92);
+          border:1px solid rgba(0,0,0,0.05);
+          padding:10px 12px;
+          display:flex;
+          flex-direction:column;
+          gap:6px;
+        }
+        .task-observatory-card-note-row{
+          font-size:12px;
+          line-height:1.65;
+          color:var(--muted);
+        }
+        .task-observatory-card-note-row strong{
+          color:var(--text);
+        }
+        .task-observatory-load-wrap{
+          display:flex;
+          justify-content:center;
+          padding-top:4px;
+        }
+        .task-observatory-empty{
+          border-radius:16px;
+          border:1px dashed rgba(0,0,0,0.10);
+          background:rgba(255,255,255,0.76);
+          color:var(--muted);
+          padding:20px 18px;
+          font-size:13px;
+          line-height:1.7;
+        }
+        .task-observatory-range-chip{
+          font-weight:700;
+        }
+        body.panel-task.panel-task-single-canvas .body{
+          display:block;
+          grid-template-columns:minmax(0,1fr);
+          gap:0;
+        }
+        body.panel-task.panel-task-single-canvas #channelAside,
+        body.panel-task.panel-task-single-canvas #convResizeHandle,
+        body.panel-task.panel-task-single-canvas .list-header,
+        body.panel-task.panel-task-single-canvas #taskMaterialsHeader,
+        body.panel-task.panel-task-single-canvas #channelKnowledgeBox{
+          display:none !important;
+        }
+        body.panel-task.panel-task-single-canvas #listView{
+          min-width:0;
+          width:100%;
+          padding:0;
+          border:none;
+          background:transparent;
+          box-shadow:none;
+        }
+        body.panel-task.panel-task-single-canvas #fileList{
+          padding:0;
+          overflow:visible;
+        }
+        body.panel-task.panel-task-single-canvas .task-observatory-page{
+          padding:0 0 20px;
+        }
+        body.panel-task.panel-task-single-canvas #detailView{
+          display:none;
+          position:fixed;
+          top:88px;
+          right:16px;
+          bottom:16px;
+          width:min(640px, calc(100vw - 32px));
+          max-width:calc(100vw - 32px);
+          z-index:24;
+          border-radius:28px;
+          border:1px solid rgba(15,23,42,0.08);
+          background:rgba(255,255,255,0.98);
+          box-shadow:0 28px 80px rgba(15,23,42,0.18);
+          overflow:hidden;
+        }
+        body.panel-task.panel-task-single-canvas.task-canvas-detail-open #detailView{
+          display:flex;
+        }
+        body.panel-task.panel-task-single-canvas #detailView .back-to-list{
+          display:inline-flex;
+        }
+        @media (max-width: 900px){
+          .task-observatory-head{
+            padding:12px 12px 10px;
+            gap:10px;
+          }
+          .task-observatory-head-title{
+            font-size:18px;
+          }
+          .task-observatory-head-meta{
+            gap:6px;
+          }
+          .task-observatory-head-meta-item,
+          .task-observatory-head-pill{
+            font-size:11px;
+          }
+          .task-observatory-stat{
+            min-width:96px;
+            padding:0 12px;
+          }
+          body.panel-task.panel-task-single-canvas #detailView{
+            top:72px;
+            right:12px;
+            bottom:12px;
+            width:calc(100vw - 24px);
+            max-width:calc(100vw - 24px);
+          }
+          .task-observatory-page{
+            padding-bottom:16px;
+          }
+          .task-observatory-canvas{
+            min-width:1180px;
+          }
+        }
+      `;
+      document.head.appendChild(style);
+    }
+
+    function buildTaskObservatoryStatCard(config = {}) {
+      const tag = config.clickable ? "button" : "div";
+      const node = el(tag, {
+        class: "task-observatory-stat" + (config.clickable ? " is-button" : "") + (config.active ? " is-active" : ""),
+        type: config.clickable ? "button" : undefined,
+      });
+      node.appendChild(el("label", { class: "task-observatory-stat-label", text: String(config.label || "-") }));
+      node.appendChild(el("strong", { class: "task-observatory-stat-value", text: String(config.value || "0") }));
+      const subText = String(config.sub || "").trim();
+      if (subText) node.title = subText;
+      if (config.clickable && typeof config.onSelect === "function") {
+        node.addEventListener("click", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          config.onSelect();
+        });
+      }
+      return node;
+    }
+
+    function buildTaskObservatoryModeList(listNode, groupsAll, mainMetaNode) {
+      const pid = taskObservatoryProjectKey(STATE.project);
+      ensureTaskObservatoryStyles();
+      const laneFilter = String(STATE.taskLane || "全部").trim() || "全部";
+      const specialFilter = taskObservatorySpecialFilter(pid);
+      const model = buildTaskObservatoryModel(groupsAll, {
+        laneFilter,
+        specialFilter,
+        visibleLimit: taskObservatoryVisibleLimit(pid),
+      });
+      if (mainMetaNode) {
+        const filterLabel = specialFilter === "blocked" ? "阻塞" : laneFilter;
+        mainMetaNode.textContent = "view=任务观察台主视图 · 总任务=" + model.totalGroupCount + " · 当前范围=" + model.visibleGroupCount + " · 筛选=" + filterLabel + " · generated_at=" + DATA.generated_at;
+      }
+
+      const page = el("section", { class: "task-observatory-page" });
+      const filterLabel = specialFilter === "blocked" ? "阻塞关注" : laneFilter;
+      const head = el("section", { class: "task-observatory-head" });
+      const headMain = el("div", { class: "task-observatory-head-main" });
+      const headCopy = el("div", { class: "task-observatory-head-copy" });
+      headCopy.appendChild(el("div", { class: "task-observatory-head-kicker", text: "任务主视图" }));
+      const headTitleRow = el("div", { class: "task-observatory-head-title-row" });
+      headTitleRow.appendChild(el("div", {
+        class: "task-observatory-head-title",
+        text: "总任务 " + model.totalGroupCount + " 条",
+      }));
+      headTitleRow.appendChild(el("span", {
+        class: "task-observatory-head-pill" + (specialFilter === "blocked" ? " is-warn" : ""),
+        text: specialFilter === "blocked" ? "仅看阻塞" : ("当前筛选 " + filterLabel),
+      }));
+      headCopy.appendChild(headTitleRow);
+      const headMeta = el("div", { class: "task-observatory-head-meta" });
+      headMeta.appendChild(el("span", {
+        class: "task-observatory-head-meta-item",
+        text: "已载入 " + model.visibleGroupCount + "/" + model.filteredGroupCount,
+      }));
+      headMeta.appendChild(el("span", {
+        class: "task-observatory-head-meta-item",
+        text: "日期分组 " + model.days.length,
+      }));
+      headMeta.appendChild(el("span", {
+        class: "task-observatory-head-meta-item",
+        text: "按最近更新排序",
+      }));
+      headCopy.appendChild(headMeta);
+      headMain.appendChild(headCopy);
+      head.appendChild(headMain);
+
+      const stats = el("section", { class: "task-observatory-stats" });
+      const statCards = [
+        {
+          label: "全部",
+          value: model.totalTaskCount,
+          sub: "总任务 " + model.totalGroupCount + " 条",
+          clickable: true,
+          active: laneFilter === "全部" && specialFilter !== "blocked",
+          onSelect: () => setTaskObservatoryFilter(pid, "全部"),
+        },
+        {
+          label: "进行中",
+          value: model.counts.running,
+          sub: "当前主线",
+          clickable: true,
+          active: laneFilter === "进行中" && specialFilter !== "blocked",
+          onSelect: () => setTaskObservatoryFilter(pid, "进行中"),
+        },
+        {
+          label: "待开始",
+          value: model.counts.todo,
+          sub: "待接续",
+          clickable: true,
+          active: laneFilter === "待办" && specialFilter !== "blocked",
+          onSelect: () => setTaskObservatoryFilter(pid, "待办"),
+        },
+        {
+          label: "待验收",
+          value: model.counts.acceptance,
+          sub: "即将收口",
+          clickable: true,
+          active: laneFilter === "待验收" && specialFilter !== "blocked",
+          onSelect: () => setTaskObservatoryFilter(pid, "待验收"),
+        },
+        {
+          label: "已完成",
+          value: model.counts.done,
+          sub: "可回看",
+          clickable: true,
+          active: laneFilter === "已完成" && specialFilter !== "blocked",
+          onSelect: () => setTaskObservatoryFilter(pid, "已完成"),
+        },
+        {
+          label: "阻塞",
+          value: model.counts.blocked,
+          sub: "需排障",
+          clickable: true,
+          active: specialFilter === "blocked",
+          onSelect: () => setTaskObservatoryFilter(pid, "全部", { special: "blocked" }),
+        },
+      ];
+      statCards.forEach((item) => stats.appendChild(buildTaskObservatoryStatCard(item)));
+      head.appendChild(stats);
+      page.appendChild(head);
+
+      const board = el("section", { class: "task-observatory-board" });
+      if (!model.visibleGroups.length) {
+        board.appendChild(el("div", {
+          class: "task-observatory-empty",
+          text: "当前筛选下没有可展示的总任务主线。可以切回“全部”继续查看。",
+        }));
+      } else {
+        const scroll = el("div", { class: "task-observatory-scroll" });
+        const canvas = el("div", { class: "task-observatory-canvas" });
+        model.days.forEach((day) => {
+          const dayNode = el("section", { class: "task-observatory-day" });
+          const dayHead = el("div", { class: "task-observatory-day-head" });
+          dayHead.appendChild(el("div", { class: "task-observatory-day-title", text: day.label }));
+          const dayMeta = el("div", { class: "task-observatory-day-meta" });
+          const dayMasterTotal = day.items.length;
+          const dayChildTotal = day.items.reduce((sum, group) => sum + Math.max(0, Number(group && group.childTotal || 0)), 0);
+          dayMeta.appendChild(chip("主任务 " + dayMasterTotal, "muted"));
+          dayMeta.appendChild(chip("子任务 " + dayChildTotal, "muted"));
+          dayNode.appendChild(dayHead);
+          dayHead.appendChild(dayMeta);
+
+          day.items.forEach((group) => {
+            const master = group && group.master ? group.master : null;
+            if (!master) return;
+            const masterPath = String(master.path || "");
+            const masterTaskId = taskStableIdOfItem(master);
+            const children = Array.isArray(group.children) ? group.children : [];
+            const selectedPath = String(STATE.selectedPath || "");
+            const selectedTaskId = normalizeTaskStableId(STATE.selectedTaskId || "");
+            const hasChildSelected = children.some((child) => taskSelectionMatchesItem(child, selectedPath, selectedTaskId));
+            const row = el("div", { class: "task-observatory-row" });
+            const track = el("div", { class: "task-observatory-track" });
+            track.appendChild(el("span", { class: "task-observatory-track-dot" }));
+            row.appendChild(track);
+            const cards = el("div", { class: "task-observatory-cards-row" });
+
+            const masterFlags = taskStatusFlags(master);
+            const parentCard = el("div", {
+              class: "task-observatory-card is-parent"
+                + ((taskSelectionMatchesItem(master, selectedPath, selectedTaskId) || hasChildSelected) ? " active" : ""),
+              "data-path": masterPath,
+            });
+            const parentTop = el("div", { class: "task-observatory-card-top" });
+            parentTop.appendChild(el("div", { class: "task-observatory-card-title", text: shortTitle(master.title || "") }));
+            const parentActions = el("div", { class: "task-observatory-card-actions" });
+            parentActions.appendChild(chip("主任务", "good"));
+            parentActions.appendChild(chip(group.masterBucket || "未标记", taskPrimaryTone(group.masterBucket)));
+            if (masterFlags.supervised) parentActions.appendChild(chip("关注", "bad"));
+            if (masterFlags.blocked) parentActions.appendChild(chip("阻塞", "bad"));
+            parentTop.appendChild(parentActions);
+            parentCard.appendChild(parentTop);
+
+            const parentMeta = el("div", { class: "task-observatory-card-meta" });
+            parentMeta.appendChild(chip("子任务 " + children.length, "muted"));
+            parentMeta.appendChild(chip(resolveTaskGroupChannel(group), "muted"));
+            if (group.latestAt) parentMeta.appendChild(chip("更新 " + (compactDateTime(group.latestAt) || group.latestAt), "muted"));
+            parentCard.appendChild(parentMeta);
+
+            const parentNote = el("div", { class: "task-observatory-card-note" });
+            parentNote.appendChild(el("div", {
+              class: "task-observatory-card-note-row",
+              text: "最近进展：" + taskGroupSummaryText(group, children),
+            }));
+            parentNote.appendChild(el("div", {
+              class: "task-observatory-card-note-row",
+              text: "当前状态：" + (group.masterBucket || "未标记") + " · 当前链路总计 " + Number(group.total || (children.length + 1)) + " 项。",
+            }));
+            parentCard.appendChild(parentNote);
+
+            const parentFoot = el("div", { class: "task-observatory-card-foot" });
+            const pushBtn = createTaskPushEntryBtn(master, true);
+            if (pushBtn) parentFoot.appendChild(pushBtn);
+            parentCard.appendChild(parentFoot);
+            bindCardSelectSemantics(parentCard, () => {
+              setSelectedTaskRef(masterPath, masterTaskId, { openCanvasDetail: true });
+            });
+            cards.appendChild(parentCard);
+
+            children.forEach((child) => {
+              const childCard = el("div", {
+                class: "task-observatory-card is-child" + (taskSelectionMatchesItem(child, selectedPath, selectedTaskId) ? " active" : ""),
+                "data-path": String((child && child.path) || ""),
+              });
+              const childTop = el("div", { class: "task-observatory-card-top" });
+              childTop.appendChild(el("div", { class: "task-observatory-card-title", text: shortTitle((child && child.title) || "") }));
+              const childActions = el("div", { class: "task-observatory-card-actions" });
+              childActions.appendChild(chip("子任务", "muted"));
+              childActions.appendChild(chip(bucketKeyForStatus(child && child.status), toneForBucket(bucketKeyForStatus(child && child.status))));
+              childTop.appendChild(childActions);
+              childCard.appendChild(childTop);
+
+              const childMeta = el("div", { class: "task-observatory-card-meta" });
+              if (child && child.channel) childMeta.appendChild(chip(child.channel, "muted"));
+              if (child && child.owner) childMeta.appendChild(chip("负责人:" + child.owner, "muted"));
+              if (child && child.updated_at) childMeta.appendChild(chip("更新 " + (compactDateTime(child.updated_at) || child.updated_at), "muted"));
+              childCard.appendChild(childMeta);
+
+              const childNote = el("div", { class: "task-observatory-card-note" });
+              childNote.appendChild(el("div", {
+                class: "task-observatory-card-note-row",
+                text: "任务承接：" + shortTitle((child && child.title) || ""),
+              }));
+              childNote.appendChild(el("div", {
+                class: "task-observatory-card-note-row",
+                text: "当前落点：" + bucketKeyForStatus(child && child.status),
+              }));
+              childCard.appendChild(childNote);
+              bindCardSelectSemantics(childCard, () => {
+                setSelectedTaskRef(child && child.path, taskStableIdOfItem(child), { openCanvasDetail: true });
+              });
+              cards.appendChild(childCard);
+            });
+
+            row.appendChild(cards);
+            dayNode.appendChild(row);
+          });
+
+          canvas.appendChild(dayNode);
+        });
+        scroll.appendChild(canvas);
+        board.appendChild(scroll);
+        if (model.hasMore) {
+          const loadWrap = el("div", { class: "task-observatory-load-wrap" });
+          const loadBtn = el("button", {
+            class: "btn task-observatory-range-chip",
+            type: "button",
+            text: "加载更早任务（已载入 " + model.visibleGroupCount + "/" + model.filteredGroupCount + "）",
+          });
+          loadBtn.addEventListener("click", (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            increaseTaskObservatoryVisibleLimit(pid);
+            render();
+          });
+          loadWrap.appendChild(loadBtn);
+          board.appendChild(loadWrap);
+        }
+      }
+
+      page.appendChild(board);
+      listNode.appendChild(page);
+    }
+
     function buildOrgBoardLayout(nodes, width, height) {
       const rows = Array.isArray(nodes) ? nodes : [];
       if (!rows.length) return [];
@@ -344,336 +1230,8 @@
     }
 
     function buildScheduleModeList(listNode, groupsAll, laneFilter, mainMetaNode) {
-      const pid = String(STATE.project || "").trim();
-      const allQueueItems = projectScheduleItems(pid);
-      const resolveQueueLane = (row) => {
-        const laneRaw = String((row && row.lane) || "").trim();
-        if (laneRaw) return laneRaw;
-        const bucket = String((row && row.status_bucket) || "").trim();
-        return bucket || "其他";
-      };
-      const queueItems = laneFilter === "全部"
-        ? allQueueItems
-        : allQueueItems.filter((row) => resolveQueueLane(row) === laneFilter);
-      if (mainMetaNode) {
-        mainMetaNode.textContent = "view=项目级排期队列 · 排期总数=" + allQueueItems.length + " · 当前筛选=" + laneFilter + " · generated_at=" + DATA.generated_at;
-      }
-      let inProgressCount = 0;
-      let todoCount = 0;
-      for (const row of allQueueItems) {
-        const lane = resolveQueueLane(row);
-        if (lane === "进行中") inProgressCount += 1;
-        if (lane === "待开始") todoCount += 1;
-      }
-      const archivedCount = Math.max(0, allQueueItems.length - inProgressCount - todoCount);
-      const shouldShowPlanHint = inProgressCount === 0 && todoCount === 0;
-
-      const panel = el("section", { class: "task-schedule-panel" });
-      panel.setAttribute("data-schedule-drop-zone", "1");
-      panel.title = "支持拖拽总任务卡片到此区域加入排期";
-      const head = el("div", { class: "task-schedule-head" });
-      const titleWrap = el("div", { class: "task-schedule-titlewrap" });
-      titleWrap.appendChild(el("div", { class: "task-schedule-title", text: "项目级排期队列（纯队列）" }));
-      titleWrap.appendChild(el("div", { class: "task-schedule-sub", text: "仅维护任务顺序；巡查按排期优先推进。" }));
-      head.appendChild(titleWrap);
-      const ops = el("div", { class: "task-schedule-ops" });
-      const refreshBtn = el("button", { class: "btn", text: PROJECT_SCHEDULE_UI.loadingByProject[pid] ? "刷新中..." : "刷新队列" });
-      refreshBtn.disabled = !!PROJECT_SCHEDULE_UI.loadingByProject[pid] || !!PROJECT_SCHEDULE_UI.savingByProject[pid];
-      refreshBtn.addEventListener("click", () => {
-        fetchProjectScheduleQueue(pid, { force: true }).then(() => render()).catch(() => {});
-      });
-      ops.appendChild(refreshBtn);
-      head.appendChild(ops);
-      panel.appendChild(head);
-      panel.appendChild(el("div", {
-        class: "task-schedule-note",
-        text: "加入方式：在任务模块拖拽总任务到此区域，或使用任务卡片/详情头“排期”按钮。",
-      }));
-      panel.addEventListener("dragenter", (e) => {
-        const dragPath = scheduleDraggedTaskPathFromEvent(e);
-        if (!dragPath || !isMasterTaskPath(pid, dragPath)) return;
-        e.preventDefault();
-        setTaskScheduleDropHoverState(panel, true);
-      });
-      panel.addEventListener("dragover", (e) => {
-        const dragPath = scheduleDraggedTaskPathFromEvent(e);
-        if (!dragPath || !isMasterTaskPath(pid, dragPath)) return;
-        e.preventDefault();
-        if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
-        setTaskScheduleDropHoverState(panel, true);
-      });
-      panel.addEventListener("dragleave", (e) => {
-        const next = e && e.relatedTarget;
-        if (next && panel.contains(next)) return;
-        setTaskScheduleDropHoverState(panel, false);
-      });
-      panel.addEventListener("drop", async (e) => {
-        const dragPath = scheduleDraggedTaskPathFromEvent(e);
-        setTaskScheduleDropHoverState(panel, false);
-        clearTaskScheduleDragPayload();
-        if (!dragPath || !isMasterTaskPath(pid, dragPath)) return;
-        e.preventDefault();
-        e.stopPropagation();
-        const ok = await setTaskScheduleState(pid, dragPath, true, "drag");
-        if (ok) {
-          setSelectedTaskRef(dragPath);
-        }
-      });
-
-      const err = String(PROJECT_SCHEDULE_UI.errorByProject[pid] || "").trim();
-      const note = String(PROJECT_SCHEDULE_UI.noteByProject[pid] || "").trim();
-      if (err) panel.appendChild(el("div", { class: "task-schedule-error", text: "排期队列异常：" + err }));
-      if (!err && note) panel.appendChild(el("div", { class: "task-schedule-note", text: note }));
-      if (!err && shouldShowPlanHint) {
-        const jumpBtn = el("button", {
-          class: "task-schedule-tip task-schedule-tip-action",
-          type: "button",
-          text: archivedCount > 0
-            ? "当前排期里仅剩已归档任务；活动首项未配置，请去任务列表补充进行中/待开始任务（点击前往）。"
-            : "当前排期中“进行中 / 待开始”都没有任务，请去任务列表选择任务加入排期（点击前往）。",
-        });
-        jumpBtn.addEventListener("click", (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          STATE.taskModule = "tasks";
-          STATE.taskLane = "全部";
-          setHash();
-          render();
-        });
-        panel.appendChild(jumpBtn);
-      }
-
-      const list = el("div", { class: "task-schedule-list" });
-      const groupByTaskPath = new Map();
-      (Array.isArray(groupsAll) ? groupsAll : []).forEach((g) => {
-        const masterPath = normalizeScheduleTaskPath(g && g.master && g.master.path);
-        if (masterPath) groupByTaskPath.set(masterPath, g);
-        const children = Array.isArray(g && g.children) ? g.children : [];
-        children.forEach((child) => {
-          const childPath = normalizeScheduleTaskPath(child && child.path);
-          if (childPath) groupByTaskPath.set(childPath, g);
-        });
-      });
-      if (!queueItems.length) {
-        list.appendChild(el("div", { class: "task-schedule-empty", text: "当前筛选下暂无排期任务。" }));
-      } else {
-        const allPaths = allQueueItems.map((x) => normalizeScheduleTaskPath(x && x.task_path)).filter(Boolean);
-        const laneOrder = taskLaneOrderList();
-        const laneIndex = Object.create(null);
-        laneOrder.forEach((l, i) => {
-          laneIndex[l] = i;
-        });
-        const groupByLane = Object.create(null);
-        const laneAppearOrder = [];
-        for (const row of queueItems) {
-          const taskPath = normalizeScheduleTaskPath(row && row.task_path);
-          if (!taskPath) continue;
-          const lane = resolveQueueLane(row);
-          if (!Object.prototype.hasOwnProperty.call(groupByLane, lane)) {
-            groupByLane[lane] = [];
-            laneAppearOrder.push(lane);
-          }
-          groupByLane[lane].push(row);
-        }
-        const laneKeys = laneAppearOrder.slice().sort((a, b) => {
-          const ai = Object.prototype.hasOwnProperty.call(laneIndex, a) ? laneIndex[a] : 999;
-          const bi = Object.prototype.hasOwnProperty.call(laneIndex, b) ? laneIndex[b] : 999;
-          if (ai !== bi) return ai - bi;
-          return laneAppearOrder.indexOf(a) - laneAppearOrder.indexOf(b);
-        });
-
-        for (const lane of laneKeys) {
-          const rows = groupByLane[lane] || [];
-          if (!rows.length) continue;
-          const laneSec = el("section", { class: "task-lane" });
-          const laneHead = el("div", { class: "task-lane-head" });
-          const laneTitle = el("div", { class: "task-lane-title" });
-          laneTitle.appendChild(chip(lane, taskLaneTone(lane) + (lane === "已归档" ? " archived-tag" : "")));
-          laneTitle.appendChild(el("span", { text: "排期 " + rows.length }));
-          laneHead.appendChild(laneTitle);
-          laneSec.appendChild(laneHead);
-
-          const laneBody = el("div", { class: "task-lane-body" });
-          for (const row of rows) {
-            const taskPath = normalizeScheduleTaskPath(row && row.task_path);
-            if (!taskPath) continue;
-            const group = groupByTaskPath.get(taskPath) || null;
-            const master = group && group.master ? group.master : null;
-            const sourceMode = "active";
-            const childrenAll = Array.isArray(group && group.children) ? group.children : [];
-            const visibleChildren = childrenAll.filter((child) => taskChildMatchesSource(child, sourceMode));
-            const expandKey = group ? String(group.key || taskPath) : ("schedule:" + taskPath);
-            const childrenExpanded = !!STATE.taskGroupExpanded[expandKey];
-            const idxAll = allPaths.indexOf(taskPath);
-            const rowLane = lane;
-            const rowNode = el("div", {
-              class: "frow task-group-card task-schedule-item" + (String(STATE.selectedPath || "") === taskPath ? " active" : ""),
-              "data-path": taskPath,
-            });
-            if (rowLane === "已归档") rowNode.classList.add("is-archived");
-            if (isTaskInProjectSchedule(pid, taskPath)) rowNode.classList.add("is-scheduled");
-            const readOnlyArchived = rowLane === "已归档";
-
-            // 排期列表应优先展示“队列项本身”的标题，避免同组子任务都显示为 master 标题。
-            // 仅当当前队列项路径就是 master 路径时，才显示 master 标题。
-            const masterPath = normalizeScheduleTaskPath(master && master.path);
-            const isMasterRow = !!(masterPath && masterPath === taskPath);
-            const itemForTitle = isMasterRow
-              ? master
-              : {
-                  title: String((row && row.title) || taskPath),
-                  path: taskPath,
-                  channel: String((row && row.channel_name) || ""),
-                };
-            const head = el("div", { class: "task-group-head task-schedule-item-head" });
-            head.appendChild(buildItemTitleNode(itemForTitle, "t"));
-            const headOps = el("div", { class: "frow-title-ops" });
-            head.appendChild(headOps);
-            rowNode.appendChild(head);
-
-            const meta = el("div", { class: "m task-schedule-item-meta" });
-            meta.appendChild(chip("#" + String((row && row.order_index) || (idxAll + 1)), "muted"));
-            meta.appendChild(chip(String((row && row.status_bucket) || "其他"), toneForBucket(String((row && row.status_bucket) || "其他"))));
-            meta.appendChild(chip(rowLane, taskLaneTone(rowLane) + (rowLane === "已归档" ? " archived-tag" : "")));
-            if (group) {
-              meta.appendChild(chip("子任务总数:" + Number(group.childTotal || childrenAll.length || 0), "muted"));
-              meta.appendChild(chip("子任务显示:" + visibleChildren.length + "/" + childrenAll.length, "muted"));
-              const order = ["进行中", "待办", "待验收", "已完成", "暂缓"];
-              for (const k of order) {
-                const c = Number((group.childCounts && group.childCounts[k]) || 0);
-                if (!c) continue;
-                meta.appendChild(chip(k + ":" + c, toneForBucket(k)));
-              }
-            }
-            if (row && row.channel_name) meta.appendChild(chip(String(row.channel_name), "muted"));
-            const createdAtText = compactDateTime(firstNonEmptyText([row && row.created_at], ""))
-              || shortDateTime(firstNonEmptyText([row && row.created_at], ""));
-            if (createdAtText) meta.appendChild(chip("创建:" + createdAtText, "muted"));
-            const dueText = compactDateTime(firstNonEmptyText([row && row.due], ""))
-              || shortDateTime(firstNonEmptyText([row && row.due], ""))
-              || String(firstNonEmptyText([row && row.due], "") || "").trim();
-            if (dueText) meta.appendChild(chip("截止:" + dueText, "warn"));
-            if (row && row.updated_at) meta.appendChild(chip("更新:" + String(row.updated_at), "muted"));
-            if (row && row.exists === false) meta.appendChild(chip("文件缺失", "bad"));
-            rowNode.appendChild(meta);
-
-            const summaryText = group
-              ? (visibleChildren.length
-                ? taskGroupSummaryText(group, visibleChildren)
-                : "当前暂无可展示子任务。")
-              : "未关联子任务信息（兼容旧队列或非总任务路径）。";
-            rowNode.appendChild(el("div", { class: "task-group-summary task-schedule-item-summary", text: summaryText }));
-            if (readOnlyArchived) {
-              rowNode.appendChild(el("div", {
-                class: "task-schedule-readonly-note",
-                text: "该任务已归档，仅在排期中保留用于追溯；当前为只读展示，不参与活动首项排序。",
-              }));
-            }
-
-            const controls = el("div", { class: "task-schedule-item-controls" });
-            const foldBtn = el("button", {
-              class: "btn",
-              type: "button",
-              text: childrenExpanded ? "收起子任务" : ("展开子任务（" + visibleChildren.length + "）"),
-            });
-            foldBtn.disabled = !visibleChildren.length;
-            foldBtn.addEventListener("click", (e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              toggleTaskGroupExpanded(expandKey);
-            });
-            controls.appendChild(foldBtn);
-
-            const right = el("div", { class: "task-schedule-item-ops" });
-            if (readOnlyArchived) {
-              right.appendChild(chip("只读保留", "muted"));
-            } else {
-              const upBtn = el("button", { class: "btn", text: "上移" });
-              upBtn.disabled = idxAll <= 0 || !!PROJECT_SCHEDULE_UI.savingByProject[pid];
-              upBtn.addEventListener("click", (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                if (idxAll <= 0) return;
-                const next = allPaths.slice();
-                const [cur] = next.splice(idxAll, 1);
-                next.splice(idxAll - 1, 0, cur);
-                saveProjectScheduleQueue(pid, next, "已上移排期顺序。");
-              });
-              right.appendChild(upBtn);
-              const downBtn = el("button", { class: "btn", text: "下移" });
-              downBtn.disabled = idxAll < 0 || idxAll >= allPaths.length - 1 || !!PROJECT_SCHEDULE_UI.savingByProject[pid];
-              downBtn.addEventListener("click", (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                if (idxAll < 0 || idxAll >= allPaths.length - 1) return;
-                const next = allPaths.slice();
-                const [cur] = next.splice(idxAll, 1);
-                next.splice(idxAll + 1, 0, cur);
-                saveProjectScheduleQueue(pid, next, "已下移排期顺序。");
-              });
-              right.appendChild(downBtn);
-              const removeBtn = el("button", { class: "btn", text: "移除" });
-              removeBtn.disabled = !!PROJECT_SCHEDULE_UI.savingByProject[pid];
-              removeBtn.addEventListener("click", (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                const next = allPaths.filter((x) => x !== taskPath);
-                saveProjectScheduleQueue(pid, next, "已移除排期任务。");
-              });
-              right.appendChild(removeBtn);
-            }
-            controls.appendChild(right);
-            rowNode.appendChild(controls);
-
-            if (childrenExpanded && visibleChildren.length) {
-              const childWrap = el("div", { class: "task-group-children task-schedule-children" });
-              visibleChildren.forEach((child) => {
-                const childPath = String((child && child.path) || "");
-                if (!childPath) return;
-                const childRow = el("div", {
-                  class: "task-group-child" + (String(STATE.selectedPath || "") === childPath ? " active" : ""),
-                  "data-path": childPath,
-                });
-                const left = el("div", { style: "min-width:0;flex:1;" });
-                left.appendChild(el("div", { class: "task-group-child-title", text: shortTitle(child.title || "") }));
-                const childMeta = el("div", { class: "task-group-child-meta" });
-                childMeta.appendChild(chip(bucketKeyForStatus(child.status), toneForBucket(bucketKeyForStatus(child.status))));
-                if (child.channel) childMeta.appendChild(chip(child.channel, "muted"));
-                const childCreatedAtText = compactDateTime(firstNonEmptyText([child && child.created_at], ""))
-                  || shortDateTime(firstNonEmptyText([child && child.created_at], ""));
-                if (childCreatedAtText) childMeta.appendChild(chip("创建:" + childCreatedAtText, "muted"));
-                const childDueText = compactDateTime(firstNonEmptyText([child && child.due], ""))
-                  || shortDateTime(firstNonEmptyText([child && child.due], ""))
-                  || String(firstNonEmptyText([child && child.due], "") || "").trim();
-                if (childDueText) childMeta.appendChild(chip("截止:" + childDueText, "warn"));
-                if (child.updated_at) childMeta.appendChild(chip("更新:" + child.updated_at, "muted"));
-                left.appendChild(childMeta);
-                childRow.appendChild(left);
-                const childOps = el("div", { class: "frow-title-ops" });
-                const pushBtn = createTaskPushEntryBtn(child, true);
-                if (pushBtn) childOps.appendChild(pushBtn);
-                childRow.appendChild(childOps);
-                childRow.addEventListener("click", (e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  setSelectedPath(childPath);
-                });
-                childWrap.appendChild(childRow);
-              });
-              rowNode.appendChild(childWrap);
-            }
-
-            bindCardSelectSemantics(rowNode, () => {
-              setSelectedPath(taskPath);
-            });
-            laneBody.appendChild(rowNode);
-          }
-          laneSec.appendChild(laneBody);
-          list.appendChild(laneSec);
-        }
-      }
-      panel.appendChild(list);
-      listNode.appendChild(panel);
+      STATE.taskModule = "tasks";
+      buildTaskObservatoryModeList(listNode, groupsAll, mainMetaNode);
     }
 
     function buildOrgModeList(listNode, mainMetaNode, opts) {
@@ -2363,831 +2921,227 @@
       stage.appendChild(relPanel);
     }
 
-    const TASK_OBSERVATORY_UI = {
-      filterByProject: Object.create(null),
-      sortBasisByProject: Object.create(null),
-      visibleLimitByProject: Object.create(null),
-      directoryRequestedByProject: Object.create(null),
-      detailRequestedByProject: Object.create(null),
-    };
-
-    const TASK_OBSERVATORY_DEFAULT_VISIBLE = 10;
-    const TASK_OBSERVATORY_LOAD_STEP = 4;
-    const TASK_OBSERVATORY_STATUS_OPTIONS = [
-      { key: "all", label: "全部" },
-      { key: "todo", label: "待办" },
-      { key: "in_progress", label: "进行中" },
-      { key: "review", label: "待验收" },
-      { key: "done", label: "已完成" },
-      { key: "paused", label: "暂缓" },
-    ];
-    const TASK_OBSERVATORY_SORT_OPTIONS = [
-      { key: "created_at", label: "创建时间" },
-      { key: "latest_active", label: "最近活跃" },
-    ];
-
-    function taskObservatoryProjectKey(projectId = STATE.project) {
-      return String(projectId || "").trim();
-    }
-
-    function taskObservatoryActiveFilter(projectId = STATE.project) {
-      const key = taskObservatoryProjectKey(projectId);
-      return String(TASK_OBSERVATORY_UI.filterByProject[key] || "all").trim() || "all";
-    }
-
-    function taskObservatorySortBasis(projectId = STATE.project) {
-      const key = taskObservatoryProjectKey(projectId);
-      return String(TASK_OBSERVATORY_UI.sortBasisByProject[key] || "created_at").trim() || "created_at";
-    }
-
-    function taskObservatorySetActiveFilter(projectId, filterKey) {
-      const key = taskObservatoryProjectKey(projectId);
-      const next = String(filterKey || "all").trim() || "all";
-      TASK_OBSERVATORY_UI.filterByProject[key] = next;
-      TASK_OBSERVATORY_UI.visibleLimitByProject[key] = TASK_OBSERVATORY_DEFAULT_VISIBLE;
-    }
-
-    function taskObservatorySetSortBasis(projectId, basisKey) {
-      const key = taskObservatoryProjectKey(projectId);
-      const next = String(basisKey || "created_at").trim() || "created_at";
-      TASK_OBSERVATORY_UI.sortBasisByProject[key] = next;
-      TASK_OBSERVATORY_UI.visibleLimitByProject[key] = TASK_OBSERVATORY_DEFAULT_VISIBLE;
-    }
-
-    function taskObservatoryVisibleLimit(projectId = STATE.project) {
-      const key = taskObservatoryProjectKey(projectId);
-      const value = Number(TASK_OBSERVATORY_UI.visibleLimitByProject[key] || TASK_OBSERVATORY_DEFAULT_VISIBLE);
-      return Number.isFinite(value) && value > 0 ? Math.max(TASK_OBSERVATORY_DEFAULT_VISIBLE, value) : TASK_OBSERVATORY_DEFAULT_VISIBLE;
-    }
-
-    function taskObservatoryIncreaseVisibleLimit(projectId = STATE.project) {
-      const key = taskObservatoryProjectKey(projectId);
-      TASK_OBSERVATORY_UI.visibleLimitByProject[key] = taskObservatoryVisibleLimit(projectId) + TASK_OBSERVATORY_LOAD_STEP;
-    }
-
-    function taskObservatoryNormalizeStatusKey(value) {
-      return taskDisplayStatusMeta(value, "待办").key;
-    }
-
-    function taskObservatoryTimeNum(parts = []) {
-      const text = String(firstNonEmptyText(Array.isArray(parts) ? parts : [parts], "") || "").trim();
-      if (!text) return 0;
-      const parsed = Date.parse(text);
-      if (Number.isFinite(parsed)) return parsed;
-      if (typeof toTimeNum === "function") return Number(toTimeNum(text) || 0);
-      return 0;
-    }
-
-    function taskObservatoryRefObservedTs(row, fallback = 0) {
-      return Math.max(
-        Number(fallback || 0),
-        taskObservatoryTimeNum([
-          row && row.latest_action_at,
-          row && row.last_seen_at,
-          row && row.first_seen_at,
-        ])
-      );
-    }
-
-    function taskObservatoryCreatedTs(row) {
-      return taskObservatoryTimeNum([row && row.created_at]);
-    }
-
-    function taskObservatorySessionNeedsCreatedAtHydration(session) {
-      const tracking = normalizeTaskTrackingClient(session && session.task_tracking ? session.task_tracking : null);
-      if (!tracking || !tracking.current_task_ref) return true;
-      return !String(tracking.current_task_ref.created_at || "").trim();
-    }
-
-    function taskObservatorySortTsDesc(aTs, bTs) {
-      const a = Number(aTs || 0);
-      const b = Number(bTs || 0);
-      if (!a && !b) return 0;
-      if (!a) return 1;
-      if (!b) return -1;
-      return b - a;
-    }
-
-    function taskObservatoryGroupSortTs(group, sortBasis) {
-      if (String(sortBasis || "").trim() === "latest_active") {
-        return Number(group && group.latestTs || 0);
-      }
-      return Number(group && group.createdTs || 0);
-    }
-
-    function taskObservatoryCompareGroups(a, b, sortBasis) {
-      const primary = taskObservatorySortTsDesc(
-        taskObservatoryGroupSortTs(a, sortBasis),
-        taskObservatoryGroupSortTs(b, sortBasis)
-      );
-      if (primary) return primary;
-      const fallback = taskObservatorySortTsDesc(
-        Number(a && a.latestTs || 0),
-        Number(b && b.latestTs || 0)
-      );
-      if (fallback) return fallback;
-      return String(a && a.parent && a.parent.task_title || "").localeCompare(
-        String(b && b.parent && b.parent.task_title || ""),
-        "zh-Hans-CN"
-      );
-    }
-
-    function taskObservatorySessionObservedTs(session, tracking = null) {
-      const summary = session && session.latest_effective_run_summary && typeof session.latest_effective_run_summary === "object"
-        ? session.latest_effective_run_summary
-        : {};
-      return taskObservatoryTimeNum([
-        tracking && tracking.updated_at,
-        session && session.lastActiveAt,
-        summary.created_at,
-        session && session.created_at,
-      ]);
-    }
-
-    function taskObservatoryCopyScalarIfPresent(target, source, key) {
-      const value = source && source[key];
-      if (value === undefined || value === null) return;
-      if (typeof value === "string" && !String(value).trim()) return;
-      target[key] = value;
-    }
-
-    function taskObservatoryMergeRoleArray(target, source, key) {
-      const rows = Array.isArray(source && source[key]) ? source[key] : [];
-      if (!rows.length) return;
-      const current = Array.isArray(target[key]) ? target[key] : [];
-      if (rows.length >= current.length) {
-        target[key] = rows.map((row) => cloneConversationTaskRoleMember(row)).filter(Boolean);
-      }
-    }
-
-    function taskObservatoryMergeCustomRoles(target, source) {
-      const rows = Array.isArray(source && source.custom_roles) ? source.custom_roles : [];
-      const current = Array.isArray(target.custom_roles) ? target.custom_roles : [];
-      if (rows.length >= current.length) {
-        target.custom_roles = rows.map((row) => cloneConversationTaskCustomRole(row)).filter(Boolean);
-      }
-    }
-
-    function taskObservatoryMergeTaskRow(base, nextRow, fallbackTs = 0) {
-      const next = cloneConversationTaskDetailFallback(nextRow);
-      if (!next) return base ? cloneConversationTaskDetailFallback(base) : null;
-      if (!base) {
-        const created = cloneConversationTaskDetailFallback(next) || {};
-        created.__observedTs = taskObservatoryRefObservedTs(next, fallbackTs);
-        return created;
-      }
-      const merged = cloneConversationTaskDetailFallback(base) || {};
-      const currentTs = Math.max(Number(merged.__observedTs || 0), taskObservatoryRefObservedTs(merged, 0));
-      const nextTs = taskObservatoryRefObservedTs(next, fallbackTs);
-      [
-        "task_id",
-        "parent_task_id",
-        "created_at",
-        "due",
-        "task_path",
-        "task_title",
-        "task_primary_status",
-        "relation",
-        "relation_label",
-        "source",
-        "first_seen_at",
-        "last_seen_at",
-        "task_summary_text",
-      ].forEach((key) => {
-        if (!merged[key]) taskObservatoryCopyScalarIfPresent(merged, next, key);
-      });
-      if (!merged.next_owner && next.next_owner) {
-        merged.next_owner = next.next_owner && typeof next.next_owner === "object"
-          ? { ...next.next_owner }
-          : next.next_owner;
-      }
-      if (!merged.main_owner && next.main_owner) merged.main_owner = cloneConversationTaskRoleMember(next.main_owner);
-      taskObservatoryMergeRoleArray(merged, next, "collaborators");
-      taskObservatoryMergeRoleArray(merged, next, "validators");
-      taskObservatoryMergeRoleArray(merged, next, "challengers");
-      taskObservatoryMergeRoleArray(merged, next, "backup_owners");
-      taskObservatoryMergeRoleArray(merged, next, "management_slot");
-      taskObservatoryMergeCustomRoles(merged, next);
-      merged.activity_count = Math.max(Number(merged.activity_count || 0), Number(next.activity_count || 0));
-      if (nextTs >= currentTs) {
-        [
-          "latest_action_at",
-          "latest_action_kind",
-          "latest_action_text",
-          "latest_action_source",
-          "task_primary_status",
-          "task_summary_text",
-          "next_owner",
-          "main_owner",
-          "collaborators",
-          "validators",
-          "challengers",
-          "backup_owners",
-          "management_slot",
-          "custom_roles",
-        ].forEach((key) => {
-          if (key === "next_owner") {
-            if (next.next_owner) {
-              merged.next_owner = next.next_owner && typeof next.next_owner === "object"
-                ? { ...next.next_owner }
-                : next.next_owner;
-            }
-            return;
-          }
-          if (key === "main_owner") {
-            if (next.main_owner) merged.main_owner = cloneConversationTaskRoleMember(next.main_owner);
-            return;
-          }
-          if (key === "custom_roles") {
-            merged.custom_roles = Array.isArray(next.custom_roles)
-              ? next.custom_roles.map((row) => cloneConversationTaskCustomRole(row)).filter(Boolean)
-              : [];
-            return;
-          }
-          if (Array.isArray(next[key])) {
-            merged[key] = next[key].map((row) => cloneConversationTaskRoleMember(row)).filter(Boolean);
-            return;
-          }
-          taskObservatoryCopyScalarIfPresent(merged, next, key);
-        });
-        merged.__observedTs = nextTs;
-      } else {
-        merged.__observedTs = currentTs;
-      }
-      return merged;
-    }
-
-    function taskObservatoryAgentNames(row) {
-      const names = [];
-      if (typeof conversationTaskCoreAgentEntries === "function") {
-        conversationTaskCoreAgentEntries(row).forEach((entry) => {
-          const text = String(entry && entry.text || "").trim();
-          if (text) names.push(text);
-        });
-      }
-      if (!names.length) {
-        const owner = conversationTaskOwnerDisplayMeta(row && row.next_owner);
-        if (owner && owner.text) names.push(owner.text);
-      }
-      return Array.from(new Set(names));
-    }
-
-    function taskObservatoryAvatarText(name) {
-      const text = String(name || "").trim();
-      return text ? text.slice(0, 1) : "任";
-    }
-
-    function taskObservatoryDayKey(ts) {
-      const value = Number(ts || 0);
-      if (!value) return "未标时间";
-      const date = new Date(value);
-      if (Number.isNaN(date.getTime())) return "未标时间";
-      const y = date.getFullYear();
-      const m = String(date.getMonth() + 1).padStart(2, "0");
-      const d = String(date.getDate()).padStart(2, "0");
-      return [y, m, d].join("-");
-    }
-
-    function taskObservatoryDayLabel(dayKey) {
-      const key = String(dayKey || "").trim();
-      const sortBasis = taskObservatorySortBasis();
-      if (!key || key === "未标时间") {
-        return sortBasis === "latest_active" ? "未标活跃时间" : "未标创建时间";
-      }
-      const date = new Date(key + "T00:00:00");
-      if (Number.isNaN(date.getTime())) return key;
-      const week = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"][date.getDay()];
-      const prefix = sortBasis === "latest_active" ? "活跃于 " : "创建于 ";
-      return prefix + String(date.getMonth() + 1).padStart(2, "0") + "月" + String(date.getDate()).padStart(2, "0") + "日 " + week;
-    }
-
-    function taskObservatoryDetailPayload(group) {
-      const item = (group && typeof group === "object") ? group : {};
-      const children = Array.isArray(item.children) ? item.children.map((row) => cloneConversationTaskDetailFallback(row)).filter(Boolean) : [];
-      return {
-        taskTracking: {
-          version: "v1.1",
-          updated_at: String(item.latestAt || "").trim(),
-          current_task_ref: cloneConversationTaskDetailFallback(item.parent),
-          conversation_task_refs: children,
-          recent_task_actions: Array.isArray(item.actions) ? item.actions.map((row) => ({ ...row })) : [],
-        },
-        loading: false,
-        error: "",
-      };
-    }
-
-    function taskObservatoryOpenDetail(row, group, groupTitle) {
-      openConversationTaskDetailViewerStandalone(
-        row,
-        taskObservatoryDetailPayload(group),
-        { sessionKey: taskObservatoryProjectKey(STATE.project), groupTitle }
-      );
-    }
-
-    function taskObservatoryBuildStatButton(projectId, option, count) {
-      const active = taskObservatoryActiveFilter(projectId) === option.key;
-      const btn = el("button", {
-        class: "taskobs-stat" + (active ? " is-active" : ""),
-        type: "button",
-      });
-      btn.setAttribute("aria-pressed", active ? "true" : "false");
-      btn.appendChild(el("span", { class: "taskobs-stat-label", text: option.label }));
-      btn.appendChild(el("strong", { class: "taskobs-stat-value", text: String(count) }));
-      btn.addEventListener("click", () => {
-        taskObservatorySetActiveFilter(projectId, option.key);
-        render();
-      });
-      return btn;
-    }
-
-    function taskObservatoryBuildSortButton(projectId, option) {
-      const active = taskObservatorySortBasis(projectId) === option.key;
-      const btn = el("button", {
-        class: "taskobs-sort-btn" + (active ? " is-active" : ""),
-        type: "button",
-        text: option.label,
-      });
-      btn.setAttribute("aria-pressed", active ? "true" : "false");
-      btn.addEventListener("click", () => {
-        taskObservatorySetSortBasis(projectId, option.key);
-        render();
-      });
-      return btn;
-    }
-
-    function taskObservatoryBuildAvatarGroup(names = []) {
-      const rows = Array.isArray(names) ? names.filter(Boolean) : [];
-      const wrap = el("div", { class: "taskobs-avatars" });
-      if (!rows.length) {
-        wrap.appendChild(el("span", { class: "taskobs-avatar is-empty", text: "—" }));
-        return wrap;
-      }
-      rows.slice(0, 6).forEach((name) => {
-        wrap.appendChild(el("span", {
-          class: "taskobs-avatar",
-          text: taskObservatoryAvatarText(name),
-          title: name,
-        }));
-      });
-      if (rows.length > 6) {
-        wrap.appendChild(el("span", {
-          class: "taskobs-avatar is-overflow",
-          text: "+" + (rows.length - 6),
-          title: "其余 " + (rows.length - 6) + " 位 Agent",
-        }));
-      }
-      return wrap;
-    }
-
-    function taskObservatoryCardNode(row, role, group, opts = {}) {
-      const item = (row && typeof row === "object") ? row : {};
-      const roleKey = role === "parent" ? "parent" : "child";
-      const statusMeta = taskDisplayStatusMeta(item.task_primary_status || item, "待办");
-      const card = el("button", {
-        class: "taskobs-card status-" + statusMeta.key + (roleKey === "parent" ? " is-parent" : " is-child"),
-        type: "button",
-      });
-      const top = el("div", { class: "taskobs-card-top" });
-      top.appendChild(buildTaskTypeBadge(item, { force: roleKey }));
-      top.appendChild(el("div", {
-        class: "taskobs-card-title",
-        text: conversationTaskTitleText(item),
-        title: String(firstNonEmptyText([item.task_title, item.task_path], "") || "").trim(),
-      }));
-      const chips = el("div", { class: "chips" });
-      chips.appendChild(buildTaskStatusChip(item.task_primary_status || item, "待办", "status-chip"));
-      top.appendChild(chips);
-      card.appendChild(top);
-
-      const meta = el("div", { class: "taskobs-card-meta" });
-      const updatedAtText = compactDateTime(firstNonEmptyText([
-        item.latest_action_at,
-        item.last_seen_at,
-        item.created_at,
-      ], "")) || shortDateTime(firstNonEmptyText([
-        item.latest_action_at,
-        item.last_seen_at,
-        item.created_at,
-      ], ""));
-      if (updatedAtText) {
-        const updatedWrap = el("div", { class: "taskobs-next-owner" });
-        updatedWrap.appendChild(el("span", { text: "更新" }));
-        updatedWrap.appendChild(el("strong", { text: updatedAtText }));
-        meta.appendChild(updatedWrap);
-      }
-      const owner = conversationTaskOwnerDisplayMeta(item.next_owner);
-      const ownerWrap = el("div", { class: "taskobs-next-owner" });
-      ownerWrap.appendChild(el("span", { text: "负责Agent" }));
-      ownerWrap.appendChild(el("strong", { text: owner.text || "待明确" }));
-      meta.appendChild(ownerWrap);
-      const timeMeta = buildConversationTaskMetaLine([
-        item.created_at
-          ? ("创建 " + (compactDateTime(item.created_at) || shortDateTime(item.created_at) || String(item.created_at || "").trim()))
-          : "",
-        item.due
-          ? ("截止 " + (compactDateTime(item.due) || shortDateTime(item.due) || String(item.due || "").trim()))
-          : "",
-      ]);
-      if (timeMeta) {
-        timeMeta.className = "taskobs-time-meta";
-        meta.appendChild(timeMeta);
-      }
-      card.appendChild(meta);
-
-      const note = el("div", { class: "taskobs-card-note" });
-      const textNode = el("span", {
-        text: taskSummaryText(item, "当前暂无补充活动。"),
-      });
-      note.appendChild(textNode);
-      card.appendChild(note);
-
-      const roleGroups = buildTaskRoleGroups(item, {
-        className: "taskobs-role-groups",
-        avatarClassName: "is-small",
-      });
-      if (roleGroups) card.appendChild(roleGroups);
-      card.addEventListener("click", () => {
-        taskObservatoryOpenDetail(item, group, roleKey === "parent" ? "当前任务" : "相关任务");
-      });
-      return card;
-    }
-
-    function taskObservatoryCreateGroup(parent, session, view) {
-      const tracking = view && view.tracking ? view.tracking : null;
-      const latestTs = taskObservatoryRefObservedTs(parent, taskObservatorySessionObservedTs(session, tracking));
-      const latestAt = String(firstNonEmptyText([
-        parent && parent.latest_action_at,
-        tracking && tracking.updated_at,
-        session && session.lastActiveAt,
-      ], "") || "").trim();
-      const createdTs = taskObservatoryCreatedTs(parent);
-      const createdAt = String(firstNonEmptyText([parent && parent.created_at], "") || "").trim();
-      return {
-        key: conversationTaskStableKey(parent),
-        parent: taskObservatoryMergeTaskRow(null, parent, latestTs),
-        parentAgentNames: new Set(taskObservatoryAgentNames(parent)),
-        childMap: Object.create(null),
-        childAgentNamesByKey: Object.create(null),
-        actions: [],
-        actionKeys: new Set(),
-        sessionIds: new Set(),
-        createdTs,
-        createdAt,
-        latestTs,
-        latestAt,
-      };
-    }
-
-    function taskObservatoryMergeGroup(group, session, view) {
-      const tracking = view && view.tracking ? view.tracking : null;
-      const parent = view && view.currentRef ? view.currentRef : null;
-      if (!group || !parent) return group;
-      const parentTs = taskObservatoryRefObservedTs(parent, taskObservatorySessionObservedTs(session, tracking));
-      group.parent = taskObservatoryMergeTaskRow(group.parent, parent, parentTs);
-      taskObservatoryAgentNames(parent).forEach((name) => group.parentAgentNames.add(name));
-      group.latestTs = Math.max(Number(group.latestTs || 0), Number(parentTs || 0));
-      if (!group.latestAt && parent.latest_action_at) group.latestAt = String(parent.latest_action_at || "").trim();
-      const createdTs = taskObservatoryCreatedTs(parent);
-      group.createdTs = Math.max(Number(group.createdTs || 0), Number(createdTs || 0));
-      if (!group.createdAt && parent.created_at) group.createdAt = String(parent.created_at || "").trim();
-      if (tracking && tracking.updated_at) {
-        const trackingTs = taskObservatoryTimeNum([tracking.updated_at]);
-        if (trackingTs >= Number(group.latestTs || 0)) group.latestAt = String(tracking.updated_at || "").trim();
-        group.latestTs = Math.max(Number(group.latestTs || 0), trackingTs);
-      }
-      const sessionId = String(firstNonEmptyText([session && session.id, session && session.session_id], "") || "").trim();
-      if (sessionId) group.sessionIds.add(sessionId);
-
-      (Array.isArray(view.relatedRows) ? view.relatedRows : []).forEach((row) => {
-        const childKey = conversationTaskStableKey(row);
-        if (!childKey) return;
-        const childTs = taskObservatoryRefObservedTs(row, parentTs);
-        group.childMap[childKey] = taskObservatoryMergeTaskRow(group.childMap[childKey] || null, row, childTs);
-        if (!group.childAgentNamesByKey[childKey]) group.childAgentNamesByKey[childKey] = new Set();
-        taskObservatoryAgentNames(row).forEach((name) => group.childAgentNamesByKey[childKey].add(name));
-      });
-
-      (Array.isArray(view.actions) ? view.actions : []).forEach((row) => {
-        const action = (row && typeof row === "object") ? { ...row } : null;
-        if (!action) return;
-        const actionKey = [
-          conversationTaskStableKey(action),
-          String(action.action_kind || "").trim(),
-          String(action.action_text || "").trim(),
-          String(action.at || "").trim(),
-          String(action.source_agent_name || action.source_channel || "").trim(),
-        ].join("::");
-        if (group.actionKeys.has(actionKey)) return;
-        group.actionKeys.add(actionKey);
-        group.actions.push(action);
-      });
-
-      return group;
-    }
-
-    function taskObservatoryBuildGroups(projectId, sessions) {
-      const groupsByKey = Object.create(null);
-      (Array.isArray(sessions) ? sessions : []).forEach((session) => {
-        if (!hasConversationTaskTrackingData(session && session.task_tracking)) return;
-        const view = resolveConversationTaskTrackingPayload({
-          taskTracking: session.task_tracking || null,
-          loading: false,
-          error: "",
-        });
-        if (!view.currentRef) return;
-        const key = conversationTaskStableKey(view.currentRef);
-        if (!key) return;
-        if (!groupsByKey[key]) groupsByKey[key] = taskObservatoryCreateGroup(view.currentRef, session, view);
-        taskObservatoryMergeGroup(groupsByKey[key], session, view);
-      });
-      return Object.values(groupsByKey).map((group) => {
-        const children = Object.values(group.childMap || {})
-          .sort((a, b) => Number(b && b.__observedTs || 0) - Number(a && a.__observedTs || 0));
-        const childAgentNamesByKey = Object.create(null);
-        Object.keys(group.childAgentNamesByKey || {}).forEach((key) => {
-          childAgentNamesByKey[key] = Array.from(group.childAgentNamesByKey[key] || []);
-        });
-        return {
-          key: group.key,
-          parent: group.parent,
-          parentAgentNames: Array.from(group.parentAgentNames || []),
-          childAgentNamesByKey,
-          children,
-          actions: group.actions
-            .slice()
-            .sort((a, b) => taskObservatoryTimeNum([b && b.at]) - taskObservatoryTimeNum([a && a.at])),
-          createdTs: Number(group.createdTs || 0),
-          createdAt: String(group.createdAt || "").trim(),
-          latestTs: Number(group.latestTs || 0),
-          latestAt: String(group.latestAt || "").trim(),
-          sessionIds: Array.from(group.sessionIds || []),
-        };
-      }).sort((a, b) => taskObservatoryCompareGroups(a, b, taskObservatorySortBasis(projectId)));
-    }
-
-    function taskObservatoryVisibleCards(group, filterKey = "all") {
-      const cards = [];
-      const pushCard = (row, role) => {
-        if (!row) return;
-        const statusKey = taskObservatoryNormalizeStatusKey(row && row.task_primary_status);
-        if (filterKey !== "all" && statusKey !== filterKey) return;
-        cards.push({ row, role });
-      };
-      pushCard(group && group.parent, "parent");
-      (Array.isArray(group && group.children) ? group.children : []).forEach((child) => {
-        pushCard(child, "child");
-      });
-      return cards;
-    }
-
-    function taskObservatoryBuildDays(groups, filterKey, visibleLimit, sortBasis) {
-      const filtered = (Array.isArray(groups) ? groups : []).filter((group) => {
-        return taskObservatoryVisibleCards(group, filterKey).length > 0;
-      });
-      const sorted = filtered.slice().sort((a, b) => taskObservatoryCompareGroups(a, b, sortBasis));
-      const visible = sorted.slice(0, Math.max(0, Number(visibleLimit || TASK_OBSERVATORY_DEFAULT_VISIBLE)));
-      const byDay = Object.create(null);
-      visible.forEach((group) => {
-        const dayKey = taskObservatoryDayKey(taskObservatoryGroupSortTs(group, sortBasis));
-        if (!byDay[dayKey]) byDay[dayKey] = [];
-        byDay[dayKey].push(group);
-      });
-      const days = Object.keys(byDay)
-        .sort((a, b) => {
-          if (a === "未标时间") return 1;
-          if (b === "未标时间") return -1;
-          return String(b).localeCompare(String(a));
-        })
-        .map((dayKey) => ({
-          key: dayKey,
-          label: taskObservatoryDayLabel(dayKey),
-          groups: byDay[dayKey].slice().sort((a, b) => taskObservatoryCompareGroups(a, b, sortBasis)),
-        }));
-      return {
-        days,
-        totalMatching: sorted.length,
-        visibleCount: visible.length,
-        hasMore: sorted.length > visible.length,
-      };
-    }
-
-    function taskObservatoryStats(groups) {
-      const rows = Array.isArray(groups) ? groups : [];
-      const out = Object.create(null);
-      TASK_OBSERVATORY_STATUS_OPTIONS.forEach((item) => {
-        if (item.key === "all") {
-          out[item.key] = rows.reduce((sum, group) => sum + taskObservatoryVisibleCards(group, "all").length, 0);
-          return;
-        }
-        out[item.key] = rows.reduce((sum, group) => sum + taskObservatoryVisibleCards(group, item.key).length, 0);
-      });
-      return out;
-    }
-
-    function taskObservatoryRenderBar(barNode, projectId, groups) {
-      if (!barNode) return;
-      barNode.innerHTML = "";
-      const toolbar = el("div", { class: "taskobs-toolbar" });
-      const sortWrap = el("div", { class: "taskobs-sort" });
-      sortWrap.appendChild(el("span", { class: "taskobs-sort-label", text: "排序基准" }));
-      const sortOptions = el("div", { class: "taskobs-sort-options" });
-      TASK_OBSERVATORY_SORT_OPTIONS.forEach((option) => {
-        sortOptions.appendChild(taskObservatoryBuildSortButton(projectId, option));
-      });
-      sortWrap.appendChild(sortOptions);
-      toolbar.appendChild(sortWrap);
-      const statsWrap = el("div", { class: "taskobs-stats" });
-      const stats = taskObservatoryStats(groups);
-      TASK_OBSERVATORY_STATUS_OPTIONS.forEach((option) => {
-        statsWrap.appendChild(taskObservatoryBuildStatButton(projectId, option, Number(stats[option.key] || 0)));
-      });
-      toolbar.appendChild(statsWrap);
-      barNode.appendChild(toolbar);
-    }
-
-    function taskObservatoryDayMetrics(groups, filterKey = "all") {
-      const rows = Array.isArray(groups) ? groups : [];
-      let parentCount = 0;
-      let childCount = 0;
-      let doneCount = 0;
-      let pendingCount = 0;
-      rows.forEach((group) => {
-        taskObservatoryVisibleCards(group, filterKey).forEach(({ row, role }) => {
-          if (role === "parent") parentCount += 1;
-          else childCount += 1;
-          if (taskObservatoryNormalizeStatusKey(row && row.task_primary_status) === "done") doneCount += 1;
-          else pendingCount += 1;
-        });
-      });
-      return {
-        parentCount,
-        childCount,
-        doneCount,
-        pendingCount,
-      };
-    }
-
-    function taskObservatoryEmptyNote(text, extraClass = "") {
-      return el("div", {
-        class: "taskobs-note" + (extraClass ? " " + extraClass : ""),
-        text: String(text || "").trim() || "当前暂无可展示内容。",
-      });
-    }
-
-    function taskObservatoryScheduleDirectoryLoad(projectId) {
-      const key = taskObservatoryProjectKey(projectId);
-      if (!key || TASK_OBSERVATORY_UI.directoryRequestedByProject[key]) return;
-      TASK_OBSERVATORY_UI.directoryRequestedByProject[key] = true;
-      ensureConversationProjectSessionDirectory(key)
-        .then(() => { render(); })
-        .catch(() => { render(); })
-        .finally(() => { TASK_OBSERVATORY_UI.directoryRequestedByProject[key] = false; });
-    }
-
-    function taskObservatoryScheduleDetailLoads(projectId, sessions, visibleLimit) {
-      const key = taskObservatoryProjectKey(projectId);
-      if (!key) return;
-      if (!TASK_OBSERVATORY_UI.detailRequestedByProject[key]) {
-        TASK_OBSERVATORY_UI.detailRequestedByProject[key] = Object.create(null);
-      }
-      const requested = TASK_OBSERVATORY_UI.detailRequestedByProject[key];
-      const sorted = Array.isArray(sessions) ? sessions.slice() : [];
-      const budget = Math.min(sorted.length, Math.max(Number(visibleLimit || TASK_OBSERVATORY_DEFAULT_VISIBLE) * 4, 18));
-      sorted.slice(0, budget).forEach((session) => {
-        const sid = String(firstNonEmptyText([session && session.id, session && session.session_id], "") || "").trim();
-        if (!sid) return;
-        const hasTaskTracking = hasConversationTaskTrackingData(session && session.task_tracking);
-        const needsCreatedAtHydration = taskObservatorySessionNeedsCreatedAtHydration(session);
-        if (hasTaskTracking && !needsCreatedAtHydration) return;
-        if (requested[sid]) return;
-        requested[sid] = "requested";
-        ensureConversationSessionDetailLoaded(sid, hasTaskTracking && needsCreatedAtHydration ? { force: true } : {})
-          .then(() => {
-            requested[sid] = "loaded";
-            render();
-          })
-          .catch(() => {
-            requested[sid] = "error";
-            render();
-          });
-      });
-    }
-
-    function taskObservatorySessionSortValue(session) {
-      const summary = session && session.latest_effective_run_summary && typeof session.latest_effective_run_summary === "object"
-        ? session.latest_effective_run_summary
-        : {};
-      return taskObservatoryTimeNum([
-        session && session.lastActiveAt,
-        summary.created_at,
-        session && session.created_at,
-      ]);
-    }
-
-    function taskObservatoryBoardNode(projectId, groups, loadingText = "") {
-      const shell = el("section", { class: "taskobs-shell", "aria-label": "任务观察台主画布" });
-      const scroll = el("div", { class: "taskobs-board-scroll" });
-      const canvas = el("div", { class: "taskobs-canvas" });
-      const filterKey = taskObservatoryActiveFilter(projectId);
-      const sortBasis = taskObservatorySortBasis(projectId);
-      const visible = taskObservatoryBuildDays(groups, filterKey, taskObservatoryVisibleLimit(projectId), sortBasis);
-
-      if (!visible.days.length) {
-        canvas.appendChild(taskObservatoryEmptyNote(loadingText || "当前筛选下暂无可展示任务主线。"));
-      } else {
-        visible.days.forEach((day) => {
-          const metrics = taskObservatoryDayMetrics(day.groups, filterKey);
-          const dayNode = el("section", { class: "taskobs-day" });
-          const head = el("div", { class: "taskobs-day-head" });
-          head.appendChild(el("div", { class: "taskobs-day-title", text: day.label }));
-          const meta = el("div", { class: "taskobs-day-meta" });
-          meta.appendChild(el("span", { class: "taskobs-day-kpi is-parent", text: "总任务 " + metrics.parentCount }));
-          meta.appendChild(el("span", { class: "taskobs-day-kpi", text: "子任务 " + metrics.childCount }));
-          meta.appendChild(el("span", { class: "taskobs-day-kpi", text: "已完成 " + metrics.doneCount }));
-          meta.appendChild(el("span", { class: "taskobs-day-kpi", text: "待完成 " + metrics.pendingCount }));
-          head.appendChild(meta);
-          dayNode.appendChild(head);
-
-          day.groups.forEach((group) => {
-            const visibleCards = taskObservatoryVisibleCards(group, filterKey);
-            if (!visibleCards.length) return;
-            const row = el("div", { class: "taskobs-row" });
-            const track = el("div", { class: "taskobs-track" });
-            track.appendChild(el("span", { class: "taskobs-track-dot" }));
-            row.appendChild(track);
-            const cards = el("div", { class: "taskobs-cards-row" });
-            visibleCards.forEach(({ row: taskRow, role }) => {
-              cards.appendChild(taskObservatoryCardNode(taskRow, role, group));
-            });
-            row.appendChild(cards);
-            dayNode.appendChild(row);
-          });
-          canvas.appendChild(dayNode);
-        });
-      }
-
-      scroll.appendChild(canvas);
-      shell.appendChild(scroll);
-      const loadWrap = el("div", { class: "taskobs-load-wrap" });
-      const loadBtn = el("button", {
-        class: "btn taskobs-load-more",
-        type: "button",
-        text: visible.hasMore
-          ? ("加载更早任务 (" + visible.visibleCount + "/" + visible.totalMatching + ")")
-          : "已加载全部旧任务",
-      });
-      loadBtn.disabled = !visible.hasMore;
-      loadBtn.addEventListener("click", () => {
-        if (loadBtn.disabled) return;
-        taskObservatoryIncreaseVisibleLimit(projectId);
-        render();
-      });
-      loadWrap.appendChild(loadBtn);
-      shell.appendChild(loadWrap);
-      return shell;
-    }
-
     function buildTaskModeList(listNode, barNode, mainMetaNode) {
-      if (barNode) barNode.innerHTML = "";
+      if (barNode) {
+        barNode.innerHTML = "";
+        barNode.style.display = "";
+      }
       if (listNode) listNode.innerHTML = "";
-      const projectId = taskObservatoryProjectKey(STATE.project);
-      if (!projectId || projectId === "overview") {
-        if (listNode) listNode.appendChild(taskObservatoryEmptyNote("当前项目缺失，暂时无法载入任务观察台。"));
-        return;
-      }
+      const groupsAll = buildTaskGroups(STATE.project);
+      const lanes = taskLaneOrderList();
+      const moduleMode = normalizeTaskModule(STATE.taskModule);
+      const moduleLabel = moduleMode === "org" ? "组织" : "任务";
+      const orgSnapshot = orgBoardSnapshot(STATE.project);
+      const orgRuntime = orgBoardRuntime(STATE.project);
+      const orgNodeCount = Array.isArray(orgSnapshot.nodes) ? orgSnapshot.nodes.length : 0;
+      const orgRelCount = Array.isArray(orgRuntime.runtime_relations) ? orgRuntime.runtime_relations.length : 0;
 
-      const directory = Array.isArray(PCONV.sessionDirectoryByProject && PCONV.sessionDirectoryByProject[projectId])
-        ? PCONV.sessionDirectoryByProject[projectId].slice()
-        : [];
-      const meta = PCONV.sessionDirectoryMetaByProject && PCONV.sessionDirectoryMetaByProject[projectId]
-        ? PCONV.sessionDirectoryMetaByProject[projectId]
-        : null;
-      if (!directory.length && (!meta || !meta.liveLoaded)) {
-        taskObservatoryScheduleDirectoryLoad(projectId);
-        if (mainMetaNode) {
-          mainMetaNode.textContent = "view=任务面板 · scope=" + projectId + " · generated_at=" + DATA.generated_at + " · loading=session_directory";
+      if (barNode) {
+        const modeRow = el("div", { class: "filterrow" });
+        modeRow.appendChild(chip("模块:" + moduleLabel, "muted"));
+        modeRow.appendChild(chip("任务总数:" + groupsAll.length, groupsAll.length ? "good" : "muted"));
+        modeRow.appendChild(chip("组织节点:" + orgNodeCount, orgNodeCount ? "good" : "muted"));
+        modeRow.appendChild(chip("运行态关系:" + orgRelCount, orgRelCount ? "warn" : "muted"));
+        barNode.appendChild(modeRow);
+        if (moduleMode !== "org") {
+          const laneRow = el("div", { class: "filterrow" });
+          for (const lane of ["全部", ...lanes]) {
+            laneRow.appendChild(chipButton(lane, STATE.taskLane === lane, () => {
+              STATE.taskLane = lane;
+              setHash();
+              render();
+            }));
+          }
+          barNode.appendChild(laneRow);
         }
-        if (listNode) listNode.appendChild(taskObservatoryEmptyNote("正在读取当前项目会话目录与 task_tracking 真源…", "is-loading"));
+      }
+
+      if (moduleMode === "org") {
+        buildOrgModeList(listNode, mainMetaNode, { view: "org" });
         return;
       }
 
-      const sessions = directory.slice().sort((a, b) => taskObservatorySessionSortValue(b) - taskObservatorySessionSortValue(a));
-      taskObservatoryScheduleDetailLoads(projectId, sessions, taskObservatoryVisibleLimit(projectId));
-      const groups = taskObservatoryBuildGroups(projectId, sessions);
-      taskObservatoryRenderBar(barNode, projectId, groups);
+      if (barNode) barNode.style.display = "none";
+      buildTaskObservatoryModeList(listNode, groupsAll, mainMetaNode);
+      return;
 
+      const groups = STATE.taskLane === "全部"
+        ? groupsAll
+        : groupsAll.filter((g) => g.lane === STATE.taskLane);
       if (mainMetaNode) {
-        mainMetaNode.textContent = "view=任务面板 · 当前项目=" + projectId + " · 总任务=" + groups.length + " · 会话目录=" + sessions.length + " · generated_at=" + DATA.generated_at;
+        mainMetaNode.textContent = "view=全项目任务聚合 · 总任务=" + groupsAll.length + " · 当前筛选=" + STATE.taskLane + " · generated_at=" + DATA.generated_at;
       }
-
       if (!groups.length) {
-        const noteText = meta && meta.error
-          ? ("任务观察台暂未形成可展示主线：" + String(meta.error || "").trim())
-          : "当前项目会话已载入，但暂未汇总出 current_task_ref 主线。";
-        if (listNode) listNode.appendChild(taskObservatoryBoardNode(projectId, [], noteText));
+        listNode.appendChild(el("div", { class: "hint", text: "当前条件下没有匹配的总任务。" }));
         return;
       }
 
-      if (listNode) listNode.appendChild(taskObservatoryBoardNode(projectId, groups));
+      for (const lane of lanes) {
+        const laneGroups = groups.filter((g) => g.lane === lane);
+        if (!laneGroups.length) continue;
+        let laneGroupsRender = laneGroups.slice();
+        let completedViewedCount = 0;
+        let completedUnviewedCount = 0;
+        if (lane === "已完成") {
+          laneGroupsRender = laneGroups
+            .slice()
+            .sort((a, b) => {
+              const aViewed = isTaskCompletedViewed(STATE.project, a && a.master && a.master.path, a && a.master && a.master.status);
+              const bViewed = isTaskCompletedViewed(STATE.project, b && b.master && b.master.path, b && b.master && b.master.status);
+              if (aViewed !== bViewed) return aViewed ? 1 : -1;
+              return Number(b.latestTs || -1) - Number(a.latestTs || -1);
+            });
+          for (const g of laneGroupsRender) {
+            const viewed = isTaskCompletedViewed(STATE.project, g && g.master && g.master.path, g && g.master && g.master.status);
+            if (viewed) completedViewedCount += 1;
+            else completedUnviewedCount += 1;
+          }
+        }
+        const laneSec = el("section", { class: "task-lane" + ((STATE.taskLaneCollapsed[lane] && (lane === "已完成" || lane === "已归档")) ? " collapsed" : "") });
+        const laneHead = el("div", { class: "task-lane-head" });
+        const laneTitle = el("div", { class: "task-lane-title" });
+        laneTitle.appendChild(chip(lane, taskLaneTone(lane) + (lane === "已归档" ? " archived-tag" : "")));
+        laneTitle.appendChild(el("span", { text: "总任务 " + laneGroupsRender.length }));
+        if (lane === "已完成") {
+          laneTitle.appendChild(chip("未看:" + completedUnviewedCount, completedUnviewedCount ? "warn" : "muted"));
+          laneTitle.appendChild(chip("已看:" + completedViewedCount, completedViewedCount ? "good" : "muted"));
+        }
+        laneHead.appendChild(laneTitle);
+        if (lane === "已完成" || lane === "已归档") {
+          const collapseBtn = el("button", { class: "btn", text: STATE.taskLaneCollapsed[lane] ? "展开" : "收起", type: "button" });
+          collapseBtn.addEventListener("click", (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            toggleTaskLaneCollapse(lane);
+          });
+          laneHead.appendChild(collapseBtn);
+        }
+        laneSec.appendChild(laneHead);
+
+        const laneBody = el("div", { class: "task-lane-body" });
+        for (const g of laneGroupsRender) {
+          const master = g.master || (g.children[0] || null);
+          if (!master) continue;
+          const selectedPath = String(STATE.selectedPath || "");
+          const selectedTaskId = normalizeTaskStableId(STATE.selectedTaskId || "");
+          const masterPath = String(master.path || "");
+          const masterTaskId = taskStableIdOfItem(master);
+          const doneViewed = lane === "已完成"
+            ? isTaskCompletedViewed(STATE.project, masterPath, master && master.status)
+            : false;
+          const sourceMode = "active";
+          const visibleChildren = (Array.isArray(g.children) ? g.children : []).filter((child) => taskChildMatchesSource(child, sourceMode));
+          const hasChildSelected = Array.isArray(g.children)
+            ? g.children.some((c) => taskSelectionMatchesItem(c, selectedPath, selectedTaskId))
+            : false;
+          const groupCard = el("div", {
+            class: "frow task-group-card" + ((taskSelectionMatchesItem(master, selectedPath, selectedTaskId) || hasChildSelected) ? " active" : ""),
+            "data-path": masterPath,
+          });
+          if (lane === "已归档") groupCard.classList.add("is-archived");
+          if (lane === "已完成" && !doneViewed) groupCard.classList.add("is-completed-unviewed");
+          const scheduled = isTaskScheduledByItem(master);
+          if (scheduled) groupCard.classList.add("is-scheduled");
+          bindTaskScheduleDragSource(groupCard, master);
+          const head = el("div", { class: "task-group-head" });
+          head.appendChild(buildItemTitleNode(master, "t"));
+          const headOps = el("div", { class: "frow-title-ops" });
+          if (lane === "已完成") {
+            const viewedBtn = el("button", {
+              class: "btn" + (doneViewed ? " btn-soft-good" : ""),
+              type: "button",
+              text: doneViewed ? "已查看" : "标记已查看",
+              title: doneViewed ? "已标记为已查看，点击可撤销" : "将该完成任务标记为已查看",
+            });
+            viewedBtn.addEventListener("click", (e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              setTaskCompletedViewed(STATE.project, masterPath, !doneViewed);
+              render();
+            });
+            headOps.appendChild(viewedBtn);
+          }
+          const scheduleBtn = createTaskScheduleToggleBtn(master, true);
+          if (scheduleBtn) headOps.appendChild(scheduleBtn);
+          const pushBtn = createTaskPushEntryBtn(master, true);
+          if (pushBtn) headOps.appendChild(pushBtn);
+          head.appendChild(headOps);
+          groupCard.appendChild(head);
+
+          const statusMeta = el("div", { class: "m" });
+          const masterFlags = taskStatusFlags(master);
+          statusMeta.appendChild(chip("主任务状态:" + g.masterBucket, taskPrimaryTone(g.masterBucket)));
+          if (masterFlags.supervised) statusMeta.appendChild(chip("关注", "bad"));
+          if (masterFlags.blocked) statusMeta.appendChild(chip("阻塞", "bad"));
+          if (lane === "已完成") {
+            statusMeta.appendChild(chip(doneViewed ? "已查看" : "未查看", doneViewed ? "good" : "warn"));
+          }
+          statusMeta.appendChild(chip("所属通道:" + resolveTaskGroupChannel(g), "muted"));
+          statusMeta.appendChild(chip("子任务总数:" + g.childTotal, "muted"));
+          statusMeta.appendChild(chip("子任务显示:" + visibleChildren.length + "/" + g.children.length, "muted"));
+          const order = ["进行中", "待办", "待验收", "已完成", "暂缓"];
+          for (const k of order) {
+            const c = Number(g.childCounts[k] || 0);
+            if (!c) continue;
+            statusMeta.appendChild(chip(k + ":" + c, toneForBucket(k)));
+          }
+          if (g.latestAt) statusMeta.appendChild(chip("更新:" + g.latestAt, "muted"));
+          groupCard.appendChild(statusMeta);
+
+          const summaryText = visibleChildren.length
+            ? taskGroupSummaryText(g, visibleChildren)
+            : "当前暂无可展示子任务。";
+          groupCard.appendChild(el("div", { class: "task-group-summary", text: summaryText }));
+
+          const expanded = !!STATE.taskGroupExpanded[g.key];
+          const foldBtn = el("button", { class: "btn", type: "button", text: expanded ? "收起子任务" : ("展开子任务（" + visibleChildren.length + "）") });
+          if (!visibleChildren.length) foldBtn.disabled = true;
+          foldBtn.addEventListener("click", (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            toggleTaskGroupExpanded(g.key);
+          });
+          groupCard.appendChild(foldBtn);
+
+          if (expanded) {
+            const childWrap = el("div", { class: "task-group-children" });
+            if (!visibleChildren.length) {
+              childWrap.appendChild(el("div", { class: "task-group-empty", text: "当前筛选条件下暂无子任务。" }));
+            }
+            for (const child of visibleChildren) {
+              const childPath = String((child && child.path) || "");
+              const row = el("div", {
+                class: "task-group-child" + (taskSelectionMatchesItem(child, selectedPath, selectedTaskId) ? " active" : ""),
+                "data-path": childPath,
+              });
+              const left = el("div", { style: "min-width:0;flex:1;" });
+              left.appendChild(el("div", { class: "task-group-child-title", text: shortTitle(child.title || "") }));
+              const cm = el("div", { class: "task-group-child-meta" });
+              cm.appendChild(chip(bucketKeyForStatus(child.status), toneForBucket(bucketKeyForStatus(child.status))));
+              if (child.channel) cm.appendChild(chip(child.channel, "muted"));
+              if (child.updated_at) cm.appendChild(chip("更新:" + child.updated_at, "muted"));
+              left.appendChild(cm);
+              row.appendChild(left);
+              const right = el("div", { class: "frow-title-ops" });
+              const cpb = createTaskPushEntryBtn(child, true);
+              if (cpb) right.appendChild(cpb);
+              row.appendChild(right);
+              row.addEventListener("click", (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                setSelectedTaskRef(child.path, taskStableIdOfItem(child));
+              });
+              childWrap.appendChild(row);
+            }
+            groupCard.appendChild(childWrap);
+          }
+
+          bindCardSelectSemantics(groupCard, () => {
+            setSelectedTaskRef(master.path, masterTaskId);
+          });
+          laneBody.appendChild(groupCard);
+        }
+        laneSec.appendChild(laneBody);
+        listNode.appendChild(laneSec);
+      }
     }

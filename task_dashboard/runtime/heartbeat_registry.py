@@ -37,7 +37,16 @@ from task_dashboard.helpers import (
     coerce_int as _coerce_int,
 )
 from task_dashboard.parser_md import extract_field, parse_leading_tags
-from task_dashboard.runtime.channel_admin import resolve_task_root_path as runtime_resolve_task_root_path
+from task_dashboard.task_identity import (
+    extract_task_identity_from_file as _extract_task_identity_from_file,
+    normalize_task_path as _identity_normalize_task_path,
+    record_task_move as _record_task_move,
+)
+from task_dashboard.runtime.channel_admin import (
+    create_channel as runtime_create_channel,
+    resolve_task_root_path as runtime_resolve_task_root_path,
+)
+from task_dashboard.runtime.agent_display_name import attach_agent_display_fields
 from task_dashboard.runtime.run_state_semantics import build_session_semantics, classify_run_semantics
 from task_dashboard.runtime.session_display_state import (
     build_latest_run_summary as _session_display_build_latest_run_summary,
@@ -81,6 +90,7 @@ __all__ = [
     "_run_created_ts",
     "_run_status_display_state",
     "_scan_task_auto_kickoff_history",
+    "_invalidate_project_session_runtime_index_cache",
     "_session_archive_summary_cache_ttl_s",
     "_session_external_busy_probe_ttl_s",
     "_session_runtime_index_cache_ttl_s",
@@ -121,6 +131,29 @@ def _scan_session_busy_rows(*args, **kwargs):
     return __getattr__("_scan_session_busy_rows")(*args, **kwargs)
 
 
+def _scan_session_busy_rows_effective(*args, **kwargs):
+    try:
+        impl = __getattr__("_scan_session_busy_rows_effective")
+    except AttributeError:
+        impl = None
+    if callable(impl):
+        return impl(*args, **kwargs)
+
+    # 回滚到旧版 server.py 时，可能不存在 *_effective 变体。
+    # 这里退回基础 busy scan，优先保证 /api/sessions 可用，
+    # 不让 heartbeat_registry 因兼容缺口直接打崩目录接口。
+    if args:
+        _store = args[0]
+        sid = args[1] if len(args) > 1 else ""
+        cli_type = args[2] if len(args) > 2 else kwargs.get("cli_type", "codex")
+        rows = args[3] if len(args) > 3 else kwargs.get("rows")
+    else:
+        sid = kwargs.get("session_id", "")
+        cli_type = kwargs.get("cli_type", "codex")
+        rows = kwargs.get("rows")
+    return _scan_session_busy_rows(sid, cli_type=cli_type, rows=rows)
+
+
 def _session_process_busy(session_id: str, cli_type: str = "codex") -> bool:
     return bool(__getattr__("_session_process_busy")(session_id, cli_type=cli_type))
 
@@ -159,6 +192,14 @@ def _session_runtime_index_cache_lock():
 
 def _session_runtime_index_cache():
     return __getattr__("_SESSION_RUNTIME_INDEX_CACHE")
+
+
+def _session_runtime_index_inflight():
+    return __getattr__("_SESSION_RUNTIME_INDEX_INFLIGHT")
+
+
+def _session_runtime_index_invalidated_at():
+    return __getattr__("_SESSION_RUNTIME_INDEX_INVALIDATED_AT")
 
 
 def _session_external_busy_cache_lock():
@@ -447,6 +488,165 @@ class HeartbeatTaskRuntimeRegistry:
         interval_minutes = max(5, int(task.get("interval_minutes") or 60))
         return _iso_after_s(interval_minutes * 60)
 
+    def _task_runtime_session_id(self, task: dict[str, Any]) -> str:
+        source_scope = str(task.get("source_scope") or "project").strip().lower()
+        return str(task.get("session_id") or "").strip() if source_scope == "session" else ""
+
+    def _history_record_for_job(self, runtime: dict[str, Any], job_id: str) -> dict[str, Any]:
+        jid = str(job_id or "").strip()
+        if not jid:
+            return {}
+        rows = runtime.get("history")
+        if not isinstance(rows, list):
+            return {}
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            if str(row.get("job_id") or "").strip() == jid:
+                return dict(row)
+        return {}
+
+    def _disable_task_after_limit(self, project_id: str, task: dict[str, Any]) -> bool:
+        pid = str(project_id or "").strip()
+        tid = str(task.get("heartbeat_task_id") or "").strip()
+        if not (pid and tid):
+            return False
+        source_scope = str(task.get("source_scope") or "project").strip().lower()
+        if source_scope == "session":
+            sid = str(task.get("session_id") or "").strip()
+            if not sid:
+                return False
+            session = self.session_store.get_session(sid) or {}
+            if not isinstance(session, dict) or not session:
+                return False
+            heartbeat_cfg = _load_session_heartbeat_config(session)
+            current_tasks = _heartbeat_tasks_for_write(heartbeat_cfg.get("tasks"))
+            changed = False
+            for row in current_tasks:
+                if str(row.get("heartbeat_task_id") or "").strip() != tid:
+                    continue
+                if not bool(row.get("enabled")):
+                    return False
+                row["enabled"] = False
+                changed = True
+                break
+            if not changed:
+                return False
+            enabled_any = any(bool(row.get("enabled")) for row in current_tasks)
+            heartbeat_payload = _heartbeat_session_payload_for_write(
+                session,
+                enabled=enabled_any,
+                tasks=current_tasks,
+            )
+            return bool(self.session_store.update_session(sid, heartbeat=heartbeat_payload))
+
+        cfg = _load_project_heartbeat_config(pid)
+        current_tasks = _heartbeat_tasks_for_write(cfg.get("tasks"))
+        changed = False
+        for row in current_tasks:
+            if str(row.get("heartbeat_task_id") or "").strip() != tid:
+                continue
+            if not bool(row.get("enabled")):
+                return False
+            row["enabled"] = False
+            changed = True
+            break
+        if not changed:
+            return False
+        _set_project_scheduler_contract_in_config(
+            pid,
+            heartbeat_patch=_build_heartbeat_patch_with_tasks(cfg=cfg, tasks=current_tasks),
+        )
+        return True
+
+    def _refresh_runtime_execution_fields(
+        self,
+        project_id: str,
+        task: dict[str, Any],
+        runtime: dict[str, Any],
+    ) -> dict[str, Any]:
+        pid = str(project_id or "").strip()
+        tid = str(task.get("heartbeat_task_id") or "").strip()
+        sid = self._task_runtime_session_id(task)
+        current = dict(runtime if isinstance(runtime, dict) else {})
+        if not tid:
+            return current
+
+        patch: dict[str, Any] = {}
+        job_id = str(current.get("last_job_id") or "").strip()
+        if job_id:
+            job = self.task_push_runtime.get_status(pid, job_id)
+            if isinstance(job, dict):
+                status_obj = job.get("status") if isinstance(job.get("status"), dict) else {}
+                attempts = job.get("attempts") if isinstance(job.get("attempts"), list) else []
+                last_attempt = attempts[-1] if attempts and isinstance(attempts[-1], dict) else {}
+                latest_status = str(status_obj.get("status") or current.get("last_job_status") or "").strip()
+                latest_run_id = str(status_obj.get("last_run_id") or current.get("last_run_id") or "").strip()
+                latest_error = str(status_obj.get("last_error") or current.get("last_error") or "").strip()
+                latest_result = str(status_obj.get("last_result") or current.get("last_result") or "").strip()
+                latest_busy = str(last_attempt.get("active_status") or current.get("last_busy_status") or "").strip()
+                pending_job = latest_status in {"created", "scheduled", "retry_waiting"}
+                if latest_status != str(current.get("last_job_status") or ""):
+                    patch["last_job_status"] = latest_status
+                if latest_run_id != str(current.get("last_run_id") or ""):
+                    patch["last_run_id"] = latest_run_id
+                if latest_error != str(current.get("last_error") or ""):
+                    patch["last_error"] = latest_error
+                if latest_result != str(current.get("last_result") or ""):
+                    patch["last_result"] = latest_result
+                if latest_busy != str(current.get("last_busy_status") or ""):
+                    patch["last_busy_status"] = latest_busy
+                if pending_job != bool(current.get("pending_job")):
+                    patch["pending_job"] = pending_job
+
+        effective = dict(current)
+        effective.update(patch)
+        max_execute_count = max(0, int(task.get("max_execute_count") or 0))
+        executed_count = max(0, int(effective.get("executed_count") or 0))
+        last_counted_job_id = str(effective.get("last_counted_job_id") or "").strip()
+        last_trigger = str(effective.get("last_trigger") or "").strip().lower()
+        job_status = str(effective.get("last_job_status") or "").strip().lower()
+        if job_id and job_id != last_counted_job_id and last_trigger != "manual" and job_status == "dispatched":
+            record = self._history_record_for_job(effective, job_id)
+            record_trigger = str(record.get("trigger") or last_trigger).strip().lower()
+            record_result = str(record.get("result") or effective.get("last_result") or "").strip().lower()
+            if record_trigger != "manual" and record_result == "dispatched":
+                executed_count += 1
+                patch["executed_count"] = executed_count
+                patch["last_counted_job_id"] = job_id
+                effective["executed_count"] = executed_count
+                effective["last_counted_job_id"] = job_id
+
+        if max_execute_count > 0:
+            remaining = max(0, max_execute_count - executed_count)
+            if remaining != int(effective.get("remaining_execute_count") or 0):
+                patch["remaining_execute_count"] = remaining
+            if remaining <= 0:
+                if str(effective.get("auto_disabled_reason") or "").strip() != "max_execute_count_reached":
+                    patch["auto_disabled_reason"] = "max_execute_count_reached"
+                    patch["auto_disabled_at"] = _now_iso()
+                    effective["auto_disabled_reason"] = "max_execute_count_reached"
+                    effective["auto_disabled_at"] = str(patch["auto_disabled_at"])
+                if bool(task.get("enabled")) and self._disable_task_after_limit(pid, task):
+                    patch["next_due_at"] = ""
+                    patch["pending_job"] = False
+            else:
+                if str(effective.get("auto_disabled_reason") or "").strip():
+                    patch["auto_disabled_reason"] = ""
+                if str(effective.get("auto_disabled_at") or "").strip():
+                    patch["auto_disabled_at"] = ""
+        else:
+            if effective.get("remaining_execute_count") is not None:
+                patch["remaining_execute_count"] = None
+            if str(effective.get("auto_disabled_reason") or "").strip():
+                patch["auto_disabled_reason"] = ""
+            if str(effective.get("auto_disabled_at") or "").strip():
+                patch["auto_disabled_at"] = ""
+
+        if patch:
+            current = self._save_task_runtime_locked(pid, tid, patch, sid)
+        return current
+
     def _merge_task(self, project_id: str, task: dict[str, Any]) -> dict[str, Any]:
         tid = str(task.get("heartbeat_task_id") or "").strip()
         source_scope = str(task.get("source_scope") or "project").strip().lower()
@@ -454,24 +654,21 @@ class HeartbeatTaskRuntimeRegistry:
         runtime = self._task_runtime_locked(project_id, tid, sid) if tid else {}
         out = dict(task)
         if tid:
-            job_id = str(runtime.get("last_job_id") or "").strip()
-            if job_id:
-                job = self.task_push_runtime.get_status(project_id, job_id)
-                if isinstance(job, dict):
-                    status_obj = job.get("status") if isinstance(job.get("status"), dict) else {}
-                    attempts = job.get("attempts") if isinstance(job.get("attempts"), list) else []
-                    last_attempt = attempts[-1] if attempts and isinstance(attempts[-1], dict) else {}
-                    runtime["last_job_status"] = str(status_obj.get("status") or runtime.get("last_job_status") or "")
-                    runtime["last_run_id"] = str(status_obj.get("last_run_id") or runtime.get("last_run_id") or "")
-                    runtime["last_error"] = str(status_obj.get("last_error") or runtime.get("last_error") or "")
-                    runtime["pending_job"] = str(status_obj.get("status") or "") in {"created", "scheduled", "retry_waiting"}
-                    runtime["last_busy_status"] = str(last_attempt.get("active_status") or runtime.get("last_busy_status") or "")
-                    runtime["last_result"] = str(status_obj.get("last_result") or runtime.get("last_result") or "")
-                    self._save_task_runtime_locked(project_id, tid, runtime, sid)
+            runtime = self._refresh_runtime_execution_fields(project_id, task, runtime)
         out.update(
             {
+                "enabled": False
+                if str(runtime.get("auto_disabled_reason") or "").strip() == "max_execute_count_reached"
+                else bool(task.get("enabled")),
+                "max_execute_count": max(0, int(task.get("max_execute_count") or 0)),
+                "executed_count": max(0, int(runtime.get("executed_count") or 0)),
+                "remaining_execute_count": runtime.get("remaining_execute_count"),
+                "last_counted_job_id": str(runtime.get("last_counted_job_id") or ""),
+                "auto_disabled_reason": str(runtime.get("auto_disabled_reason") or ""),
+                "auto_disabled_at": str(runtime.get("auto_disabled_at") or ""),
                 "next_due_at": str(runtime.get("next_due_at") or ""),
                 "last_triggered_at": str(runtime.get("last_triggered_at") or ""),
+                "last_trigger": str(runtime.get("last_trigger") or ""),
                 "last_status": str(runtime.get("last_status") or ""),
                 "last_result": str(runtime.get("last_result") or ""),
                 "last_error": str(runtime.get("last_error") or ""),
@@ -661,6 +858,7 @@ class HeartbeatTaskRuntimeRegistry:
                 tid,
                 {
                     "last_triggered_at": now,
+                    "last_trigger": trigger,
                     "last_status": "skipped_active",
                     "last_result": "skipped_active",
                     "last_busy_status": str(active.get("status") or ""),
@@ -690,6 +888,7 @@ class HeartbeatTaskRuntimeRegistry:
                 tid,
                 {
                     "last_triggered_at": now,
+                    "last_trigger": trigger,
                     "last_status": "waiting_idle",
                     "last_result": "waiting_idle",
                     "last_busy_status": str(active.get("status") or ""),
@@ -750,6 +949,7 @@ class HeartbeatTaskRuntimeRegistry:
             tid,
             {
                 "last_triggered_at": now,
+                "last_trigger": trigger,
                 "last_status": str(status_obj.get("status") or ""),
                 "last_result": str(status_obj.get("last_result") or ""),
                 "last_error": str(status_obj.get("last_error") or ""),
@@ -807,6 +1007,7 @@ class HeartbeatTaskRuntimeRegistry:
                         )
             else:
                 for row in tasks:
+                    row = self._merge_task(pid, row)
                     tid = str(row.get("heartbeat_task_id") or "").strip()
                     if not tid:
                         continue
@@ -859,6 +1060,7 @@ class HeartbeatTaskRuntimeRegistry:
                         continue
                     self._dispatch_task(pid, row, trigger="schedule", respect_busy_policy=True)
             for row in self._iter_session_tasks(pid):
+                row = self._merge_task(pid, row)
                 tid = str(row.get("heartbeat_task_id") or "").strip()
                 sid = str(row.get("session_id") or "").strip()
                 if not (tid and sid):
@@ -1037,10 +1239,21 @@ def _session_runtime_index_cache_ttl_s() -> float:
     if raw:
         try:
             v = float(raw) / 1000.0
-            return max(0.2, min(v, 10.0))
+            return max(0.5, min(v, 15.0))
         except Exception:
             pass
-    return 1.2
+    return 4.0
+
+
+def _session_runtime_index_inflight_wait_s() -> float:
+    raw = str(os.environ.get("CCB_SESSION_RUNTIME_CACHE_INFLIGHT_WAIT_MS") or "").strip()
+    if raw:
+        try:
+            v = float(raw) / 1000.0
+            return max(0.2, min(v, 30.0))
+        except Exception:
+            pass
+    return 8.0
 
 
 def _session_archive_summary_cache_ttl_s() -> float:
@@ -1074,6 +1287,60 @@ def _run_created_ts(meta: dict[str, Any]) -> float:
     )
 
 
+def _run_activity_ts(meta: dict[str, Any]) -> float:
+    return (
+        _parse_iso_ts(meta.get("lastProgressAt"))
+        or _parse_iso_ts(meta.get("updatedAt"))
+        or _parse_iso_ts(meta.get("finishedAt"))
+        or _parse_iso_ts(meta.get("startedAt"))
+        or _parse_iso_ts(meta.get("createdAt"))
+        or 0.0
+    )
+
+
+def _latest_process_row_preview(process_rows: Any, max_len: int = 300) -> str:
+    rows = process_rows if isinstance(process_rows, list) else []
+    for row in reversed(rows):
+        if isinstance(row, dict):
+            text = _safe_text(str(row.get("text") or "").replace("\r\n", "\n").strip(), max_len).strip()
+            if text:
+                return text
+        else:
+            text = _safe_text(str(row or "").replace("\r\n", "\n").strip(), max_len).strip()
+            if text:
+                return text
+    return ""
+
+
+def _build_session_summary_from_meta(meta: dict[str, Any]) -> dict[str, Any]:
+    process_rows = meta.get("processRows") or meta.get("process_rows") or []
+    ai_preview = str(meta.get("lastPreview") or meta.get("partialPreview") or "").strip()
+    if not ai_preview:
+        ai_preview = _latest_process_row_preview(process_rows, 300)
+    user_preview = str(meta.get("messagePreview") or "").strip()
+    status = str(meta.get("status") or "").strip().lower()
+    return {
+        "latest_run_id": str(meta.get("id") or "").strip(),
+        "latest_status": status,
+        "updated_at": str(
+            meta.get("lastProgressAt")
+            or meta.get("updatedAt")
+            or meta.get("finishedAt")
+            or meta.get("startedAt")
+            or meta.get("createdAt")
+            or ""
+        ).strip(),
+        "latest_ai_msg": ai_preview,
+        "latest_user_msg": user_preview,
+        "last_preview": ai_preview or user_preview,
+        "last_speaker": "assistant" if ai_preview else ("user" if user_preview else "assistant"),
+        "last_sender_type": str(meta.get("sender_type") or ("user" if user_preview and not ai_preview else "")).strip(),
+        "last_sender_name": str(meta.get("sender_name") or "").strip(),
+        "last_sender_source": str(meta.get("sender_source") or ("manual" if user_preview and not ai_preview else "")).strip(),
+        "last_error": str(meta.get("error") or "").strip() if status == "error" else "",
+    }
+
+
 def _run_status_display_state(status: Any) -> str:
     st = str(status or "").strip().lower()
     if st in {"running", "queued", "retry_waiting", "done", "error"}:
@@ -1101,7 +1368,12 @@ def _session_runtime_internal_state(agg: dict[str, Any]) -> str:
     return "idle"
 
 
-def _probe_external_session_busy_cached(session_id: str, cli_type: str = "codex") -> tuple[bool, str]:
+def _probe_external_session_busy_cached(
+    session_id: str,
+    cli_type: str = "codex",
+    *,
+    store: "RunStore" | None = None,
+) -> tuple[bool, str]:
     sid = str(session_id or "").strip()
     if not sid:
         return False, ""
@@ -1118,7 +1390,7 @@ def _probe_external_session_busy_cached(session_id: str, cli_type: str = "codex"
                 return bool(cached.get("external_busy")), str(cached.get("updated_at") or "")
     busy = False
     try:
-        busy = bool(_session_process_busy(sid, cli_type=cli_t))
+        busy = bool(_scan_session_busy_rows_effective(store, sid, cli_type=cli_t))
     except Exception:
         busy = False
     updated_at = _now_iso()
@@ -1133,6 +1405,8 @@ def _probe_external_session_busy_cached(session_id: str, cli_type: str = "codex"
 
 def _probe_external_session_busy_batch_cached(
     session_rows: list[tuple[str, str]],
+    *,
+    store: "RunStore" | None = None,
 ) -> dict[str, tuple[bool, str]]:
     """
     Batch probe external busy for multiple sessions with one process-table scan.
@@ -1172,7 +1446,7 @@ def _probe_external_session_busy_batch_cached(
     updated_at = _now_iso()
     cache_patch: dict[str, dict[str, Any]] = {}
     for key, sid, cli_t in pending:
-        busy = bool(_scan_session_busy_rows(sid, cli_type=cli_t, rows=rows))
+        busy = bool(_scan_session_busy_rows_effective(store, sid, cli_type=cli_t, rows=rows))
         out[key] = (busy, updated_at)
         cache_patch[key] = {
             "external_busy": bool(busy),
@@ -1190,7 +1464,12 @@ def _load_archived_session_summary(store: "RunStore", project_id: str, session_i
     sid = str(session_id or "").strip()
     if not (pid and sid):
         return {}
-    cache_key = f"{pid}|{sid}"
+    runs_root = ""
+    try:
+        runs_root = str(Path(getattr(store, "runs_dir", "")).resolve())
+    except Exception:
+        runs_root = str(getattr(store, "runs_dir", "") or "")
+    cache_key = f"{runs_root}|{pid}|{sid}"
     now_mono = time.monotonic()
     ttl_s = _session_archive_summary_cache_ttl_s()
     cache = _session_archive_summary_cache()
@@ -1279,112 +1558,242 @@ def _load_archived_session_summary(store: "RunStore", project_id: str, session_i
     return summary
 
 
+def _build_session_run_semantics_cached(
+    store: "RunStore",
+    *,
+    project_id: str,
+    session_id: str,
+) -> dict[str, Any]:
+    pid = str(project_id or "").strip()
+    sid = str(session_id or "").strip()
+    if not (pid and sid):
+        return {
+            "run_fields": {},
+            "session_health_state": "healthy",
+            "latest_effective_run_summary": {},
+            "latest_system_summary": {},
+        }
+    previous = bool(getattr(_RUN_SESSION_SEMANTICS_REENTRY, "active", False))
+    _RUN_SESSION_SEMANTICS_REENTRY.active = True
+    try:
+        runs = store.list_runs(
+            project_id=pid,
+            session_id=sid,
+            limit=_session_runtime_scan_limit(),
+            include_payload=False,
+        )
+    finally:
+        _RUN_SESSION_SEMANTICS_REENTRY.active = previous
+    return build_session_semantics(runs)
+
+
+def _invalidate_project_session_runtime_index_cache(project_id: str = "", *, session_id: str = "") -> None:
+    pid = str(project_id or "").strip()
+    sid = str(session_id or "").strip()
+    now_mono = time.monotonic()
+    with _session_runtime_index_cache_lock():
+        cache = _session_runtime_index_cache()
+        inflight = _session_runtime_index_inflight()
+        invalidated = _session_runtime_index_invalidated_at()
+        if pid:
+            cache.pop(pid, None)
+            invalidated[pid] = now_mono
+        else:
+            cache.clear()
+            inflight.clear()
+            invalidated.clear()
+    if sid:
+        with _session_external_busy_cache_lock():
+            cache = _session_external_busy_cache()
+            for key in list(cache.keys()):
+                if str(key).startswith(f"{sid}|"):
+                    cache.pop(key, None)
+        with _session_archive_summary_cache_lock():
+            cache = _session_archive_summary_cache()
+            for key in list(cache.keys()):
+                key_text = str(key)
+                if not key_text.endswith(f"|{sid}"):
+                    continue
+                if pid and f"|{pid}|{sid}" not in key_text:
+                    continue
+                cache.pop(key, None)
+
+
+def _session_runtime_index_cache_entry(
+    project_id: str,
+    *,
+    now_mono: float,
+    ttl_s: float,
+) -> dict[str, dict[str, Any]] | None:
+    pid = str(project_id or "").strip()
+    if not pid:
+        return None
+    cached = _session_runtime_index_cache().get(pid)
+    if not isinstance(cached, dict):
+        return None
+    index = cached.get("index")
+    if not isinstance(index, dict):
+        return None
+    checked = float(cached.get("checked_at_mono") or 0.0)
+    if (now_mono - checked) > ttl_s:
+        return None
+    build_started = float(cached.get("build_started_at_mono") or checked)
+    invalidated_at = float(_session_runtime_index_invalidated_at().get(pid) or 0.0)
+    if build_started < invalidated_at:
+        return None
+    return dict(index)
+
+
 def _build_project_session_runtime_index(store: "RunStore", project_id: str) -> dict[str, dict[str, Any]]:
     pid = str(project_id or "").strip()
     if not pid:
         return {}
-    now_mono = time.monotonic()
     ttl_s = _session_runtime_index_cache_ttl_s()
-    cache = _session_runtime_index_cache()
-    with _session_runtime_index_cache_lock():
-        cached = cache.get(pid)
-        if isinstance(cached, dict):
-            checked = float(cached.get("checked_at_mono") or 0.0)
-            index = cached.get("index")
-            if isinstance(index, dict) and (now_mono - checked) <= ttl_s:
-                return dict(index)
+    build_started_mono = time.monotonic()
+    builder = False
+    inflight_event: threading.Event | None = None
+    wait_s = _session_runtime_index_inflight_wait_s()
+    while True:
+        now_mono = time.monotonic()
+        with _session_runtime_index_cache_lock():
+            cached_index = _session_runtime_index_cache_entry(pid, now_mono=now_mono, ttl_s=ttl_s)
+            if isinstance(cached_index, dict):
+                return cached_index
+            inflight = _session_runtime_index_inflight().get(pid)
+            inflight_event = None
+            if isinstance(inflight, dict):
+                event = inflight.get("event")
+                if isinstance(event, threading.Event):
+                    inflight_event = event
+            if inflight_event is None:
+                inflight_event = threading.Event()
+                _session_runtime_index_inflight()[pid] = {
+                    "event": inflight_event,
+                    "build_started_at_mono": now_mono,
+                }
+                builder = True
+                build_started_mono = now_mono
+                break
+        if inflight_event is not None:
+            inflight_event.wait(wait_s)
 
-    runs = store.list_runs(project_id=pid, limit=_session_runtime_scan_limit(), include_payload=False)
-    idx: dict[str, dict[str, Any]] = {}
-    for meta in runs:
-        if not isinstance(meta, dict):
-            continue
-        sid = str(meta.get("sessionId") or "").strip()
-        if not sid:
-            continue
-        rid = str(meta.get("id") or "").strip()
-        if not rid:
-            continue
-        st = str(meta.get("status") or "").strip().lower()
-        ts = _run_created_ts(meta)
-        row = idx.setdefault(
-            sid,
-            {
-                "running_ids": [],
-                "queued_ids": [],
-                "retry_waiting_ids": [],
-                "external_busy": False,
-                "latest_run_id": "",
-                "latest_status": "",
-                "latest_ts": 0.0,
-                "updated_at": "",
-                "last_preview": "",
-                "last_speaker": "assistant",
-                "last_sender_type": "",
-                "last_sender_name": "",
-                "last_sender_source": "",
-                "latest_user_msg": "",
-                "latest_ai_msg": "",
-                "last_error": "",
-                "run_count": 0,
-            },
-        )
-        row["run_count"] = int(row.get("run_count") or 0) + 1
-        if st == "running":
-            row["running_ids"].append((ts, rid))
-        elif st == "queued":
-            row["queued_ids"].append((ts, rid))
-        elif st == "retry_waiting":
-            row["retry_waiting_ids"].append((ts, rid))
-        if st in {"queued", "retry_waiting"}:
-            qreason = str(meta.get("queueReason") or "").strip().lower()
-            if qreason == "session_busy_external":
-                row["external_busy"] = True
-        if ts >= float(row.get("latest_ts") or 0.0):
-            row["latest_ts"] = ts
-            row["latest_run_id"] = rid
-            row["latest_status"] = st
-            row["updated_at"] = str(meta.get("finishedAt") or meta.get("startedAt") or meta.get("createdAt") or "").strip()
-            ai_preview = str(meta.get("lastPreview") or meta.get("partialPreview") or "").strip()
-            user_preview = str(meta.get("messagePreview") or "").strip()
-            row["latest_ai_msg"] = ai_preview
-            row["latest_user_msg"] = user_preview
-            row["last_preview"] = ai_preview or user_preview
-            row["last_speaker"] = "assistant" if ai_preview else ("user" if user_preview else "assistant")
-            if user_preview and not ai_preview:
-                row["last_sender_type"] = str(meta.get("sender_type") or "user").strip() or "user"
-                row["last_sender_name"] = str(meta.get("sender_name") or "").strip()
-                row["last_sender_source"] = str(meta.get("sender_source") or "manual").strip() or "manual"
-            else:
-                row["last_sender_type"] = ""
-                row["last_sender_name"] = ""
-                row["last_sender_source"] = ""
-            row["last_error"] = str(meta.get("error") or "").strip() if st == "error" else ""
-
-    for row in idx.values():
-        for key in ("running_ids", "queued_ids", "retry_waiting_ids"):
-            arr = row.get(key)
-            if not isinstance(arr, list):
-                row[key] = []
+    try:
+        runs = store.list_runs(project_id=pid, limit=_session_runtime_scan_limit(), include_payload=False)
+        idx: dict[str, dict[str, Any]] = {}
+        runs_by_session: dict[str, list[dict[str, Any]]] = {}
+        for meta in runs:
+            if not isinstance(meta, dict):
                 continue
-            arr_sorted = sorted(
-                [(float(x[0] or 0.0), str(x[1] or "").strip()) for x in arr if str(x[1] or "").strip()],
-                key=lambda t: (t[0], t[1]),
+            sid = str(meta.get("sessionId") or "").strip()
+            if not sid:
+                continue
+            rid = str(meta.get("id") or "").strip()
+            if not rid:
+                continue
+            runs_by_session.setdefault(sid, []).append(meta)
+            st = str(meta.get("status") or "").strip().lower()
+            ts = _run_created_ts(meta)
+            row = idx.setdefault(
+                sid,
+                {
+                    "running_ids": [],
+                    "queued_ids": [],
+                    "retry_waiting_ids": [],
+                    "external_busy": False,
+                    "latest_run_id": "",
+                    "latest_status": "",
+                    "latest_ts": 0.0,
+                    "updated_at": "",
+                    "last_preview": "",
+                    "last_speaker": "assistant",
+                    "last_sender_type": "",
+                    "last_sender_name": "",
+                    "last_sender_source": "",
+                    "latest_user_msg": "",
+                    "latest_ai_msg": "",
+                    "last_error": "",
+                    "run_count": 0,
+                    "active_activity_ts": 0.0,
+                    "session_health_state": "healthy",
+                    "latest_effective_run_summary": {},
+                },
             )
-            row[key] = arr_sorted
+            row["run_count"] = int(row.get("run_count") or 0) + 1
+            if st == "running":
+                row["running_ids"].append((ts, rid))
+                activity_ts = _run_activity_ts(meta)
+                if activity_ts >= float(row.get("active_activity_ts") or 0.0):
+                    row["active_activity_ts"] = activity_ts
+                    row.update(_build_session_summary_from_meta(meta))
+            elif st == "queued":
+                row["queued_ids"].append((ts, rid))
+            elif st == "retry_waiting":
+                row["retry_waiting_ids"].append((ts, rid))
+            if st in {"queued", "retry_waiting"}:
+                qreason = str(meta.get("queueReason") or "").strip().lower()
+                if qreason == "session_busy_external":
+                    row["external_busy"] = True
+            if ts >= float(row.get("latest_ts") or 0.0):
+                row["latest_ts"] = ts
+                row["latest_run_id"] = rid
+                row["latest_status"] = st
+                row["updated_at"] = str(meta.get("finishedAt") or meta.get("startedAt") or meta.get("createdAt") or "").strip()
+                ai_preview = str(meta.get("lastPreview") or meta.get("partialPreview") or "").strip()
+                user_preview = str(meta.get("messagePreview") or "").strip()
+                row["latest_ai_msg"] = ai_preview
+                row["latest_user_msg"] = user_preview
+                row["last_preview"] = ai_preview or user_preview
+                row["last_speaker"] = "assistant" if ai_preview else ("user" if user_preview else "assistant")
+                if user_preview and not ai_preview:
+                    row["last_sender_type"] = str(meta.get("sender_type") or "user").strip() or "user"
+                    row["last_sender_name"] = str(meta.get("sender_name") or "").strip()
+                    row["last_sender_source"] = str(meta.get("sender_source") or "manual").strip() or "manual"
+                else:
+                    row["last_sender_type"] = ""
+                    row["last_sender_name"] = ""
+                    row["last_sender_source"] = ""
+                row["last_error"] = str(meta.get("error") or "").strip() if st == "error" else ""
 
-    with _session_runtime_index_cache_lock():
-        cache[pid] = {
-            "checked_at_mono": now_mono,
-            "index": idx,
-        }
-    return idx
+        for row in idx.values():
+            for key in ("running_ids", "queued_ids", "retry_waiting_ids"):
+                arr = row.get(key)
+                if not isinstance(arr, list):
+                    row[key] = []
+                    continue
+                arr_sorted = sorted(
+                    [(float(x[0] or 0.0), str(x[1] or "").strip()) for x in arr if str(x[1] or "").strip()],
+                    key=lambda t: (t[0], t[1]),
+                )
+                row[key] = arr_sorted
+            row.pop("active_activity_ts", None)
+        for sid, row in idx.items():
+            semantics = build_session_semantics(runs_by_session.get(sid) or [])
+            row["session_health_state"] = str(semantics.get("session_health_state") or "healthy")
+            latest_effective = semantics.get("latest_effective_run_summary")
+            row["latest_effective_run_summary"] = dict(latest_effective) if isinstance(latest_effective, dict) else {}
+
+        with _session_runtime_index_cache_lock():
+            cache_written_at_mono = time.monotonic()
+            _session_runtime_index_cache()[pid] = {
+                "checked_at_mono": cache_written_at_mono,
+                "build_started_at_mono": max(float(build_started_mono or 0.0), cache_written_at_mono),
+                "index": idx,
+            }
+        return idx
+    finally:
+        if builder and inflight_event is not None:
+            with _session_runtime_index_cache_lock():
+                current = _session_runtime_index_inflight().get(pid)
+                if isinstance(current, dict) and current.get("event") is inflight_event:
+                    _session_runtime_index_inflight().pop(pid, None)
+            inflight_event.set()
 
 
 def _build_session_runtime_state_for_row(
     row: dict[str, Any],
     agg: dict[str, Any],
     *,
+    store: "RunStore" | None = None,
     probe_external_when_idle: bool = True,
 ) -> dict[str, Any]:
     sid = str(row.get("id") or "").strip()
@@ -1396,7 +1805,7 @@ def _build_session_runtime_state_for_row(
     external_busy = bool(agg.get("external_busy"))
     probe_updated_at = ""
     if (not external_busy) and probe_external_when_idle and sid and internal_state not in {"running", "queued", "retry_waiting"}:
-        external_busy, probe_updated_at = _probe_external_session_busy_cached(sid, cli_type=cli_type)
+        external_busy, probe_updated_at = _probe_external_session_busy_cached(sid, cli_type=cli_type, store=store)
 
     if internal_state in {"running", "queued", "retry_waiting"}:
         display_state = internal_state
@@ -1482,7 +1891,7 @@ def _attach_runtime_state_to_sessions(
             continue
         cli_type = _normalize_cli_type_id(row.get("cli_type") if "cli_type" in row else row.get("cliType"))
         probe_targets.append((sid, cli_type))
-    busy_map = _probe_external_session_busy_batch_cached(probe_targets)
+    busy_map = _probe_external_session_busy_batch_cached(probe_targets, store=store)
 
     out: list[dict[str, Any]] = []
     for row in sessions:
@@ -1492,7 +1901,7 @@ def _attach_runtime_state_to_sessions(
         sid = str(item.get("id") or "").strip()
         agg = idx.get(sid) if sid else None
         # runtime_state 构造时关闭逐项 probe，统一走批量 probe 结果覆写。
-        state = _build_session_runtime_state_for_row(item, agg or {}, probe_external_when_idle=False)
+        state = _build_session_runtime_state_for_row(item, agg or {}, store=store, probe_external_when_idle=False)
         cli_type = _normalize_cli_type_id(item.get("cli_type") if "cli_type" in item else item.get("cliType"))
         busy_key = f"{sid}|{cli_type}" if sid else ""
         busy_entry = busy_map.get(busy_key) if busy_key else None
@@ -1530,6 +1939,13 @@ def _attach_runtime_state_to_sessions(
         latest_run_summary = _build_session_latest_run_summary(summary, agg or {})
         if latest_run_summary:
             item["latest_run_summary"] = latest_run_summary
+        latest_effective_run_summary = summary.get("latest_effective_run_summary")
+        if isinstance(latest_effective_run_summary, dict) and latest_effective_run_summary:
+            item["latest_effective_run_summary"] = dict(latest_effective_run_summary)
+        session_health_state = str(summary.get("session_health_state") or "healthy").strip() or "healthy"
+        if str(state.get("display_state") or "").strip().lower() in {"running", "queued", "retry_waiting", "external_busy"}:
+            session_health_state = "busy"
+        item["session_health_state"] = session_health_state
         if summary:
             item["lastPreview"] = str(summary.get("last_preview") or item.get("lastPreview") or "")
             item["lastSpeaker"] = str(summary.get("last_speaker") or item.get("lastSpeaker") or "assistant")
@@ -1590,35 +2006,6 @@ def _infer_blocked_by_run_id(store: "RunStore", meta: dict[str, Any]) -> str:
         queued_like.sort(key=lambda t: (t[0], t[1]))
         return queued_like[0][1]
     return ""
-
-
-def _build_session_run_semantics_cached(
-    store: "RunStore",
-    *,
-    project_id: str,
-    session_id: str,
-) -> dict[str, Any]:
-    pid = str(project_id or "").strip()
-    sid = str(session_id or "").strip()
-    if not (pid and sid):
-        return {
-            "run_fields": {},
-            "session_health_state": "healthy",
-            "latest_effective_run_summary": {},
-            "latest_system_summary": {},
-        }
-    previous = bool(getattr(_RUN_SESSION_SEMANTICS_REENTRY, "active", False))
-    _RUN_SESSION_SEMANTICS_REENTRY.active = True
-    try:
-        runs = store.list_runs(
-            project_id=pid,
-            session_id=sid,
-            limit=_session_runtime_scan_limit(),
-            include_payload=False,
-        )
-    finally:
-        _RUN_SESSION_SEMANTICS_REENTRY.active = previous
-    return build_session_semantics(runs)
 
 
 def _build_run_observability_fields(
@@ -1722,7 +2109,7 @@ def _decorate_session_display_fields(
     row["display_name_source"] = display_source
     heartbeat_cfg = _load_session_heartbeat_config(row)
     row["heartbeat_summary"] = _heartbeat_summary_payload(heartbeat_cfg)
-    return row
+    return attach_agent_display_fields(row)
 
 
 def _decorate_sessions_display_fields(sessions: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1896,109 +2283,17 @@ def _run_codex_channel_bootstrap_v1(
 
 
 def _create_channel(project_id: str, channel_name: str, channel_desc: str, cli_type: str) -> dict[str, Any]:
-    """
-    Create a new channel for a project:
-    1. Update config.toml with new channel configuration
-    2. Create channel directory structure
-    """
-    # Follow the active environment config instead of hardcoding config.toml.
-    config_path = _config_toml_path()
-    if not config_path.exists():
-        raise ValueError("config.toml not found")
-
-    # Read current config
-    config_content = config_path.read_text(encoding="utf-8")
-
-    # Find the project section and add channel
-    # We need to find the project with matching id and add [[projects.channels]] after it
-    import re
-
-    # Find project block by id
-    project_pattern = rf'(\[\[projects\]\]\s*\nid\s*=\s*[\'"]?{re.escape(project_id)}[\'"]?\s*(?:.*?\n)*?)(?=\[\[projects\]\]|\Z)'
-    match = re.search(project_pattern, config_content, re.DOTALL)
-    if not match:
-        raise ValueError(f"Project '{project_id}' not found in config.toml")
-
-    # Check if channel already exists
-    if f'name = "{channel_name}"' in config_content or f"name = '{channel_name}'" in config_content:
-        raise ValueError(f"Channel '{channel_name}' already exists")
-
-    # Find the insertion point (after the last channel in this project, or after project links)
-    project_block = match.group(1)
-
-    # Find the last [[projects.channels]] or [[projects.links]] in this project
-    last_channel_match = None
-    for m in re.finditer(r'\[\[projects\.(?:channels|links)\]\]', project_block):
-        last_channel_match = m
-
-    if last_channel_match:
-        # Insert after the last channel/link block
-        # Find the end of that block (next [[ or end of project)
-        insert_pos = match.start(1) + last_channel_match.end()
-        # Find the end of the last block content
-        remaining = config_content[insert_pos:]
-        next_block = re.search(r'\n\s*\[\[', remaining)
-        if next_block:
-            insert_pos += next_block.start()
-    else:
-        # No channels or links, insert after project description
-        insert_pos = match.end(1)
-
-    # Prepare new channel config (simplified format - only name and desc)
-    new_channel = f'''
-
-[[projects.channels]]
-name = "{channel_name}"
-desc = "{channel_desc or channel_name}"'''
-
-    # Insert new channel
-    new_config = config_content[:insert_pos] + new_channel + config_content[insert_pos:]
-
-    # Write back config
-    _atomic_write_text(config_path, new_config)
+    result = runtime_create_channel(
+        project_id=project_id,
+        channel_name=channel_name,
+        channel_desc=channel_desc,
+        cli_type=cli_type,
+        config_path=_config_toml_path(),
+        repo_root=_repo_root(),
+        atomic_write_text=_atomic_write_text,
+    )
     _clear_dashboard_cfg_cache()
-
-    # Create channel directory structure
-    # Find task_root_rel for this project
-    task_root_match = re.search(rf'task_root_rel\s*=\s*[\'"]([^\'"]+)[\'"]', project_block)
-    if task_root_match:
-        task_root_rel = task_root_match.group(1)
-        repo_root = _repo_root()
-        task_root = runtime_resolve_task_root_path(repo_root=repo_root, task_root_rel=task_root_rel) / channel_name
-
-        # Create directory structure
-        subdirs = ["产出物/沉淀", "任务", "已完成", "暂缓", "答复", "反馈", "讨论空间", "问题"]
-        for subdir in subdirs:
-            (task_root / subdir).mkdir(parents=True, exist_ok=True)
-
-        # Create README.md
-        readme_content = f"""# {channel_name}
-
-{channel_desc or '通道说明'}
-
-## 目录结构
-
-- 任务/ - 任务文件
-- 产出物/ - 产出物和沉淀
-- 已完成/ - 已完成任务
-- 暂缓/ - 暂缓任务
-- 答复/ - 答复文件
-- 反馈/ - 反馈文件
-- 讨论空间/ - 讨论文档
-- 问题/ - 问题记录
-- 需求/ - 可选需求暂存与梳理（按需启用）
-"""
-        (task_root / "README.md").write_text(readme_content, encoding="utf-8")
-
-        # Create empty 收件箱 file
-        (task_root / "沟通-收件箱.md").write_text("", encoding="utf-8")
-
-    return {
-        "ok": True,
-        "name": channel_name,
-        "desc": channel_desc,
-        "cli_type": cli_type,
-    }
+    return result
 
 
 # Status to directory mapping
@@ -2262,11 +2557,23 @@ def _change_task_status(task_path: str, new_status: str) -> dict[str, Any]:
 
     # Compute new relative path
     new_rel_path = str(new_file_path.relative_to(repo_root))
+    identity = _extract_task_identity_from_file(new_file_path)
+    project_id, _, _ = _resolve_task_project_channel(new_rel_path)
+    _record_task_move(
+        repo_root=repo_root,
+        project_id=project_id,
+        old_path=task_path,
+        new_path=new_rel_path,
+        task_id=identity.get("task_id") or "",
+        parent_task_id=identity.get("parent_task_id") or "",
+    )
 
     return {
         "ok": True,
         "old_path": task_path,
         "new_path": new_rel_path,
+        "task_id": str(identity.get("task_id") or "").strip(),
+        "parent_task_id": str(identity.get("parent_task_id") or "").strip(),
         "old_filename": old_filename,
         "new_filename": new_filename,
         "old_status": old_status,
@@ -2300,20 +2607,7 @@ def _auto_kickoff_project_enabled(project_id: str) -> bool:
 
 
 def _normalize_task_path_identity(task_path: str) -> str:
-    txt = str(task_path or "").strip()
-    if not txt:
-        return ""
-    p = Path(txt)
-    root = _repo_root()
-    if p.is_absolute():
-        try:
-            txt = str(p.resolve().relative_to(root.resolve()))
-        except Exception:
-            txt = p.as_posix()
-    txt = txt.replace("\\", "/").strip()
-    while txt.startswith("./"):
-        txt = txt[2:]
-    return txt.lstrip("/")
+    return _identity_normalize_task_path(task_path, repo_root=_repo_root())
 
 
 def _extract_task_title(task_path: str) -> str:

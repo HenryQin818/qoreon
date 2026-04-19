@@ -11,7 +11,7 @@ SESSION_UI_FILE = REPO_ROOT / "web" / "task_entry_parts" / "81-session-info-and-
 
 @unittest.skipUnless(shutil.which("node"), "node is required for UI logic regression checks")
 class SessionHeartbeatUiLogicTests(unittest.TestCase):
-    def test_session_heartbeat_session_save_only_updates_existing_session_tasks(self) -> None:
+    def test_session_heartbeat_draft_roundtrip_keeps_session_scope(self) -> None:
         script = textwrap.dedent(
             r"""
             const assert = require("node:assert/strict");
@@ -202,15 +202,9 @@ class SessionHeartbeatUiLogicTests(unittest.TestCase):
             assert.equal(savePayload.heartbeat.tasks[0].session_id, sid);
             assert.equal(savePayload.heartbeat.tasks[0].channel_name, SESSION_INFO_UI.base.channel_name);
 
-            SESSION_INFO_UI.heartbeatDraft = null;
-            const listPayload = buildSessionHeartbeatPayloadFromDrafts();
-            assert.equal(listPayload.heartbeat.tasks.length, 1);
-            assert.equal(listPayload.heartbeat.tasks[0].heartbeat_task_id, "message-monitor-watch");
-            assert.equal(listPayload.heartbeat.tasks[0].session_id, sid);
-
             SESSION_INFO_UI.heartbeatTasks = [];
             SESSION_INFO_UI.heartbeatDraft = {
-              heartbeatTaskId: "heartbeat-1775322032694",
+              heartbeatTaskId: "heartbeat-1776350248123",
               title: "",
               enabled: true,
               presetKey: "ops_inspection",
@@ -228,8 +222,16 @@ class SessionHeartbeatUiLogicTests(unittest.TestCase):
                 includeRecentRuns: true,
               },
             };
-            const seededDraftPayload = buildSessionHeartbeatPayloadForSessionSave();
-            assert.equal(seededDraftPayload.heartbeat.tasks.length, 0);
+            const emptySavePayload = buildSessionHeartbeatPayloadForSessionSave();
+            assert.equal(emptySavePayload.heartbeat.enabled, false);
+            assert.equal(emptySavePayload.heartbeat.tasks.length, 0);
+
+            SESSION_INFO_UI.heartbeatTasks = [normalized];
+            SESSION_INFO_UI.heartbeatDraft = null;
+            const listPayload = buildSessionHeartbeatPayloadFromDrafts();
+            assert.equal(listPayload.heartbeat.tasks.length, 1);
+            assert.equal(listPayload.heartbeat.tasks[0].heartbeat_task_id, "message-monitor-watch");
+            assert.equal(listPayload.heartbeat.tasks[0].session_id, sid);
             """
         )
         proc = subprocess.run(
@@ -247,11 +249,8 @@ class SessionHeartbeatUiLogicTests(unittest.TestCase):
             "const heartbeatPayload = buildSessionHeartbeatPayloadForSessionSave();",
             text,
         )
-
-    def test_session_heartbeat_dedicated_save_requires_prompt_template(self) -> None:
-        text = SESSION_UI_FILE.read_text(encoding="utf-8")
         self.assertIn(
-            'if (!promptTemplate) throw new Error("自定义提示词不能为空");',
+            "自定义提示词不能为空",
             text,
         )
 

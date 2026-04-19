@@ -12,10 +12,8 @@ from urllib.parse import parse_qs
 
 import json
 
-from task_dashboard.runtime.session_views import (
-    apply_session_heartbeat_summary_rows,
-    apply_session_task_tracking_rows,
-)
+from task_dashboard.runtime.agent_display_name import apply_agent_display_fields, build_agent_identity_audit
+from task_dashboard.runtime.session_views import apply_session_heartbeat_summary_rows
 
 _SESSIONS_PAYLOAD_CACHE_LOCK = threading.Lock()
 _SESSIONS_PAYLOAD_CACHE: dict[str, dict[str, Any]] = {}
@@ -276,12 +274,11 @@ def build_sessions_list_payload(
         heartbeat_summary_payload=heartbeat_summary_payload,
     )
     sessions = attach_runtime_state_to_sessions(store, sessions, project_id=project_id)
-    sessions = apply_session_task_tracking_rows(
-        sessions,
-        project_id=project_id,
-        store=store,
-    )
-    return {"sessions": sessions}
+    sessions = apply_agent_display_fields(sessions)
+    return {
+        "sessions": sessions,
+        "agent_identity_audit": build_agent_identity_audit(sessions, project_id=project_id),
+    }
 
 
 def build_channel_sessions_payload(
@@ -297,7 +294,6 @@ def build_channel_sessions_payload(
     decorate_sessions_display_fields: Callable[[list[dict[str, Any]]], list[dict[str, Any]]],
     apply_session_context_rows: Callable[..., list[dict[str, Any]]],
     apply_session_work_context: Callable[..., dict[str, Any]],
-    attach_runtime_state_to_sessions: Callable[[Any, list[dict[str, Any]]], list[dict[str, Any]]],
     resolve_channel_primary_session_id: Callable[[Any, str, str], str],
     heartbeat_runtime: Any,
     load_session_heartbeat_config: Callable[[dict[str, Any]], dict[str, Any]],
@@ -324,12 +320,7 @@ def build_channel_sessions_payload(
         load_session_heartbeat_config=load_session_heartbeat_config,
         heartbeat_summary_payload=heartbeat_summary_payload,
     )
-    sessions = attach_runtime_state_to_sessions(store, sessions, project_id=project_id)
-    sessions = apply_session_task_tracking_rows(
-        sessions,
-        project_id=project_id,
-        store=store,
-    )
+    sessions = apply_agent_display_fields(sessions)
     primary_session_id = resolve_channel_primary_session_id(session_store, project_id, channel_name)
     return {
         "project_id": project_id,
@@ -337,6 +328,7 @@ def build_channel_sessions_payload(
         "primary_session_id": primary_session_id,
         "sessions": sessions,
         "count": len(sessions),
+        "agent_identity_audit": build_agent_identity_audit(sessions, project_id=project_id),
     }
 
 
@@ -364,6 +356,7 @@ def build_session_detail_response(
     project_id = str(session.get("project_id") or "").strip() or infer_project_id_for_session(store, session_id)
     session = apply_effective_primary_flags(session_store, project_id, [session])[0]
     session = decorate_session_display_fields(session)
+    session = apply_agent_display_fields([session])[0]
     return build_session_detail_payload(
         session,
         session_id=session_id,
@@ -455,7 +448,6 @@ def list_channel_sessions_response(
     decorate_sessions_display_fields: Callable[[list[dict[str, Any]]], list[dict[str, Any]]],
     apply_session_context_rows: Callable[..., list[dict[str, Any]]],
     apply_session_work_context: Callable[..., dict[str, Any]],
-    attach_runtime_state_to_sessions: Callable[[Any, list[dict[str, Any]]], list[dict[str, Any]]],
     resolve_channel_primary_session_id: Callable[[Any, str, str], str],
     heartbeat_runtime: Any,
     load_session_heartbeat_config: Callable[[dict[str, Any]], dict[str, Any]],
@@ -495,7 +487,6 @@ def list_channel_sessions_response(
             decorate_sessions_display_fields=decorate_sessions_display_fields,
             apply_session_context_rows=apply_session_context_rows,
             apply_session_work_context=apply_session_work_context,
-            attach_runtime_state_to_sessions=attach_runtime_state_to_sessions,
             resolve_channel_primary_session_id=resolve_channel_primary_session_id,
             heartbeat_runtime=heartbeat_runtime,
             load_session_heartbeat_config=load_session_heartbeat_config,

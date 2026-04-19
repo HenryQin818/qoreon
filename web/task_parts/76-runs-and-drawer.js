@@ -224,8 +224,21 @@
     function configuredPrimarySessionEntry(project, channelName) {
       const ch = String(channelName || "").trim();
       if (!project || !ch) return null;
+      const isVisible = (row) => {
+        if (!row || typeof row !== "object") return false;
+        if (typeof isVisibleConversationSession === "function") {
+          return isVisibleConversationSession(row);
+        }
+        const deleted = typeof isDeletedSession === "function"
+          ? isDeletedSession(row)
+          : boolLike(row.is_deleted || row.isDeleted);
+        const inactive = typeof isInactiveSession === "function"
+          ? isInactiveSession(row)
+          : String(row.status || row.session_status || row.sessionStatus || "").trim().toLowerCase() === "inactive";
+        return !deleted && !inactive;
+      };
       const fromChannelSessions = (Array.isArray(project.channel_sessions) ? project.channel_sessions : [])
-        .find((x) => String((x && x.name) || "").trim() === ch);
+        .find((x) => isVisible(x) && String((x && x.name) || "").trim() === ch);
       if (fromChannelSessions) return fromChannelSessions;
       return (Array.isArray(project.channels) ? project.channels : [])
         .find((x) => String((x && x.name) || "").trim() === ch) || null;
@@ -255,6 +268,7 @@
       }
       const map = new Map();
       for (const s of list) {
+        if (typeof isVisibleConversationSession === "function" && !isVisibleConversationSession(s)) continue;
         const sid = String((s && s.session_id) || "").trim();
         if (!looksLikeSessionId(sid)) continue;
         const ch = String((s && s.name) || "").trim();
@@ -302,20 +316,7 @@
       const sid = String(sessionId || "").trim();
       if (!sid) return null;
       const sessions = Array.isArray(PCONV.sessions) ? PCONV.sessions : [];
-      const liveHit = sessions.find((x) => String((x && (x.sessionId || x.id)) || "") === sid) || null;
-      if (liveHit) return liveHit;
-      const projectId = String((STATE && STATE.project) || "").trim();
-      const directory = (
-        projectId
-        && PCONV.sessionDirectoryByProject
-        && Array.isArray(PCONV.sessionDirectoryByProject[projectId])
-      )
-        ? PCONV.sessionDirectoryByProject[projectId]
-        : [];
-      const directoryHit = directory.find((x) => String((x && (x.sessionId || x.id)) || "") === sid) || null;
-      if (directoryHit) return directoryHit;
-      const configured = projectId ? configuredProjectConversations(projectId) : [];
-      return configured.find((x) => String((x && (x.sessionId || x.id)) || "") === sid) || null;
+      return sessions.find((x) => String((x && (x.sessionId || x.id)) || "") === sid) || null;
     }
 
     function findPrimaryConversationSession(channelName) {
@@ -625,20 +626,32 @@
     }
 
     function buildConversationLeftList() {
+      if (typeof isTaskShareModeActive === "function" && isTaskShareModeActive()) {
+        renderTaskShareModeLeftList();
+        return;
+      }
       const left = document.getElementById("leftList");
       const asideTitle = document.getElementById("asideTitle");
       const asideMeta = document.getElementById("asideMeta");
       const layoutTabs = document.getElementById("convLayoutTabs");
       if (!left || !asideTitle || !asideMeta) return;
       if (typeof closeChannelManageMenus === "function") closeChannelManageMenus();
-      const scrollBox = left.closest(".aside-scroll") || left;
-      const prevScrollTop = Math.max(0, Number(scrollBox.scrollTop || 0));
-      const savedScrollTop = Math.max(0, Number((PCONV && PCONV.leftListScrollTop) || 0));
-      const targetScrollTop = prevScrollTop > 0 ? prevScrollTop : savedScrollTop;
-      if (PCONV) PCONV.leftListScrollTop = targetScrollTop;
+      const scrollBox = (typeof conversationListScrollBox === "function")
+        ? conversationListScrollBox()
+        : (left.closest(".aside-scroll") || left);
+      const currentScrollTop = Math.max(0, Number((scrollBox && scrollBox.scrollTop) || 0) || 0);
+      const storedScrollTop = (typeof readConversationListStoredScrollTop === "function")
+        ? readConversationListStoredScrollTop(String(STATE.project || ""), normalizeConversationListLayout(STATE && STATE.convListLayout))
+        : 0;
+      const prevScrollTop = currentScrollTop > 0 ? currentScrollTop : storedScrollTop;
       const restoreLeftScroll = () => {
-        if (!(targetScrollTop > 0)) {
-          if (PCONV) PCONV.leftListScrollTop = 0;
+        if (!(prevScrollTop > 0)) return;
+        if (typeof restoreConversationListScrollTop === "function") {
+          restoreConversationListScrollTop(
+            prevScrollTop,
+            String(STATE.project || ""),
+            normalizeConversationListLayout(STATE && STATE.convListLayout)
+          );
           return;
         }
         requestAnimationFrame(() => {
@@ -646,15 +659,12 @@
           if (!currentLeft) return;
           const currentScrollBox = currentLeft.closest(".aside-scroll") || currentLeft;
           const maxScrollTop = Math.max(0, Number(currentScrollBox.scrollHeight || 0) - Number(currentScrollBox.clientHeight || 0));
-          const nextScrollTop = Math.min(targetScrollTop, maxScrollTop);
-          currentScrollBox.scrollTop = nextScrollTop;
-          if (PCONV) PCONV.leftListScrollTop = nextScrollTop;
+          currentScrollBox.scrollTop = Math.min(prevScrollTop, maxScrollTop);
         });
       };
       const commitLeftChildren = (fragment, { preserveScroll = true } = {}) => {
         left.replaceChildren(fragment);
         if (preserveScroll) restoreLeftScroll();
-        else if (PCONV) PCONV.leftListScrollTop = 0;
       };
       asideTitle.textContent = "对话";
       const currentLayout = normalizeConversationListLayout(STATE && STATE.convListLayout);
@@ -809,6 +819,10 @@
 
     // 在主列表区域渲染会话列表（供移动端对话模式使用）
     function buildConversationMainList(container) {
+      if (typeof isTaskShareModeActive === "function" && isTaskShareModeActive()) {
+        renderTaskShareModeMainList(container);
+        return;
+      }
       if (!container) return;
       container.innerHTML = "";
       if (!isMobileViewport()) return;
@@ -993,12 +1007,16 @@
     function setSelectedSessionId(sessionId, forceScroll = false, opts = {}) {
       const sid = String(sessionId || "").trim();
       if (!sid) return;
+      if (typeof captureConversationListScrollTop === "function") {
+        captureConversationListScrollTop(String(STATE.project || ""), normalizeConversationListLayout(STATE && STATE.convListLayout));
+      }
       if (STATE.panelMode === "channel") {
         STATE.selectedSessionId = "";
         STATE.selectedSessionExplicit = false;
         try { localStorage.removeItem("taskDashboard.selectedSessionId"); } catch (_) {}
         buildChannelConversationList();
         renderDetail(selectedItem());
+        updateSelectionUI();
         setHash();
         return;
       }
@@ -1008,11 +1026,6 @@
       STATE.selectedSessionId = sid;
       STATE.selectedSessionExplicit = explicit;
       try { localStorage.setItem("taskDashboard.selectedSessionId", STATE.selectedSessionId); } catch (_) {}
-      rememberConversationSelection(
-        String(STATE.project || ""),
-        String(STATE.channel || ""),
-        STATE.selectedSessionId
-      );
       // 只在对话模式下更新左侧对话列表
       if (STATE.panelMode === "conv") {
         buildConversationLeftList();
@@ -1031,44 +1044,24 @@
     }
 
     function currentConversationCtx() {
-      if (STATE.project === "overview") return null;
       if (STATE.panelMode === "channel") return null;
-      const projectId = String(STATE.project || "").trim();
-      if (!projectId) return null;
-      const scopedChannel = String(STATE.channel || "").trim();
-      let sid = String(STATE.selectedSessionId || "").trim();
-      let cur = sid ? findConversationSessionById(sid) : null;
-      if (!cur) {
-        const rememberedSid = readRememberedConversationSelection(projectId, scopedChannel);
-        if (rememberedSid) {
-          sid = String(rememberedSid || "").trim();
-          cur = sid ? findConversationSessionById(sid) : null;
-        }
-      }
-      if (!cur) {
-        const directory = Array.isArray(PCONV.sessionDirectoryByProject && PCONV.sessionDirectoryByProject[projectId])
-          ? PCONV.sessionDirectoryByProject[projectId].slice()
-          : mergeConversationSessions(configuredProjectConversations(projectId), []);
-        const preferredSid = pickDefaultConversationSessionId(directory, scopedChannel);
-        if (preferredSid) {
-          sid = String(preferredSid || "").trim();
-          cur = sid ? findConversationSessionById(sid) : null;
-          if (!cur) {
-            cur = directory.find((x) => String((x && (x.sessionId || x.id)) || "") === sid) || null;
-          }
-        }
-      }
-      if (!sid || !cur) return null;
+      if (STATE.project === "overview") return null;
+      const sid = String(STATE.selectedSessionId || "").trim();
+      if (!sid) return null;
+      const directorySessions = Array.isArray(((PCONV.sessionDirectoryByProject || {})[String(STATE.project || "")] || null))
+        ? ((PCONV.sessionDirectoryByProject || {})[String(STATE.project || "")] || [])
+        : [];
+      const sessions = Array.isArray(PCONV.sessions) && PCONV.sessions.length ? PCONV.sessions : directorySessions;
+      // 兼容 sessionId 和 id 两种字段名
+      const cur = sessions.find(x => String(x.sessionId || x.id || "") === sid) || null;
+      if (!cur) return null;
       const cliType = cur && cur.cli_type ? String(cur.cli_type).trim() : "codex";
-      const channelName = String(firstNonEmptyText([
-        scopedChannel && sessionMatchesChannel(cur, scopedChannel) ? scopedChannel : "",
-        getSessionChannelName(cur),
-        cur.channel_name,
-        cur.primaryChannel,
-      ]) || "");
+      const scopedChannel = STATE.panelMode === "channel" ? String(STATE.channel || "").trim() : "";
+      // 兼容 channel_name 和 primaryChannel 两种字段名
+      const channelName = String(scopedChannel || cur.channel_name || cur.primaryChannel || "");
       const agentName = conversationAgentName(cur);
       return {
-        projectId,
+        projectId: String(STATE.project || ""),
         sessionId: sid,
         channelName: channelName,
         displayChannel: String(agentName || cur.displayChannel || cur.alias || channelName || ""),
@@ -2221,7 +2214,7 @@
       if (!m || typeof m.index !== "number") return "";
       p = p.slice(0, m.index + m[0].length);
       const low = p.toLowerCase();
-      if (low.endsWith("/skill.md") || /\/\.[^/]+\/skills\//.test(low)) return "";
+      if (low.endsWith("/skill.md") || low.includes("/.codex/skills/")) return "";
       if (!BUSINESS_PATH_SEGMENTS.some((seg) => p.includes(seg))) return "";
       return p;
     }

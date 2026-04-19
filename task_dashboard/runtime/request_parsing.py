@@ -65,18 +65,6 @@ def _coerce_optional_bool_local(value: Any) -> bool | None:
     return None
 
 
-def _coerce_timeout_local(value: Any) -> int:
-    if value is None:
-        return 0
-    try:
-        numeric = int(float(value))
-    except Exception:
-        return 0
-    if numeric <= 0:
-        return 0
-    return min(max(numeric, 10), 1800)
-
-
 def _normalize_execution_profile_local(value: Any) -> str:
     return normalize_execution_profile(_safe_text_local(value, 40), allow_empty=True)
 
@@ -147,13 +135,7 @@ def parse_session_create_request(body: dict[str, Any]) -> dict[str, Any]:
         "reuse_strategy": _safe_text_local(
             row.get("reuse_strategy") if "reuse_strategy" in row else row.get("reuseStrategy"),
             80,
-        ).strip()
-        or "reuse_active",
-        "create_timeout_s": _coerce_timeout_local(
-            row.get("create_timeout_s")
-            if "create_timeout_s" in row
-            else row.get("createTimeoutS")
-        ),
+        ).strip(),
         "set_as_primary": set_as_primary,
         "first_message": _safe_text_local(
             row.get("first_message") if "first_message" in row else row.get("firstMessage"),
@@ -331,6 +313,8 @@ def parse_announce_request(
         ),
         override_source=override_source,
     )
+    # `/api/codex/announce` 是正式写入会话聊天区的入口，运行时直接写回可见性真源。
+    run_extra_fields["visible_in_channel_chat"] = True
 
     return {
         "project_id": project_id,
