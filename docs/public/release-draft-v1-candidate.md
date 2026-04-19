@@ -1,4 +1,4 @@
-# Qoreon v1 Candidate
+# Qoreon v1 Preview 20260420-a
 
 ![Qoreon Logo](../../assets/brand/qoreon-logo-primary.png)
 
@@ -172,11 +172,11 @@ Current packaging direction:
 
 Current public preview baseline:
 
-- repo commit: `see tag qoreon-v1-preview-20260407-c`
-- repo preview tag: `qoreon-v1-preview-20260407-c`
-- repo candidate tag: `qoreon-v1-candidate-20260407-c`
-- preview package: `qoreon-v1-preview-20260407-c.tar.gz`
-- package sha256: see the `qoreon-v1-preview-20260407-c` release asset checksum
+- repo commit: `2df37dc`
+- repo preview tag: `qoreon-v1-preview-20260420-a`
+- repo candidate tag: `qoreon-v1-candidate-20260420-a`
+- delivery: GitHub release source archives for `qoreon-v1-preview-20260420-a`
+- verification: see the `qoreon-v1-preview-20260420-a` release page and public-safe test results
 
 This means:
 

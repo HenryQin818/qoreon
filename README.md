@@ -232,11 +232,11 @@ After startup, the local AI should first read the files and sediment under its o
 
 The current public delivery line is prepared as a GitHub preview release.
 
-- repo commit: `see tag qoreon-v1-preview-20260407-c`
-- preview tag: `qoreon-v1-preview-20260407-c`
-- candidate tag: `qoreon-v1-candidate-20260407-c`
-- package: `qoreon-v1-preview-20260407-c.tar.gz`
-- package sha256: see the `qoreon-v1-preview-20260407-c` release asset checksum
+- repo commit: `2df37dc`
+- preview tag: `qoreon-v1-preview-20260420-a`
+- candidate tag: `qoreon-v1-candidate-20260420-a`
+- delivery: GitHub release source archives for `qoreon-v1-preview-20260420-a`
+- verification: see the `qoreon-v1-preview-20260420-a` release page and public-safe test results
 - default project: `standard_project`
 - recommended install: `python3 scripts/start_standard_project.py`
 - fallback behavior: if background Codex session creation is blocked, keep the page install result and hand `startup-batch.md` to the local AI
