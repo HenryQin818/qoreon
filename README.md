@@ -1,7 +1,10 @@
 # Qoreon
 
 <div align="center">
-  <img src="assets/brand/qoreon-logo-horizontal-light.png" alt="Qoreon" width="720" />
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/brand/qoreon-logo-horizontal-dark.png" />
+    <img src="assets/brand/qoreon-logo-horizontal-light.png" alt="Qoreon" width="720" />
+  </picture>
   <p><strong>The multi-agent work platform for local-first execution.</strong></p>
   <p>Qoreon 把项目、任务、消息和组织关系放进同一个工作现场。<br />Qoreon keeps projects, tasks, messages, and team structure in one operating surface.</p>
   <p>

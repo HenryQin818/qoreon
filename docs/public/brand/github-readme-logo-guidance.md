@@ -8,28 +8,30 @@
 ## 本次输入
 
 - 源附件：`logo-横版-1024.png`
-- 已入仓文件：`assets/brand/qoreon-logo-horizontal-light.png`
+- 已入仓文件：
+  - `assets/brand/qoreon-logo-horizontal-light.png`
+  - `assets/brand/qoreon-logo-horizontal-dark.png`
 - 规格：`1024 x 421`，PNG，透明背景
 
 ## 结论
 
 ### 1. 是否可直接用于 GitHub README 首屏
 
-可以直接用于 GitHub 浅色主题。
+可以。
 
-不建议直接作为 GitHub 深色主题唯一首屏图。
+当前已补齐 `light + dark` 两个版本，适合 GitHub README 首屏按主题自动分流。
 
-原因：
+说明：
 
-- 图中文字标主体偏深蓝紫
-- 在深色背景下对比度明显下降
-- 环形符号仍可见，但 `Qoreon` 字标在暗底上不够稳
+- `light` 版直接使用原始横版字标
+- `dark` 版在原图基础上做了提亮处理，提升暗色主题下 `Qoreon` 字标对比度
 
 ### 2. 正式入仓文件名与路径
 
 当前建议的正式文件为：
 
 - `assets/brand/qoreon-logo-horizontal-light.png`
+- `assets/brand/qoreon-logo-horizontal-dark.png`
 
 命名理由：
 
@@ -40,11 +42,11 @@
 
 ### 3. 是否需要 light / dark 双版本
 
-建议需要。
+已补齐，当前推荐直接使用。
 
 推荐优先级：
 
-1. 最佳方案：`light + dark` 双版本，README 用 HTML `picture`
+1. 当前方案：`light + dark` 双版本，README 用 HTML `picture`
 2. 次优方案：只有浅底版时，用单文件 HTML `img`
 3. 不建议：纯 Markdown 图片语法直接挂首屏
 
@@ -106,6 +108,4 @@
 
 ## 本轮不做的事
 
-- 不修改 `README.md`
-- 不生成暗色版 Logo
 - 不替换现有头像图
