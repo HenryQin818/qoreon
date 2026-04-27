@@ -618,7 +618,7 @@
       );
       appendMenuItem(
         "删除通道",
-        "删除通道目录与配套文件夹，保留 .runtime/.runs 历史",
+        "删除通道目录与配套文件夹，保留运行历史记录",
         () => typeof openChannelDeleteModal === "function" && openChannelDeleteModal(pid, channel),
         true,
       );
@@ -1053,7 +1053,16 @@
         : [];
       const sessions = Array.isArray(PCONV.sessions) && PCONV.sessions.length ? PCONV.sessions : directorySessions;
       // 兼容 sessionId 和 id 两种字段名
-      const cur = sessions.find(x => String(x.sessionId || x.id || "") === sid) || null;
+      let cur = sessions.find(x => String(x.sessionId || x.id || "") === sid) || null;
+      if (
+        !cur
+        && STATE.selectedSessionExplicit
+        && typeof looksLikeSessionId === "function"
+        && looksLikeSessionId(sid)
+        && typeof buildExplicitConversationSessionStub === "function"
+      ) {
+        cur = buildExplicitConversationSessionStub(STATE.project, STATE.channel, sid);
+      }
       if (!cur) return null;
       const cliType = cur && cur.cli_type ? String(cur.cli_type).trim() : "codex";
       const scopedChannel = STATE.panelMode === "channel" ? String(STATE.channel || "").trim() : "";
@@ -2053,6 +2062,17 @@
       const runStatus = getRunDisplayState(run, detail);
       const runWorking = isWorkingLikeState(runStatus);
       const d = detail && detail.full ? detail.full : null;
+      const generatedMediaSummary = String(firstNonEmptyText([
+        d && d.run && d.run.generated_media_summary,
+        d && d.run && d.run.generatedMediaSummary,
+        detail && detail.run && detail.run.generated_media_summary,
+        detail && detail.run && detail.run.generatedMediaSummary,
+        run && run.generated_media_summary,
+        run && run.generatedMediaSummary,
+      ]) || "");
+      if (!runWorking && generatedMediaSummary.trim()) {
+        return generatedMediaSummary;
+      }
       const cliType = String(firstNonEmptyText([
         d && d.run && d.run.cliType,
         d && d.run && d.run.cli_type,
@@ -2214,7 +2234,7 @@
       if (!m || typeof m.index !== "number") return "";
       p = p.slice(0, m.index + m[0].length);
       const low = p.toLowerCase();
-      if (low.endsWith("/skill.md") || low.includes("/.codex/skills/")) return "";
+      if (low.endsWith("/skill.md") || low.includes("/.codex/")) return "";
       if (!BUSINESS_PATH_SEGMENTS.some((seg) => p.includes(seg))) return "";
       return p;
     }

@@ -55,9 +55,9 @@ def _normalize_explicit_cli_bin(value: str) -> str:
 @lru_cache(maxsize=32)
 def resolve_cli_executable_details(command: str) -> dict[str, Any]:
     """
-    Resolve CLI executable path with launchd-safe fallbacks.
+    Resolve CLI executable path with minimal service environment fallbacks.
 
-    launchd often runs with a minimal PATH (/usr/bin:/bin:/usr/sbin:/sbin),
+    Some service runners use a minimal PATH (/usr/bin:/bin:/usr/sbin:/sbin),
     so tools installed in /usr/local/bin or ~/.local/bin may be invisible.
     """
     cmd = str(command or "").strip()

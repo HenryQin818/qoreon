@@ -6,12 +6,16 @@ from collections import deque
 import json
 from pathlib import Path
 import re
+import shutil
 from typing import Any, Optional
 
 from task_dashboard.adapters import CodexAdapter, get_adapter
+from task_dashboard.helpers import parse_iso_ts
 
 
 _TERMINAL_TEXT_CLIS = {"claude", "opencode"}
+_IMAGE_FILE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
+_CODEX_GENERATED_MEDIA_SOURCE = "codex_imagegen"
 
 
 def _safe_text(s: Any, max_len: int) -> str:
@@ -164,6 +168,220 @@ def extract_terminal_message_from_file(path: Path, *, cli_type: str = "codex") -
         return ""
 
 
+def _normalize_run_attachments(raw: Any) -> list[dict[str, Any]]:
+    items = raw if isinstance(raw, list) else []
+    out: list[dict[str, Any]] = []
+    for item in items:
+        if isinstance(item, dict):
+            out.append(dict(item))
+    return out
+
+
+def _attachment_filename(att: dict[str, Any]) -> str:
+    return str(att.get("filename") or att.get("originalName") or "").strip()
+
+
+def _attachment_ext(att: dict[str, Any]) -> str:
+    name = _attachment_filename(att)
+    if not name:
+        name = str(att.get("url") or "").split("?", 1)[0].rsplit("/", 1)[-1]
+    return str(Path(name).suffix or "").strip().lower()
+
+
+def _is_image_attachment(att: dict[str, Any]) -> bool:
+    return _attachment_ext(att) in _IMAGE_FILE_EXTS
+
+
+def _is_generated_image_attachment(att: dict[str, Any]) -> bool:
+    if not isinstance(att, dict):
+        return False
+    generated_by = str(att.get("generatedBy") or att.get("generated_by") or "").strip().lower()
+    attachment_role = str(att.get("attachment_role") or att.get("attachmentRole") or "").strip().lower()
+    source = str(att.get("source") or "").strip().lower()
+    return (
+        _is_image_attachment(att)
+        and (
+            generated_by == _CODEX_GENERATED_MEDIA_SOURCE
+            or source == "generated"
+            or attachment_role == "assistant"
+        )
+    )
+
+
+def _generated_image_attachments(meta: dict[str, Any]) -> list[dict[str, Any]]:
+    attachments = _normalize_run_attachments(meta.get("attachments"))
+    return [att for att in attachments if _is_generated_image_attachment(att)]
+
+
+def synthesize_generated_media_summary(meta: dict[str, Any]) -> str:
+    generated = _generated_image_attachments(meta)
+    count = len(generated)
+    if count <= 0:
+        try:
+            count = max(0, int(meta.get("generated_media_count") or 0))
+        except Exception:
+            count = 0
+    if count <= 0:
+        return ""
+    if count == 1:
+        return "已生成1张图片"
+    return f"已生成{count}张图片"
+
+
+def _log_looks_like_imagegen(log_path: Path) -> bool:
+    if not log_path.exists():
+        return False
+    needles = ("imagegen", "image_gen", "generated_images")
+    try:
+        with log_path.open("r", encoding="utf-8", errors="replace") as fh:
+            for raw in fh:
+                low = str(raw or "").lower()
+                if any(needle in low for needle in needles):
+                    return True
+    except Exception:
+        return False
+    return False
+
+
+def _run_looks_like_generated_image(meta: dict[str, Any], log_path: Path) -> bool:
+    if str(meta.get("cliType") or meta.get("cli_type") or "").strip().lower() != "codex":
+        return False
+    status = str(meta.get("status") or "").strip().lower()
+    if status != "done":
+        return False
+    skills = normalize_skills_used_value(meta.get("skills_used"), max_items=20)
+    if any(skill in {"imagegen", "image_gen"} for skill in skills):
+        return True
+    return _log_looks_like_imagegen(log_path)
+
+
+def _candidate_generated_image_files(session_id: str, meta: dict[str, Any]) -> list[Path]:
+    sid = str(session_id or "").strip()
+    if not sid:
+        return []
+    root = CodexAdapter.get_home_path() / "generated_images" / sid
+    if not root.exists() or not root.is_dir():
+        return []
+    start_ts = (
+        parse_iso_ts(meta.get("startedAt"))
+        or parse_iso_ts(meta.get("createdAt"))
+        or 0.0
+    )
+    end_ts = (
+        parse_iso_ts(meta.get("finishedAt"))
+        or parse_iso_ts(meta.get("lastProgressAt"))
+        or start_ts
+        or 0.0
+    )
+    lower = start_ts - 30.0 if start_ts > 0 else 0.0
+    upper = end_ts + 180.0 if end_ts > 0 else 0.0
+    matched: list[tuple[float, Path]] = []
+    try:
+        for path in root.iterdir():
+            if not path.is_file():
+                continue
+            if str(path.suffix or "").strip().lower() not in _IMAGE_FILE_EXTS:
+                continue
+            try:
+                mtime = float(path.stat().st_mtime)
+            except Exception:
+                continue
+            if lower > 0 and mtime < lower:
+                continue
+            if upper > 0 and mtime > upper:
+                continue
+            matched.append((mtime, path))
+    except Exception:
+        return []
+    matched.sort(key=lambda item: (item[0], str(item[1])))
+    return [item[1] for item in matched[-8:]]
+
+
+def reconcile_generated_media_for_run(store: Any, run_id: str, meta: dict[str, Any], *, log_path: Path | None = None) -> bool:
+    row = meta if isinstance(meta, dict) else {}
+    rid = str(run_id or row.get("id") or "").strip()
+    if not rid:
+        return False
+    if str(row.get("cliType") or row.get("cli_type") or "").strip().lower() != "codex":
+        return False
+    actual_log_path = log_path or store._paths(rid)["log"]
+    attachments = _normalize_run_attachments(row.get("attachments"))
+    changed = False
+
+    if not _generated_image_attachments({"attachments": attachments}) and _run_looks_like_generated_image(row, actual_log_path):
+        session_id = str(row.get("sessionId") or "").strip()
+        candidates = _candidate_generated_image_files(session_id, row)
+        if candidates:
+            attach_dir = store.runs_dir / rid / "attachments"
+            try:
+                attach_dir.mkdir(parents=True, exist_ok=True)
+            except Exception:
+                attach_dir = None
+            existing_keys = {
+                (
+                    str(att.get("generatedBy") or att.get("generated_by") or "").strip().lower(),
+                    str(att.get("filename") or "").strip(),
+                    str(att.get("path") or "").strip(),
+                )
+                for att in attachments
+                if isinstance(att, dict)
+            }
+            for src in candidates:
+                if attach_dir is None:
+                    break
+                base_name = src.name
+                target = attach_dir / base_name
+                if not target.exists():
+                    stem = target.stem
+                    suffix = target.suffix
+                    seq = 1
+                    while target.exists():
+                        target = attach_dir / f"{stem}-{seq}{suffix}"
+                        seq += 1
+                    try:
+                        shutil.copy2(src, target)
+                    except Exception:
+                        continue
+                key = (_CODEX_GENERATED_MEDIA_SOURCE, target.name, str(target))
+                if key in existing_keys:
+                    continue
+                existing_keys.add(key)
+                attachments.append(
+                    {
+                        "filename": target.name,
+                        "originalName": src.name,
+                        "url": f"/.runs/{rid}/attachments/{target.name}",
+                        "path": str(target),
+                        "source": "generated",
+                        "generatedBy": _CODEX_GENERATED_MEDIA_SOURCE,
+                        "attachment_role": "assistant",
+                    }
+                )
+                changed = True
+
+    generated = [att for att in attachments if _is_generated_image_attachment(att)]
+    summary = synthesize_generated_media_summary(
+        {
+            "attachments": attachments,
+            "generated_media_count": len(generated),
+        }
+    )
+    if attachments != row.get("attachments"):
+        row["attachments"] = attachments
+        changed = True
+    if generated:
+        if summary and summary != str(row.get("generated_media_summary") or "").strip():
+            row["generated_media_summary"] = summary
+            changed = True
+        if str(row.get("generated_media_kind") or "").strip() != "image":
+            row["generated_media_kind"] = "image"
+            changed = True
+        if int(row.get("generated_media_count") or 0) != len(generated):
+            row["generated_media_count"] = len(generated)
+            changed = True
+    return changed
+
+
 _SKILL_TOKEN_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{1,80}$")
 _UUID_TOKEN_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
 _SKILL_INLINE_RE = re.compile(r"`([A-Za-z0-9][A-Za-z0-9._-]{2,80})`")
@@ -312,7 +530,7 @@ def _clean_business_path(raw: Any) -> str:
         return ""
     p = p[: m.end()]
     low = p.lower()
-    if low.endswith("/skill.md") or "/.codex/skills/" in low:
+    if low.endswith("/skill.md") or ("/.codex/" in low and "/skills/" in low):
         return ""
     if not any(seg in p for seg in _BUSINESS_PATH_SEGMENTS):
         return ""

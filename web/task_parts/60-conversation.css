@@ -20,6 +20,38 @@
       align-items: center;
       gap: 8px;
     }
+    .conv-training-toggle {
+      flex: 0 0 auto;
+      width: 20px;
+      height: 20px;
+      padding: 0;
+      border: none;
+      background: transparent;
+      box-shadow: none;
+      color: rgba(15,23,42,0.5);
+      display: inline-grid;
+      place-items: center;
+      cursor: pointer;
+      transition: color 140ms ease, transform 140ms ease;
+    }
+    .conv-training-toggle svg {
+      width: 16px;
+      height: 16px;
+    }
+    .conv-training-toggle.active {
+      color: var(--blue);
+    }
+    .conv-training-toggle:hover,
+    .conv-training-toggle:focus-visible {
+      color: rgba(15,23,42,0.82);
+      outline: none;
+      transform: translateY(-1px);
+    }
+    .conv-training-toggle:disabled {
+      opacity: 0.46;
+      cursor: default;
+      transform: none;
+    }
     .convrecentagents-global-toggle {
       flex: 0 0 auto;
       min-width: 20px;

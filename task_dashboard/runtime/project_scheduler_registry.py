@@ -499,7 +499,12 @@ class ProjectSchedulerRuntimeRegistry:
             return
         cfg = _load_project_auto_inspection_config(pid)
         enabled = bool(cfg.get("enabled"))
-        ready = bool(cfg.get("ready"))
+        ready_raw = cfg.get("ready")
+        ready = bool(ready_raw) if isinstance(ready_raw, bool) else bool(
+            enabled
+            and str(cfg.get("channel_name") or "").strip()
+            and str(cfg.get("session_id") or "").strip()
+        )
         if not enabled:
             self._set_worker_fields(pid, auto_inspection_state="disabled", auto_inspection_next_due_at="")
             _save_project_scheduler_runtime_snapshot(

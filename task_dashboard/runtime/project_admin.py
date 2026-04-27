@@ -20,6 +20,18 @@ from task_dashboard.runtime.session_routes import dedup_session_channel_response
 _VALID_PROJECT_ID_RE = re.compile(r"^[a-z][a-z0-9_]{1,79}$")
 _VALID_COLOR_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
 _KNOWN_CLI_TYPES = {"codex", "claude", "opencode", "gemini", "trae"}
+_DEFAULT_CHANNEL_BOOTSTRAP_SUBDIRS = [
+    "任务",
+    "问题",
+    "产出物/材料",
+    "产出物/沉淀",
+    "已完成",
+    "暂缓",
+]
+_DEFAULT_CHANNEL_BOOTSTRAP_MARKER_FILES = {
+    "已完成/目录.md": "# 已完成目录\n\n用于归档本分工下已完成且完成收口的任务文档。\n",
+    "产出物/沉淀/目录.md": "# 沉淀目录\n\n用于沉淀可复用的方法、规范、结论与经验。\n",
+}
 
 
 def _safe_text(value: Any, limit: int = 4000) -> str:
@@ -98,6 +110,24 @@ def _load_toml(path: Path) -> dict[str, Any]:
 def _session_store_path_for(project_id: str, sessions_root: Path) -> Path:
     safe_id = project_id.replace("/", "_").replace("\\", "_").replace("..", "_")
     return (sessions_root / f"{safe_id}.json").resolve()
+
+
+def _align_execution_context_to_session_store(*, spec: dict[str, Any], session_store: Any) -> None:
+    sessions_dir = getattr(session_store, "sessions_dir", None)
+    if not sessions_dir:
+        return
+    try:
+        sessions_root = Path(sessions_dir).resolve()
+    except Exception:
+        return
+    runtime_root = sessions_root.parent
+    execution_context = spec.get("execution_context")
+    if not isinstance(execution_context, dict):
+        return
+    execution_context["runtime_root"] = str(runtime_root)
+    execution_context["sessions_root"] = str(sessions_root)
+    execution_context["runs_root"] = str((runtime_root / ".runs").resolve())
+    spec["session_store_path"] = _session_store_path_for(spec["project_id"], sessions_root)
 
 
 def _default_links(
@@ -506,13 +536,16 @@ def create_project_scaffold(*, spec: dict[str, Any]) -> dict[str, Any]:
         )
 
     created_channel_roots: list[str] = []
-    subdirs = ["产出物/沉淀", "任务", "已完成", "暂缓", "答复", "反馈", "讨论空间", "问题"]
     for channel in spec["channels"]:
         channel_root = task_root / channel["name"]
         channel_root.mkdir(parents=True, exist_ok=True)
         created_channel_roots.append(str(channel_root))
-        for subdir in subdirs:
+        for subdir in _DEFAULT_CHANNEL_BOOTSTRAP_SUBDIRS:
             (channel_root / subdir).mkdir(parents=True, exist_ok=True)
+        for rel_path, content in _DEFAULT_CHANNEL_BOOTSTRAP_MARKER_FILES.items():
+            marker_file = channel_root / rel_path
+            if not marker_file.exists():
+                marker_file.write_text(content, encoding="utf-8")
         channel_readme = channel_root / "README.md"
         if not channel_readme.exists():
             channel_readme.write_text(
@@ -525,9 +558,6 @@ def create_project_scaffold(*, spec: dict[str, Any]) -> dict[str, Any]:
                 ),
                 encoding="utf-8",
             )
-        inbox = channel_root / "沟通-收件箱.md"
-        if not inbox.exists():
-            inbox.write_text("", encoding="utf-8")
 
     return {
         "ok": True,
@@ -629,6 +659,8 @@ def bootstrap_project_primary_sessions(
                 "session_id": _safe_text(session.get("id") or session.get("sessionId"), 120),
                 "created": bool(result.get("created")),
                 "reused": bool(result.get("reused")),
+                "timeout_recovered": bool(result.get("timeout_recovered")),
+                "create_warning": result.get("create_warning") if isinstance(result.get("create_warning"), dict) else {},
                 "session_path": _safe_text(result.get("sessionPath"), 4000),
                 "workdir": _safe_text(result.get("workdir"), 4000),
             }
@@ -804,6 +836,7 @@ def bootstrap_project_response(
             repo_root=repo_root,
         )
         warnings.extend(collected_warnings)
+        _align_execution_context_to_session_store(spec=spec, session_store=session_store)
         step_results.append(
             {
                 "step": "validate",

@@ -112,7 +112,8 @@ def _infer_sender_fields(payload: Mapping[str, Any]) -> dict[str, str] | None:
             or _first_non_empty(target_ref, ("channel_name", "channelName"))
         )
         sender_name = (
-            _first_non_empty(source_ref, ("channel_name", "channelName"))
+            _first_non_empty(payload, ("source_agent_alias", "sourceAgentAlias", "source_agent_name", "sourceAgentName"))
+            or _first_non_empty(source_ref, ("channel_name", "channelName"))
             or _first_non_empty(target_ref, ("channel_name", "channelName"))
             or "Agent"
         )

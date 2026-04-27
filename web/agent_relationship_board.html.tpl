@@ -49,6 +49,12 @@
               </div>
             </div>
           </div>
+          <div class="chip-group" id="platformCommScopeFilters" aria-label="沟通范围过滤" hidden>
+            <span class="toolbar-label">范围</span>
+            <button class="chip is-active" data-comm-scope="all" type="button">全部</button>
+            <button class="chip" data-comm-scope="cross" type="button">跨项目</button>
+            <button class="chip" data-comm-scope="high" type="button">高频</button>
+          </div>
           <div class="chip-group" id="commTypeFilters" aria-label="连线类型过滤">
             <span class="toolbar-label">连线</span>
             <button class="chip is-active" data-comm-kind="user" type="button">用户参与</button>

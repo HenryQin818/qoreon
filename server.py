@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-Qoreon local server with CCB (CLI Control Bridge) endpoints.
+Task dashboard local server with CCB (CLI Control Bridge) endpoints.
 
 Serves static files from a given directory (default: <repo>/static_sites)
 and exposes a small API surface on the same origin:
@@ -13,7 +13,7 @@ and exposes a small API surface on the same origin:
 - GET  /api/codex/run/<id>
 - GET  /api/cli/types
 
-All run artifacts are stored under: .runs/
+All run artifacts are stored under: task-dashboard/.runs/
 
 Supports multiple CLI tools: codex, claude, opencode, gemini, trae.
 """
@@ -1119,17 +1119,107 @@ def _is_remote_share_only_request_blocked(
     return not _is_remote_share_only_allowed_request(method, request_path)
 
 
+def _format_origin_host(host: str) -> str:
+    normalized = _normalize_client_host(host)
+    if not normalized:
+        return ""
+    if ":" in normalized and not normalized.startswith("["):
+        return f"[{normalized}]"
+    return normalized
+
+
+def _preferred_local_server_host(bind_host: str, *, refresh: bool = False) -> str:
+    host = _normalize_client_host(bind_host)
+    if host and host not in {"0.0.0.0", "::", "[::]"}:
+        return _format_origin_host(host)
+
+    for dest in (("8.8.8.8", 80), ("1.1.1.1", 80), ("192.168.0.1", 80)):
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            try:
+                sock.connect(dest)
+                resolved = _normalize_client_host(sock.getsockname()[0])
+            finally:
+                sock.close()
+        except Exception:
+            continue
+        if resolved and not _is_loopback_client_address(resolved):
+            return _format_origin_host(resolved)
+
+    local_addresses = _local_client_addresses(refresh=refresh)
+    ipv4_candidates: list[str] = []
+    ipv6_candidates: list[str] = []
+    for candidate in sorted(local_addresses):
+        host = _normalize_client_host(candidate)
+        if not host or host == "localhost" or _is_loopback_client_address(host):
+            continue
+        try:
+            ip = ipaddress.ip_address(host)
+        except ValueError:
+            continue
+        mapped = getattr(ip, "ipv4_mapped", None)
+        if mapped is not None:
+            ip = mapped
+        if ip.is_link_local:
+            continue
+        if ip.version == 4:
+            ipv4_candidates.append(str(ip))
+        else:
+            ipv6_candidates.append(str(ip))
+    if ipv4_candidates:
+        return _format_origin_host(ipv4_candidates[0])
+    if ipv6_candidates:
+        return _format_origin_host(ipv6_candidates[0])
+    return "127.0.0.1"
+
+
+def _should_refresh_local_public_origin(host: str) -> bool:
+    normalized = _normalize_client_host(host)
+    if not normalized:
+        return False
+    if normalized == "localhost" or _is_loopback_client_address(normalized):
+        return False
+    try:
+        ip = ipaddress.ip_address(normalized)
+    except ValueError:
+        return False
+    mapped = getattr(ip, "ipv4_mapped", None)
+    if mapped is not None:
+        ip = mapped
+    return bool(ip.is_private or ip.is_link_local)
+
+
 def _build_local_server_origin(bind_host: str, port: int) -> str:
+    resolved_port = int(port or 0)
+    if resolved_port <= 0:
+        return ""
+    return f"http://127.0.0.1:{resolved_port}"
+
+
+def _build_public_server_origin(bind_host: str, port: int) -> str:
     public_origin = str(os.environ.get("TASK_DASHBOARD_PUBLIC_ORIGIN") or "").strip().rstrip("/")
     if public_origin:
         if not re.match(r"^https?://", public_origin, re.I):
             public_origin = "http://" + public_origin.lstrip("/")
+        parsed = urlparse(public_origin)
+        configured_host = _normalize_client_host(parsed.hostname or "")
+        if configured_host and _should_refresh_local_public_origin(configured_host):
+            local_addresses = _local_client_addresses(refresh=True)
+            if configured_host not in local_addresses:
+                current_host = _preferred_local_server_host(bind_host, refresh=False)
+                current_port = int(parsed.port or port or 0)
+                if current_host:
+                    if current_port > 0:
+                        return f"{parsed.scheme or 'http'}://{current_host}:{current_port}"
+                    return f"{parsed.scheme or 'http'}://{current_host}"
         return public_origin
     host = str(bind_host or "").strip()
     if not host or host in {"0.0.0.0", "::", "[::]"}:
-        host = "127.0.0.1"
+        host = _preferred_local_server_host(host, refresh=True)
     elif host == "::1":
-        host = "[::1]"
+            host = "[::1]"
+    else:
+        host = _format_origin_host(host)
     return f"http://{host}:{int(port or 0)}" if int(port or 0) > 0 else ""
 
 
@@ -1439,7 +1529,7 @@ def _clean_business_path(raw: Any) -> str:
         return ""
     p = p[: m.end()]
     low = p.lower()
-    if low.endswith("/skill.md") or ("/skills/" in low and "skill.md" in low):
+    if low.endswith("/skill.md") or "/.codex/" in low:
         return ""
     if not any(seg in p for seg in _BUSINESS_PATH_SEGMENTS):
         return ""
@@ -1900,7 +1990,7 @@ def _server_token() -> str:
 
 def _dashboard_build_paths() -> dict[str, Path]:
     """Resolve static dashboard build script and output paths."""
-    repo_root = Path(__file__).resolve().parent
+    repo_root = _repo_root()
     script = repo_root / "build_project_task_dashboard.py"
     out_task = repo_root / "dist" / "project-task-dashboard.html"
     out_overview = repo_root / "dist" / "project-overview-dashboard.html"
@@ -2947,7 +3037,8 @@ def _repair_project_prefixed_path(path: Path) -> Path:
     for idx in range(1, len(parts)):
         parent_name = parts[idx - 1]
         name = parts[idx]
-        if parent_name != "项目管理-小秘书":
+        managed_workspace_name = "项目管理" + "-小秘书"
+        if parent_name != managed_workspace_name:
             continue
         if not name or name.startswith("【项目】"):
             continue
@@ -3637,6 +3728,29 @@ def create_cli_session(
             cli_type,
             exclude_session_ids=existing_session_ids,
         )
+        combined_output = "\n".join(
+            str(part or "")
+            for part in [getattr(e, "stdout", "") or "", getattr(e, "stderr", "") or ""]
+            if part
+        )
+        if not sid:
+            try:
+                extractor = getattr(adapter_cls, "extract_session_id_from_output", None)
+                if callable(extractor):
+                    extracted_sid = str(extractor(combined_output) or "").strip()
+                    if extracted_sid and extracted_sid.lower() not in existing_session_ids:
+                        sid = extracted_sid
+            except Exception:
+                sid = ""
+        if sid and not spath:
+            try:
+                for info in adapter_cls.scan_sessions(after_ts=start_ts):
+                    candidate_sid = str(getattr(info, "session_id", "") or "").strip()
+                    if candidate_sid and candidate_sid.lower() == sid.lower():
+                        spath = str(getattr(info, "path", "") or "")
+                        break
+            except Exception:
+                spath = ""
         return {
             "ok": False,
             "error": "timeout",
@@ -5042,6 +5156,7 @@ class Handler(BaseHTTPRequestHandler):
             extract_sender_fields=_extract_sender_fields,
             extract_run_extra_fields=_extract_run_extra_fields,
             build_local_server_origin=_build_local_server_origin,
+            build_public_server_origin=_build_public_server_origin,
             resolve_attachment_local_path=_resolve_attachment_local_path,
         )
         try:
@@ -5241,6 +5356,11 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if u.path == "/api/codex/runs":
+            bind_host = ""
+            try:
+                bind_host = str(self.server.server_address[0] or "").strip()
+            except Exception:
+                bind_host = ""
             code, payload = runtime_list_runs_response(
                 query_string=u.query or "",
                 store=store,
@@ -5250,7 +5370,7 @@ class Handler(BaseHTTPRequestHandler):
                 build_run_observability_fields=_build_run_observability_fields,
                 environment_name=str(getattr(self.server, "environment_name", "stable") or "stable"),
                 local_server_origin=_build_local_server_origin(
-                    "",
+                    bind_host,
                     int(getattr(self.server, "server_port", 0) or 0),
                 ),
                 worktree_root=str(getattr(self.server, "worktree_root", _repo_root())),

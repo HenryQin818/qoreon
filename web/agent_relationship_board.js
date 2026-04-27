@@ -101,6 +101,7 @@
     projectName: "",
     viewMode: "project",
     platformLayoutMode: "project",
+    platformCommScope: "all",
     commLineCountMin: 0,
     commVisibility: {
       user: true,
@@ -150,6 +151,8 @@
     platformProjectClearBtn: document.getElementById("platformProjectClearBtn"),
     platformProjectCancelBtn: document.getElementById("platformProjectCancelBtn"),
     platformProjectApplyBtn: document.getElementById("platformProjectApplyBtn"),
+    platformCommScopeFilters: document.getElementById("platformCommScopeFilters"),
+    platformScopeButtons: Array.from(document.querySelectorAll("[data-comm-scope]")),
     commTypeFilters: document.getElementById("commTypeFilters"),
     commTypeButtons: Array.from(document.querySelectorAll("[data-comm-kind]")),
     timeTabs: Array.from(document.querySelectorAll("[data-window]")),
@@ -991,6 +994,7 @@
       zoom: 1,
       platform_project_selected: [],
       platform_project_filter_initialized: false,
+      platform_comm_scope: "all",
       comm_kind_visibility: { user: true, agent: true },
       comm_count_min: 0,
     };
@@ -1017,6 +1021,7 @@
         zoom: STATE.zoom,
         platform_project_selected: isPlatformMode() ? [...(STATE.platformProjectFilterSelected || [])] : [],
         platform_project_filter_initialized: isPlatformMode() ? Boolean(STATE.platformProjectFilterInitialized) : false,
+        platform_comm_scope: safeText(STATE.platformCommScope, "all"),
         comm_kind_visibility: {
           user: STATE.commVisibility.user !== false,
           agent: STATE.commVisibility.agent !== false,
@@ -1031,6 +1036,8 @@
     const visibility = (stored && stored.comm_kind_visibility && typeof stored.comm_kind_visibility === "object")
       ? stored.comm_kind_visibility
       : {};
+    const scope = safeText(stored && stored.platform_comm_scope, "all");
+    STATE.platformCommScope = ["all", "cross", "high"].includes(scope) ? scope : "all";
     STATE.commVisibility.user = visibility.user !== false;
     STATE.commVisibility.agent = visibility.agent !== false;
     STATE.commLineCountMin = Math.max(0, Number(stored && stored.comm_count_min) || 0);
@@ -1060,6 +1067,20 @@
 
   function isUserCommLink(link) {
     return safeText(link && link.from_id) === USER_NODE_ID || safeText(link && link.to_id) === USER_NODE_ID;
+  }
+
+  function platformCommScopeLabel(scope = STATE.platformCommScope) {
+    const value = safeText(scope, "all");
+    if (value === "cross") return "只看跨项目";
+    if (value === "high") return `只看高频(${PLATFORM_HIGH_FREQ_COUNT}+)`;
+    return "全部沟通";
+  }
+
+  function platformCommScopeSummaryLabel(scope = STATE.platformCommScope) {
+    const value = safeText(scope, "all");
+    if (value === "cross") return "跨项目";
+    if (value === "high") return `高频(${PLATFORM_HIGH_FREQ_COUNT}+)`;
+    return "全部";
   }
 
   function filteredCommLinks(links) {
@@ -1868,7 +1889,12 @@
   }
 
   function filteredPlatformCommLinks() {
-    return filteredCommLinks(STATE.platformCommLinks || []);
+    const scope = safeText(STATE.platformCommScope, "all");
+    return filteredCommLinks(STATE.platformCommLinks || []).filter((link) => {
+      if (scope === "cross") return Boolean(link.cross_project);
+      if (scope === "high") return Number(link.count || 0) >= PLATFORM_HIGH_FREQ_COUNT;
+      return true;
+    });
   }
 
   function filteredProjectCommLinks() {
@@ -2123,6 +2149,7 @@
     };
     toggleVisible(dom.platformModeTabsWrap, isPlatformMode());
     toggleVisible(dom.platformProjectFilterWrap, isPlatformMode());
+    toggleVisible(dom.platformCommScopeFilters, isPlatformMode());
     toggleVisible(dom.commTypeFilters, true);
     toggleVisible(dom.platformCommCountFilters, true);
     if (dom.rosterSectionTitle) {
@@ -2139,12 +2166,13 @@
         : `${STATE.projectName || STATE.projectId} · ${STATE.channelHint ? `通道 ${STATE.channelHint}` : "单项目组织视图"} · ${currentWindowLabel()}`;
     }
     if (dom.summaryMeta) {
+      const visiblePlatformLinks = filteredCommLinks(STATE.platformCommLinks || []);
       const filteredPlatformLinks = filteredPlatformCommLinks();
       const filteredProjectLinks = filteredProjectCommLinks();
       const activeProjectCount = visiblePlatformProjects().length;
       const totalProjectCount = platformProjectIds().length;
       dom.summaryMeta.textContent = isPlatformMode()
-        ? `项目 ${activeProjectCount}/${totalProjectCount} · ${STATE.platformLayoutMode === "agent" ? `Agent ${visibleAgentNodeCount()} + 用户` : `项目节点 ${STATE.nodes.length}`} · 沟通线 ${filteredPlatformLinks.length}/${STATE.platformCommLinks.length} · 总量 ${totalCommCount(filteredPlatformLinks)}${STATE.commLineCountMin > 0 ? ` · 数量 ${STATE.commLineCountMin}+` : ""}`
+        ? `项目 ${activeProjectCount}/${totalProjectCount} · ${STATE.platformLayoutMode === "agent" ? `Agent ${visibleAgentNodeCount()} + 用户` : `项目节点 ${STATE.nodes.length}`} · 沟通线 ${filteredPlatformLinks.length}/${visiblePlatformLinks.length} · 总量 ${totalCommCount(filteredPlatformLinks)}${safeText(STATE.platformCommScope, "all") !== "all" ? ` · 范围 ${platformCommScopeSummaryLabel()}` : ""}${STATE.commLineCountMin > 0 ? ` · 数量 ${STATE.commLineCountMin}+` : ""}`
         : `背景板 ${STATE.groups.length} · Agent ${visibleAgentNodeCount()} + 用户 · 沟通线 ${filteredProjectLinks.length} · 总量 ${totalCommCount(filteredProjectLinks)}${STATE.commLineCountMin > 0 ? ` · 数量 ${STATE.commLineCountMin}+` : ""}`;
     }
     if (dom.platformProjectFilterBtn && isPlatformMode()) {
@@ -2159,6 +2187,9 @@
     }
     dom.platformModeButtons.forEach((button) => {
       button.classList.toggle("is-active", button.dataset.platformLayout === STATE.platformLayoutMode);
+    });
+    dom.platformScopeButtons.forEach((button) => {
+      button.classList.toggle("is-active", safeText(button.dataset.commScope, "all") === STATE.platformCommScope);
     });
     dom.commTypeButtons.forEach((button) => {
       const kind = safeText(button.dataset.commKind);
@@ -2745,6 +2776,7 @@
           <div class="k">${escapeHtml(toLabel)} → ${escapeHtml(fromLabel)}</div><div>${Number(selectedCommLink.to_from_count || 0)}</div>
           <div class="k">类型</div><div>${isUserCommLink(selectedCommLink) ? "用户参与" : "Agent之间"}</div>
           <div class="k">范围</div><div>${selectedCommLink.cross_project ? "跨项目" : "项目内"}</div>
+          ${isPlatformMode() ? `<div class="k">范围过滤</div><div>${escapeHtml(platformCommScopeLabel())}</div>` : ""}
           <div class="k">最近时间</div><div>${fmtDateTime(selectedCommLink.last_ts)}</div>
         </div>
       `;
@@ -3062,7 +3094,21 @@
   function bindEvents() {
     dom.timeTabs.forEach((button) => {
       button.addEventListener("click", () => {
-        STATE.windowKey = button.dataset.window || "1h";
+        const nextWindow = safeText(button.dataset.window, "1h");
+        if (nextWindow === "custom") {
+          const nextRange = currentWindowRange();
+          if (!STATE.customRange.startMs || !STATE.customRange.endMs || STATE.customRange.endMs <= STATE.customRange.startMs) {
+            STATE.customRange = {
+              startMs: nextRange.startMs,
+              endMs: nextRange.endMs,
+            };
+          }
+          STATE.windowKey = "custom";
+          syncTimeControls();
+          setStatus("已切换到自定义时间范围，请设置开始和结束时间后点击应用。", "ready");
+          return;
+        }
+        STATE.windowKey = nextWindow;
         syncTimeControls();
         loadData();
       });
@@ -3081,6 +3127,16 @@
           return;
         }
         loadData();
+      });
+    });
+    dom.platformScopeButtons.forEach((button) => {
+      button.addEventListener("click", () => {
+        const next = safeText(button.dataset.commScope, "all");
+        if (STATE.platformCommScope === next) return;
+        STATE.platformCommScope = next;
+        STATE.selectedPlatformCommLinkId = "";
+        persistLayoutStore();
+        renderAll();
       });
     });
     dom.commTypeButtons.forEach((button) => {

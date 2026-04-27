@@ -5,6 +5,7 @@
       const src = (payload && typeof payload === "object") ? payload : {};
       const status = String(src.status || "").trim().toLowerCase();
       const displayAssistantText = String(src.displayAssistantText || "").trim();
+      const attachments = Array.isArray(src.attachments) ? src.attachments : [];
       const processInfo = (src.processInfo && typeof src.processInfo === "object") ? src.processInfo : {};
       const latestProgress = String(processInfo.latest || "").trim();
       const processCount = Math.max(0, Number(processInfo.count || 0) || 0);
@@ -40,7 +41,9 @@
         bodyTitle: "正文",
         inlineText: "",
         showBody: true,
-        placeholder: "未生成可展示正文",
+        placeholder: (status === "done" && attachments.length > 0)
+          ? "本轮执行已完成，结果见下方附件。"
+          : "未生成可展示正文",
         needsDetailPrefetch: false,
       };
     }
@@ -722,6 +725,8 @@
     function renderRestartRecoveryCard(meta, opts = {}) {
       const m = (meta && typeof meta === "object") ? meta : {};
       const duplicate = !!opts.duplicate;
+      const rid = String(opts.runId || "").trim();
+      const runMeta = (opts.runMeta && typeof opts.runMeta === "object") ? opts.runMeta : (rid ? { id: rid } : {});
       const progressMeta = buildRestartRecoveryProgressMeta(opts.runId, opts.runMeta, opts.detailMeta);
       const root = el("div", { class: "callback-event interrupted restart-recovery" + (duplicate ? " duplicate" : "") });
       root.appendChild(el("div", {
@@ -809,19 +814,49 @@
       }
       addRow("建议动作", "优先处理本条恢复消息，再按需使用“回收结果”收口历史中断任务。");
       root.appendChild(grid);
-      if (typeof opts.onReply === "function") {
+      const actionBusy = rid ? String((PCONV.runActionBusy && PCONV.runActionBusy[rid]) || "").trim() : "";
+      let recoveryActionBtn = null;
+      if (progressMeta && progressMeta.state === "running") {
+        recoveryActionBtn = el("button", {
+          class: "btn textbtn run-action-danger",
+          type: "button",
+          text: actionBusy === "interrupt" ? "打断中..." : "打断恢复",
+        });
+        recoveryActionBtn.disabled = !!actionBusy;
+        recoveryActionBtn.addEventListener("click", async () => {
+          if (recoveryActionBtn.disabled) return;
+          recoveryActionBtn.disabled = true;
+          try { await interruptRunningRun(runMeta); } finally { recoveryActionBtn.disabled = false; }
+        });
+      } else if (progressMeta && (progressMeta.state === "retry_waiting" || progressMeta.state === "queued")) {
+        recoveryActionBtn = el("button", {
+          class: "btn textbtn run-action-danger",
+          type: "button",
+          text: actionBusy === "cancel_retry" ? "取消中..." : "取消恢复",
+        });
+        recoveryActionBtn.disabled = !!actionBusy;
+        recoveryActionBtn.addEventListener("click", async () => {
+          if (recoveryActionBtn.disabled) return;
+          recoveryActionBtn.disabled = true;
+          try { await cancelRetryWaitingRun(runMeta); } finally { recoveryActionBtn.disabled = false; }
+        });
+      }
+      if (typeof opts.onReply === "function" || recoveryActionBtn) {
         const replyText = firstNonEmptyText([
           String(opts.rawText || "").trim(),
           "请继续处理本条服务恢复后的任务。",
         ]);
         const ops = el("div", { class: "bubbleops system callback-event-ops" });
-        const replyBtn = el("button", { class: "btn textbtn", type: "button", text: "回复" });
-        replyBtn.addEventListener("click", () => {
-          try {
-            opts.onReply({ text: replyText });
-          } catch (_) {}
-        });
-        ops.appendChild(replyBtn);
+        if (recoveryActionBtn) ops.appendChild(recoveryActionBtn);
+        if (typeof opts.onReply === "function") {
+          const replyBtn = el("button", { class: "btn textbtn", type: "button", text: "回复" });
+          replyBtn.addEventListener("click", () => {
+            try {
+              opts.onReply({ text: replyText });
+            } catch (_) {}
+          });
+          ops.appendChild(replyBtn);
+        }
         root.appendChild(ops);
       }
       return root;
@@ -1835,14 +1870,150 @@
     function copyConversationBubbleText(role, content, fallback, opts = {}) {
       const text = resolveConversationBubbleCopyText(role, content, fallback, opts);
       if (!text) return;
+      if (typeof copyText === "function") {
+        Promise.resolve(copyText(text))
+          .then((ok) => {
+            setHintText("conv", ok === false ? "复制失败：请手动复制全文" : "已复制全文");
+          })
+          .catch(() => { setHintText("conv", "复制失败：请手动复制全文"); });
+        return;
+      }
       navigator.clipboard?.writeText(text)
         .then(() => { setHintText("conv", "已复制全文"); })
-        .catch(() => { setHintText("conv", "复制失败：请检查浏览器剪贴板权限"); });
+        .catch(() => { setHintText("conv", "复制失败：请手动复制全文"); });
+    }
+
+    function conversationAttachmentRole(att) {
+      return String(firstNonEmptyText([
+        att && att.attachment_role,
+        att && att.attachmentRole,
+      ]) || "").trim().toLowerCase();
+    }
+
+    function isConversationAssistantGeneratedMediaAttachment(att) {
+      if (!att || typeof att !== "object") return false;
+      const attachmentRole = conversationAttachmentRole(att);
+      if (attachmentRole && attachmentRole !== "assistant" && attachmentRole !== "agent") return false;
+      const generatedBy = String(firstNonEmptyText([
+        att.generatedBy,
+        att.generated_by,
+      ]) || "").trim().toLowerCase();
+      const source = String(firstNonEmptyText([att.source]) || "").trim().toLowerCase();
+      return generatedBy === "codex_imagegen" || source === "generated";
+    }
+
+    function isConversationAssistantGeneratedImageAttachment(att) {
+      return isConversationAssistantGeneratedMediaAttachment(att) && isImageAttachment(att);
+    }
+
+    function isConversationUserInputAttachment(att) {
+      if (!att || typeof att !== "object") return false;
+      const attachmentRole = conversationAttachmentRole(att);
+      if (attachmentRole && attachmentRole !== "user") return false;
+      const generatedBy = String(firstNonEmptyText([
+        att.generatedBy,
+        att.generated_by,
+      ]) || "").trim().toLowerCase();
+      const source = String(firstNonEmptyText([att.source]) || "").trim().toLowerCase();
+      if (generatedBy === "codex_imagegen" || source === "generated") return false;
+      if (isConversationAssistantGeneratedMediaAttachment(att)) return false;
+      return true;
+    }
+
+    function conversationAttachmentIdentityKey(att, idx = 0) {
+      if (!att || typeof att !== "object") return "__att:" + String(idx || 0);
+      return String(firstNonEmptyText([
+        att.attachment_id,
+        att.attachmentId,
+        att.local_id,
+        att.localId,
+        att.path,
+        att.url,
+        att.dataUrl,
+        att.filename,
+        att.originalName,
+      ]) || ("__att:" + String(idx || 0))).trim();
+    }
+
+    function mergeConversationAttachmentLists(lists) {
+      const out = [];
+      const seen = new Set();
+      (Array.isArray(lists) ? lists : []).forEach((list) => {
+        (Array.isArray(list) ? list : []).forEach((att, idx) => {
+          if (!att || typeof att !== "object") return;
+          const key = conversationAttachmentIdentityKey(att, idx);
+          if (!key || seen.has(key)) return;
+          seen.add(key);
+          out.push(att);
+        });
+      });
+      return out;
+    }
+
+    function filterConversationBubbleAttachments(role, attachments) {
+      const rows = Array.isArray(attachments) ? attachments.filter(Boolean) : [];
+      const normalizedRole = String(role || "").trim().toLowerCase();
+      if (normalizedRole === "assistant") {
+        return rows.filter((att) => isConversationAssistantGeneratedImageAttachment(att));
+      }
+      if (normalizedRole === "user") {
+        return rows.filter((att) => isConversationUserInputAttachment(att));
+      }
+      return rows;
+    }
+
+    function firstConversationGeneratedMediaAttachmentUrl(attachments) {
+      const rows = Array.isArray(attachments) ? attachments.filter(Boolean) : [];
+      for (const att of rows) {
+        if (!isConversationAssistantGeneratedMediaAttachment(att)) continue;
+        const src = String(resolveAttachmentUrl(att) || "").trim();
+        if (src) return src;
+      }
+      return "";
+    }
+
+    function firstConversationGeneratedMediaCount(values) {
+      const rows = Array.isArray(values) ? values : [];
+      for (const raw of rows) {
+        const num = Number(raw);
+        if (Number.isFinite(num) && num > 0) return num;
+      }
+      return 0;
+    }
+
+    function renderConversationGeneratedMediaCard(payload = {}) {
+      const count = Math.max(0, Number(payload.count || 0));
+      const summary = String(payload.summary || "").trim();
+      const openUrl = String(payload.openUrl || "").trim();
+      if (!count && !summary) return null;
+      const card = el("div", { class: "msg-generated-media-card" });
+      const head = el("div", { class: "msg-generated-media-head" });
+      head.appendChild(el("div", {
+        class: "msg-generated-media-title",
+        text: count > 0 ? ("已生成 " + count + " 张图片") : "已生成图片结果",
+      }));
+      if (summary) {
+        head.appendChild(el("div", {
+          class: "msg-generated-media-sub",
+          text: summary,
+        }));
+      }
+      card.appendChild(head);
+      if (openUrl) {
+        const actions = el("div", { class: "msg-generated-media-actions" });
+        const openBtn = el("button", { class: "btn textbtn", type: "button", text: "打开结果" });
+        openBtn.addEventListener("click", () => {
+          openNew(openUrl);
+        });
+        actions.appendChild(openBtn);
+        card.appendChild(actions);
+      }
+      return card;
     }
 
     function appendConversationBubble(row, role, content, fallback, bubbleKey, opts = {}) {
       const txt = String(content || "");
-      const attachments = opts.attachments || [];
+      const attachments = filterConversationBubbleAttachments(role, opts.attachments || []);
       const replyQuote = renderConversationReplyQuote(opts.replyContext);
       if (replyQuote) row.appendChild(replyQuote);
       const bubble = el("div", { class: "mbubble md" });
@@ -1928,7 +2099,7 @@
         row.appendChild(foldRow);
       }
 
-      if (attachments.length > 0 && role === "user") {
+      if (attachments.length > 0 && (role === "user" || role === "assistant")) {
         const attachWrap = el("div", { class: "msg-attachments" });
         for (const att of attachments) {
           const src = resolveAttachmentUrl(att);
@@ -2337,6 +2508,30 @@
       const receiptProjection = payload.receiptProjection || null;
       const currentActiveRunId = String(payload.currentActiveRunId || "").trim();
       const currentQueuedRunId = String(payload.currentQueuedRunId || "").trim();
+      const attachments = mergeConversationAttachmentLists([
+        payload.attachments,
+        d && d.full && d.full.run && d.full.run.attachments,
+        d && d.run && d.run.attachments,
+        r && r.attachments,
+      ]);
+      const visibleGeneratedAttachments = filterConversationBubbleAttachments("assistant", attachments);
+      const generatedMediaSummary = String(firstNonEmptyText([
+        d && d.run && d.run.generated_media_summary,
+        d && d.full && d.full.run && d.full.run.generated_media_summary,
+        r && r.generated_media_summary,
+      ]) || "").trim();
+      const generatedMediaCount = firstConversationGeneratedMediaCount([
+        d && d.run && d.run.generated_media_count,
+        d && d.full && d.full.run && d.full.run.generated_media_count,
+        r && r.generated_media_count,
+      ]);
+      const generatedMediaFallback = (generatedMediaCount > 0 && !visibleGeneratedAttachments.length)
+        ? renderConversationGeneratedMediaCard({
+            count: generatedMediaCount,
+            summary: generatedMediaSummary,
+            openUrl: firstConversationGeneratedMediaAttachmentUrl(attachments),
+          })
+        : null;
       const staleErrorWithActiveRun = st === "error" && currentActiveRunId && currentActiveRunId !== rid;
       const staleErrorWithQueuedRun = st === "error" && !staleErrorWithActiveRun && currentQueuedRunId && currentQueuedRunId !== rid;
       const staleErrorNote = staleErrorWithActiveRun
@@ -2383,7 +2578,9 @@
       const assistantBubbleText = String(displayAssistantText || "").trim();
       const noVisibleAssistantOutput = !assistantBubbleText && Number(processInfo.count || 0) <= 0 && !err;
       const assistantBodyPlaceholder = (st === "done" && noVisibleAssistantOutput)
-        ? "本轮执行已完成，但未生成可展示正文。"
+        ? ((visibleGeneratedAttachments.length > 0 || generatedMediaFallback)
+            ? "本轮执行已完成，结果见下方图片结果。"
+            : "本轮执行已完成，但未生成可展示正文。")
         : "";
       const assistantDetailFull = d && d.full ? d.full : null;
       const assistantDetailState = assistantDetailFull ? deriveRunStateFromSource(assistantDetailFull.run, "") : "";
@@ -2418,6 +2615,7 @@
             runId: rid,
             forceDetailOnExpand: assistantNeedsDetailOnExpand,
             bubbleClass: isPlaceholderOnly ? "is-placeholder" : "",
+            attachments: visibleGeneratedAttachments,
             opsContainer: bodyOps,
             keepOpsSize: true,
             onReply: assistantBubbleText ? ({ bubbleKey, text }) => {
@@ -2686,6 +2884,7 @@
       }
 
       if (bodyCard) aiRow.appendChild(bodyCard);
+      if (generatedMediaFallback) aiRow.appendChild(generatedMediaFallback);
       const receiptStack = renderConversationReceiptStack({
         runId: rid,
         projection: receiptProjection,

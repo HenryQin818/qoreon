@@ -52,6 +52,7 @@
       taskGroupExpanded: Object.create(null),
       taskLaneCollapsed: { "已完成": true, "已归档": true },
       taskCanvasDetailOpen: false,
+      unifiedDetailRequested: false,
     };
     const HASH_BOOTSTRAP = {
       projectOnly: false,

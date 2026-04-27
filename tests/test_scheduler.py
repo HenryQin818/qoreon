@@ -177,6 +177,8 @@ class TestScheduler(unittest.TestCase):
     def test_multiple_retry_waiting_same_session_activate_in_order(self) -> None:
         calls: list[str] = []
         lock = threading.Lock()
+        rw1_done = threading.Event()
+        rw2_started = threading.Event()
 
         def fake_run(
             _store: object,
@@ -188,6 +190,10 @@ class TestScheduler(unittest.TestCase):
             with lock:
                 calls.append(run_id)
             time.sleep(0.02)
+            if run_id == "rw1":
+                rw1_done.set()
+            if run_id == "rw2":
+                rw2_started.set()
 
         class _Store:
             def __init__(self) -> None:
@@ -217,15 +223,25 @@ class TestScheduler(unittest.TestCase):
             if timer1:
                 timer1.cancel()
             sched._activate_retry_waiting("s1", "rw1", "codex")
-            time.sleep(0.12)
+            if not rw1_done.wait(timeout=1.0):
+                self.fail(f"rw1 did not complete, calls={calls}")
             self.assertEqual([x for x in calls if x.startswith("rw")], ["rw1"])
-            self.assertEqual(str(sched._retry_waiting["s1"][0]), "rw2")
+            t0 = time.time()
+            while True:
+                with sched._lock:  # type: ignore[attr-defined]
+                    waiting = str((sched._retry_waiting.get("s1") or ("",))[0] or "")  # type: ignore[attr-defined]
+                if waiting == "rw2":
+                    break
+                if time.time() - t0 > 1:
+                    self.fail(f"rw2 was not moved to retry_waiting, calls={calls}")
+                time.sleep(0.01)
 
             timer2 = sched._retry_timers.pop("rw2", None)
             if timer2:
                 timer2.cancel()
             sched._activate_retry_waiting("s1", "rw2", "codex")
-            time.sleep(0.12)
+            if not rw2_started.wait(timeout=1.0):
+                self.fail(f"rw2 did not start, calls={calls}")
             self.assertEqual([x for x in calls if x.startswith("rw")], ["rw1", "rw2"])
         finally:
             server.run_cli_exec = old  # type: ignore[assignment]
@@ -335,6 +351,8 @@ class TestScheduler(unittest.TestCase):
     def test_urgent_priority_runs_before_normal_queue_items(self) -> None:
         calls: list[str] = []
         lock = threading.Lock()
+        n1_started = threading.Event()
+        release_n1 = threading.Event()
 
         def fake_run(
             _store: object,
@@ -345,7 +363,11 @@ class TestScheduler(unittest.TestCase):
         ) -> None:
             with lock:
                 calls.append(run_id)
-            time.sleep(0.08 if run_id == "n1" else 0.02)
+            if run_id == "n1":
+                n1_started.set()
+                release_n1.wait(timeout=1.0)
+                return
+            time.sleep(0.02)
 
         old = server.run_cli_exec
         server.run_cli_exec = fake_run  # type: ignore[assignment]
@@ -355,8 +377,10 @@ class TestScheduler(unittest.TestCase):
             sched.enqueue("n1", sid, priority="normal")
             sched.enqueue("n2", sid, priority="normal")
             # n1 running期间，urgent入队应插到队首，保证下一个执行。
-            time.sleep(0.02)
+            if not n1_started.wait(timeout=1.0):
+                self.fail(f"n1 did not start, calls={calls}")
             sched.enqueue("u1", sid, priority="urgent")
+            release_n1.set()
             t0 = time.time()
             while True:
                 with lock:

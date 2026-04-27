@@ -469,7 +469,7 @@ def build_message_risk_report_page_data(
             ],
             "refs": [
                 "task_dashboard/runtime/callback_runtime.py:2185",
-                "http://127.0.0.1:18765/api/codex/run/20260330-153124-27223971",
+                "http://localhost:18770/api/codex/run/20260330-153124-27223971",
             ],
         },
         {
@@ -486,7 +486,7 @@ def build_message_risk_report_page_data(
                 "同一条 run log 中出现连续 reconnect 2/5 ~ 5/5，再最终完成。",
             ],
             "refs": [
-                "http://127.0.0.1:18765/api/codex/run/20260330-153124-27223971",
+                "http://localhost:18770/api/codex/run/20260330-153124-27223971",
                 "server.py",
             ],
         },
@@ -543,8 +543,8 @@ def build_message_risk_report_page_data(
                 "hot runs 的 branch 主峰与当前 git branch 不同。",
             ],
             "refs": [
-                "http://127.0.0.1:18765/__health",
-                "http://127.0.0.1:18765/api/codex/run/20260330-153124-27223971",
+                "http://localhost:18770/__health",
+                "http://localhost:18770/api/codex/run/20260330-153124-27223971",
             ],
         },
     ]
@@ -600,7 +600,7 @@ def build_message_risk_report_page_data(
         },
         {
             "label": "最新验证 run",
-            "path": "http://127.0.0.1:18765/api/codex/run/20260330-153124-27223971",
+            "path": "http://localhost:18770/api/codex/run/20260330-153124-27223971",
             "note": "用于复核 callback 误报与 UTF-8 头错误样本。",
         },
     ]

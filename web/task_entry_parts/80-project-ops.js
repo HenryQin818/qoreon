@@ -35,6 +35,9 @@
       lastError: "",
       lastAt: "",
     };
+    if (typeof window !== "undefined") {
+      window.PROJECT_REBUILD_UI = PROJECT_REBUILD_UI;
+    }
     const TASK_PUSH_UI = {
       cacheByProject: Object.create(null),   // projectId -> { items, fetchedAt }
       loadingByProject: Object.create(null), // projectId -> bool
@@ -2020,6 +2023,8 @@
       PROJECT_REBUILD_UI.loading = true;
       PROJECT_REBUILD_UI.lastError = "";
       renderProjectRebuildBtn();
+      if (typeof render === "function") render();
+      let reloadScheduled = false;
       try {
         const resp = await fetch("/api/dashboard/rebuild", {
           method: "POST",
@@ -2032,13 +2037,15 @@
         }
         const payload = await resp.json().catch(() => ({}));
         PROJECT_REBUILD_UI.lastAt = String(payload && payload.rebuilt_at || "").trim() || new Date().toISOString();
+        reloadScheduled = true;
         setTimeout(() => location.reload(), 120);
       } catch (e) {
         PROJECT_REBUILD_UI.lastError = String(e && e.message ? e.message : "重建失败");
         alert("刷新看板失败：" + PROJECT_REBUILD_UI.lastError);
       } finally {
-        PROJECT_REBUILD_UI.loading = false;
+        if (!reloadScheduled) PROJECT_REBUILD_UI.loading = false;
         renderProjectRebuildBtn();
+        if (typeof render === "function") render();
       }
     }
 
@@ -3329,8 +3336,33 @@
       return n;
     }
 
-    function copyText(s) {
-      navigator.clipboard?.writeText(String(s)).catch(() => {});
+    async function copyText(s) {
+      const text = String(s || "");
+      if (!text) return false;
+      if (window.isSecureContext && navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+        try {
+          await navigator.clipboard.writeText(text);
+          return true;
+        } catch (_) {}
+      }
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.setAttribute("readonly", "readonly");
+      ta.style.position = "fixed";
+      ta.style.top = "-9999px";
+      ta.style.left = "-9999px";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.focus();
+      ta.select();
+      let ok = false;
+      try {
+        ok = !!document.execCommand("copy");
+      } catch (_) {
+        ok = false;
+      }
+      ta.remove();
+      return ok;
     }
 
     function isHttpUrl(u) {
@@ -3582,7 +3614,7 @@
         return stashPush("<code>" + code + "</code>");
       });
       s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, text, url) => {
-        const u = String(url || "").trim();
+        const u = normalizeMarkdownLinkTarget(url);
         if (!u) return text;
         if (/^https?:\/\//i.test(u)) {
           return stashPush('<a href="' + escapeHtml(u) + '" target="_blank" rel="noopener noreferrer">' + text + "</a>");
@@ -3605,6 +3637,133 @@
       return s;
     }
 
+    function normalizeMarkdownLinkTarget(raw) {
+      let u = String(raw || "").trim();
+      if (!u) return "";
+      u = u
+        .replace(/^&lt;([\s\S]*)&gt;$/i, "$1")
+        .replace(/^<([\s\S]*)>$/, "$1")
+        .trim();
+      return u
+        .replace(/&amp;/g, "&")
+        .replace(/&quot;/g, "\"")
+        .replace(/&#39;/g, "'");
+    }
+
+    function splitMarkdownTableCells(raw) {
+      let line = String(raw || "").trim();
+      if (!line.includes("|")) return [];
+      if (line.startsWith("|")) line = line.slice(1);
+      if (line.endsWith("|")) line = line.slice(0, -1);
+      const cells = [];
+      let cell = "";
+      let escaped = false;
+      let inCode = false;
+      for (let i = 0; i < line.length; i += 1) {
+        const ch = line[i];
+        if (escaped) {
+          cell += ch;
+          escaped = false;
+          continue;
+        }
+        if (ch === "\\") {
+          escaped = true;
+          continue;
+        }
+        if (ch === "`") inCode = !inCode;
+        if (ch === "|" && !inCode) {
+          cells.push(cell.trim());
+          cell = "";
+          continue;
+        }
+        cell += ch;
+      }
+      if (escaped) cell += "\\";
+      cells.push(cell.trim());
+      return cells;
+    }
+
+    function parseMarkdownTableDivider(raw) {
+      const cells = splitMarkdownTableCells(raw);
+      if (cells.length < 2) return null;
+      const alignments = [];
+      for (const cell of cells) {
+        const token = String(cell || "").replace(/\s+/g, "");
+        if (!/^:?-{3,}:?$/.test(token)) return null;
+        if (token.startsWith(":") && token.endsWith(":")) alignments.push("center");
+        else if (token.endsWith(":")) alignments.push("right");
+        else alignments.push("left");
+      }
+      return alignments;
+    }
+
+    function isMarkdownTableStart(lines, idx) {
+      if (!Array.isArray(lines) || idx < 0 || idx + 1 >= lines.length) return false;
+      const header = splitMarkdownTableCells(lines[idx]);
+      const alignments = parseMarkdownTableDivider(lines[idx + 1]);
+      return !!(header.length >= 2 && alignments && alignments.length >= 2);
+    }
+
+    function markdownTableCellHtml(tag, value, align) {
+      const cls = align ? (' class="md-table-align-' + escapeHtml(align) + '"') : "";
+      return "<" + tag + cls + ">" + mdInline(String(value || "")) + "</" + tag + ">";
+    }
+
+    function renderMarkdownTable(lines, startIdx) {
+      const headers = splitMarkdownTableCells(lines[startIdx]);
+      const alignments = parseMarkdownTableDivider(lines[startIdx + 1]) || [];
+      const width = Math.max(headers.length, alignments.length);
+      const rows = [];
+      let idx = startIdx + 2;
+      while (idx < lines.length) {
+        const raw = String(lines[idx] || "");
+        const t = raw.trim();
+        if (!t || !t.includes("|")) break;
+        if (parseMarkdownTableDivider(t)) break;
+        const cells = splitMarkdownTableCells(t);
+        if (cells.length < 2) break;
+        rows.push(cells);
+        idx += 1;
+      }
+      const normalizedHeaders = headers.slice();
+      while (normalizedHeaders.length < width) normalizedHeaders.push("");
+      const head = normalizedHeaders
+        .slice(0, width)
+        .map((cell, cellIdx) => markdownTableCellHtml("th", cell, alignments[cellIdx] || "left"))
+        .join("");
+      const body = rows
+        .map((cells) => {
+          const normalizedCells = cells.slice();
+          while (normalizedCells.length < width) normalizedCells.push("");
+          return "<tr>" + normalizedCells
+            .slice(0, width)
+            .map((cell, cellIdx) => markdownTableCellHtml("td", cell, alignments[cellIdx] || "left"))
+            .join("") + "</tr>";
+        })
+        .join("");
+      return {
+        html: '<div class="md-table-wrap"><table class="md-table"><thead><tr>' + head + '</tr></thead><tbody>' + body + "</tbody></table></div>",
+        nextIdx: idx,
+      };
+    }
+
+    function renderMarkdownListItem(raw) {
+      const text = String(raw || "").trim();
+      const task = text.match(/^\[([ xX])\]\s+(.*)$/);
+      if (task) {
+        const checked = task[1].toLowerCase() === "x" ? " checked" : "";
+        return '<li class="md-task-item"><input type="checkbox" disabled' + checked + "><span>" + mdInline(task[2]) + "</span></li>";
+      }
+      return "<li>" + mdInline(text) + "</li>";
+    }
+
+    function renderMarkdownCodeBlock(lines, lang) {
+      const safeLang = String(lang || "").trim().replace(/[^\w-]/g, "").slice(0, 32);
+      const langAttr = safeLang ? (' data-lang="' + escapeHtml(safeLang) + '"') : "";
+      const codeClass = safeLang ? (' class="language-' + escapeHtml(safeLang) + '"') : "";
+      return '<pre class="md-code"' + langAttr + "><code" + codeClass + ">" + escapeHtml(lines.join("\n")) + "</code></pre>";
+    }
+
     function markdownToHtml(input) {
       const src = String(input || "").replace(/\r\n?/g, "\n");
       if (!src.trim()) return "";
@@ -3615,6 +3774,8 @@
       let listItems = [];
       let inCode = false;
       let codeLines = [];
+      let codeLang = "";
+      let quoteLines = [];
 
       function flushParagraph() {
         if (!paragraph.length) return;
@@ -3625,38 +3786,64 @@
       }
       function flushList() {
         if (!listItems.length || !listType) return;
-        out.push("<" + listType + ">" + listItems.map((x) => "<li>" + mdInline(x) + "</li>").join("") + "</" + listType + ">");
+        out.push("<" + listType + ' class="md-list">' + listItems.map((x) => renderMarkdownListItem(x)).join("") + "</" + listType + ">");
         listType = "";
         listItems = [];
+      }
+      function flushBlockquote() {
+        if (!quoteLines.length) return;
+        const text = quoteLines.join("\n").trim();
+        quoteLines = [];
+        if (!text) return;
+        out.push("<blockquote>" + mdInline(text).replace(/\n/g, "<br>") + "</blockquote>");
       }
       function flushNormal() {
         flushParagraph();
         flushList();
+        flushBlockquote();
       }
 
-      for (const ln of lines) {
+      for (let lineIdx = 0; lineIdx < lines.length; lineIdx += 1) {
+        const ln = lines[lineIdx];
         const line = String(ln || "");
         if (inCode) {
           if (/^```/.test(line.trim())) {
-            out.push('<pre class="md-code"><code>' + escapeHtml(codeLines.join("\n")) + "</code></pre>");
+            out.push(renderMarkdownCodeBlock(codeLines, codeLang));
             inCode = false;
             codeLines = [];
+            codeLang = "";
           } else {
             codeLines.push(line);
           }
           continue;
         }
 
-        if (/^```/.test(line.trim())) {
+        const codeFence = line.trim().match(/^```([\w-]+)?\s*$/);
+        if (codeFence) {
           flushNormal();
           inCode = true;
           codeLines = [];
+          codeLang = codeFence[1] || "";
           continue;
         }
 
         const t = line.trim();
         if (!t) {
           flushNormal();
+          continue;
+        }
+
+        if (/^[-*_]{3,}\s*$/.test(t)) {
+          flushNormal();
+          out.push('<hr class="md-hr">');
+          continue;
+        }
+
+        if (isMarkdownTableStart(lines, lineIdx)) {
+          flushNormal();
+          const table = renderMarkdownTable(lines, lineIdx);
+          out.push(table.html);
+          lineIdx = Math.max(lineIdx, table.nextIdx - 1);
           continue;
         }
 
@@ -3688,17 +3875,19 @@
 
         m = t.match(/^>\s?(.*)$/);
         if (m) {
-          flushNormal();
-          out.push("<blockquote>" + mdInline(m[1]) + "</blockquote>");
+          flushParagraph();
+          flushList();
+          quoteLines.push(m[1]);
           continue;
         }
 
         if (listItems.length) flushList();
+        if (quoteLines.length) flushBlockquote();
         paragraph.push(line);
       }
 
       flushNormal();
-      if (inCode) out.push('<pre class="md-code"><code>' + escapeHtml(codeLines.join("\n")) + "</code></pre>");
+      if (inCode) out.push(renderMarkdownCodeBlock(codeLines, codeLang));
       return out.join("");
     }
 
@@ -3706,9 +3895,16 @@
       if (!elNode) return;
       const src = String(text || "").trim() ? String(text || "") : String(fallback || "");
       elNode.innerHTML = markdownToHtml(src);
+      if (typeof enhanceMessageInteractiveObjects === "function") {
+        enhanceMessageInteractiveObjects(elNode, { force: true });
+      }
     }
 
     const MESSAGE_OBJECT_TOKEN_RE = /(https?:\/\/[^\s<>"']+|\/share\/[^\s<>"']+|\/\.runs\/[^\s<>"']+|\/(?:Users|Volumes|private|tmp|var|opt|Applications|Library|System)[^\s<>"']+|(?:web|docs|tests|static_sites|task_dashboard|任务规划|\.runs|\.run)(?:\/[^\s<>"']+)+)/g;
+    const MESSAGE_OBJECT_FILE_EXT_BOUNDARY_RE = /\.(md|markdown|html?|pdf|png|jpe?g|webp|gif|svg|docx?|xlsx?|pptx?|txt|json|csv|toml|ya?ml)(?:[?#][^\s<>"']*)?(?=$|[\s),.;:!?，。；：！？、」』】》〉])/i;
+    const MESSAGE_OBJECT_EXTENDABLE_PATH_ROOT_RE = /^(?:\/(?:Users|Volumes|private|tmp|var|opt|Applications|Library|System)(?:\/|$)|(?:web|docs|tests|static_sites|task_dashboard|任务规划|\.runs|\.run)(?:\/|$))/;
+    const MESSAGE_OBJECT_EXTENDED_FORBIDDEN_RE = /[<>"'`]/;
+    const MESSAGE_OBJECT_PATH_LINE_SUFFIX_RE = /^(.*\.(?:md|markdown|html?|pdf|png|jpe?g|webp|gif|svg|docx?|xlsx?|pptx?|txt|json|csv|toml|ya?ml)):(\d+)(?::(\d+))?$/i;
     const MESSAGE_OBJECT_TRAILING_PUNCT_RE = /[),.;:!?，。；：！？、」』】》〉]+$/;
     const MESSAGE_OBJECT_RELATIVE_ROOT_RE = /^(?:web|docs|tests|static_sites|task_dashboard|任务规划|\.runs|\.run)(?:\/.+)+$/;
     const MESSAGE_OBJECT_VIEWER = {
@@ -3783,8 +3979,15 @@
       return src;
     }
 
+    function stripMessageObjectPathLineSuffix(raw) {
+      const src = String(raw || "").trim();
+      if (!src || src.indexOf(":") < 0) return src;
+      const match = src.match(MESSAGE_OBJECT_PATH_LINE_SUFFIX_RE);
+      return match ? String(match[1] || "") : src;
+    }
+
     function resolveMessageObjectPath(path) {
-      const src = decodeMessageObjectFsPath(path);
+      const src = stripMessageObjectPathLineSuffix(decodeMessageObjectFsPath(path));
       if (!src || src[0] === "/" || !isLikelyWorkspaceRelativePath(src)) return src;
       const root = guessTaskDashboardRootPath();
       if (!root) return src;
@@ -3802,9 +4005,34 @@
     }
 
     function messageObjectPathExt(raw) {
-      const src = decodeMessageObjectFsPath(raw).replace(/[?#].*$/, "");
+      const src = stripMessageObjectPathLineSuffix(decodeMessageObjectFsPath(raw).replace(/[?#].*$/, ""));
       const m = src.match(/\.([a-z0-9]+)$/i);
       return m ? String(m[1] || "").toLowerCase() : "";
+    }
+
+    function shouldExtendMessageObjectToken(raw) {
+      const src = String(raw || "").trim();
+      if (!src || /^https?:\/\//i.test(src) || /^\/share\//.test(src)) return false;
+      if (!MESSAGE_OBJECT_EXTENDABLE_PATH_ROOT_RE.test(src)) return false;
+      return !messageObjectPathExt(src);
+    }
+
+    function extendMessageObjectTokenAt(src, start, raw) {
+      const initial = String(raw || "");
+      if (!shouldExtendMessageObjectToken(initial)) return initial;
+      const rest = String(src || "").slice(Number(start) || 0);
+      if (rest.length <= initial.length) return initial;
+      const lineBreakIndex = rest.search(/\n/);
+      const line = lineBreakIndex >= 0 ? rest.slice(0, lineBreakIndex) : rest;
+      const match = MESSAGE_OBJECT_FILE_EXT_BOUNDARY_RE.exec(line);
+      if (!match) return initial;
+      const end = Number(match.index || 0) + String(match[0] || "").length;
+      if (end <= initial.length) return initial;
+      const candidate = line.slice(0, end);
+      if (MESSAGE_OBJECT_EXTENDED_FORBIDDEN_RE.test(candidate)) return initial;
+      const trimmed = trimMessageObjectToken(candidate).core;
+      if (!trimmed || trimmed.length <= initial.length) return initial;
+      return classifyMessageObjectToken(trimmed) ? candidate : initial;
     }
 
     function isLooseMessageObjectSubsequence(needle, haystack) {
@@ -3966,22 +4194,24 @@
         };
       }
       if (/^\//.test(token)) {
+        const path = stripMessageObjectPathLineSuffix(token);
         return {
           kind: "fs_path",
           tone: "file",
           value: token,
           label: token,
-          path: token,
+          path,
           defaultAction: "preview_path",
         };
       }
       if (isLikelyWorkspaceRelativePath(token)) {
+        const path = resolveMessageObjectPath(token);
         return {
           kind: "fs_path",
           tone: token.includes(".") ? "file" : "dir",
           value: token,
           label: token,
-          path: resolveMessageObjectPath(token),
+          path,
           defaultAction: "preview_path",
         };
       }
@@ -4031,7 +4261,7 @@
       MESSAGE_OBJECT_TOKEN_RE.lastIndex = 0;
       let m;
       while ((m = MESSAGE_OBJECT_TOKEN_RE.exec(src))) {
-        const raw = String(m[0] || "");
+        const raw = extendMessageObjectTokenAt(src, m.index, String(m[0] || ""));
         const start = Number(m.index || 0);
         const trimmed = trimMessageObjectToken(raw);
         const obj = classifyMessageObjectToken(trimmed.core);
@@ -4041,6 +4271,7 @@
         out.push({ type: "object", value: trimmed.core, object: obj });
         if (trimmed.tail) out.push({ type: "text", value: trimmed.tail });
         lastIndex = start + raw.length;
+        MESSAGE_OBJECT_TOKEN_RE.lastIndex = lastIndex;
       }
       if (!matched) return null;
       if (lastIndex < src.length) out.push({ type: "text", value: src.slice(lastIndex) });
@@ -4094,8 +4325,9 @@
       bindMessageObjectActivator(target, obj);
     }
 
-    function enhanceMessageInteractiveObjects(root) {
-      if (!root || !root.querySelectorAll || root.__messageObjectsEnhanced) return;
+    function enhanceMessageInteractiveObjects(root, opts = {}) {
+      const force = !!(opts && opts.force);
+      if (!root || !root.querySelectorAll || (root.__messageObjectsEnhanced && !force)) return;
       root.__messageObjectsEnhanced = true;
       Array.from(root.querySelectorAll("a[href]")).forEach((anchor) => enhanceAnchorMessageObject(anchor));
       Array.from(root.querySelectorAll("code")).forEach((codeEl) => enhanceCodeMessageObject(codeEl));
@@ -4196,6 +4428,98 @@
       }
     }
 
+    function isMessageObjectViewerImageEntry(entry) {
+      if (!entry || typeof entry !== "object") return false;
+      if (String(entry.kind || "file").trim() !== "file") return false;
+      if (entry.is_image === true) return true;
+      const mimeType = String(entry.mime_type || "").trim().toLowerCase();
+      if (mimeType.startsWith("image/")) return true;
+      return false;
+    }
+
+    function messageObjectViewerImageEntries(item) {
+      const entries = Array.isArray(item && item.entries) ? item.entries : [];
+      return entries.filter((entry) => String((entry && entry.kind) || "").trim() === "file" && isMessageObjectViewerImageEntry(entry));
+    }
+
+    function messageObjectViewerImageCaption(entry) {
+      const name = String((entry && entry.name) || "").trim();
+      const path = String((entry && entry.path) || "").trim();
+      return name || path || "图片";
+    }
+
+    function renderMessageObjectViewerImageStage(entry, opts = {}) {
+      const target = opts && typeof opts === "object" ? (opts.target || null) : null;
+      const item = opts && typeof opts === "object" ? (opts.item || entry || null) : (entry || null);
+      const src = String(messageObjectViewerOpenUrl(target, item) || "").trim();
+      if (!src) return null;
+      const caption = messageObjectViewerImageCaption(entry || item);
+      const stage = el("div", { class: "msgobj-image-stage" });
+      const imageBtn = el("button", {
+        class: "msgobj-image-mainbtn",
+        type: "button",
+        title: "点击放大预览",
+      });
+      imageBtn.addEventListener("click", () => {
+        openImagePreview(src, caption);
+      });
+      imageBtn.appendChild(el("img", {
+        class: "msgobj-image-main",
+        src,
+        alt: caption,
+      }));
+      stage.appendChild(imageBtn);
+      const meta = el("div", { class: "msgobj-image-stage-meta" });
+      meta.appendChild(el("div", { class: "msgobj-image-stage-name", text: caption }));
+      const metaBits = [];
+      const mimeType = String(((entry || item) && (entry || item).mime_type) || "").trim();
+      if (mimeType) metaBits.push(mimeType);
+      const size = Number(((entry || item) && (entry || item).size) || 0);
+      if (size > 0) metaBits.push(formatBytes(size));
+      if (metaBits.length) {
+        meta.appendChild(el("div", { class: "msgobj-image-stage-sub", text: metaBits.join(" · ") }));
+      }
+      stage.appendChild(meta);
+      return stage;
+    }
+
+    function renderMessageObjectViewerImageGrid(entries) {
+      const rows = Array.isArray(entries) ? entries.filter(Boolean) : [];
+      if (!rows.length) return null;
+      const wrap = el("div", { class: "msgobj-image-grid-wrap" });
+      wrap.appendChild(el("div", { class: "msgobj-image-grid-title", text: "图片预览" }));
+      const grid = el("div", { class: "msgobj-image-grid" });
+      rows.forEach((entry) => {
+        const src = String(messageObjectViewerOpenUrl(null, entry) || "").trim();
+        if (!src) return;
+        const caption = messageObjectViewerImageCaption(entry);
+        const card = el("button", {
+          class: "msgobj-image-card",
+          type: "button",
+          title: "点击放大预览",
+        });
+        card.addEventListener("click", () => {
+          openImagePreview(src, caption);
+        });
+        card.appendChild(el("img", {
+          class: "msgobj-image-thumb",
+          src,
+          alt: caption,
+        }));
+        const info = el("div", { class: "msgobj-image-card-info" });
+        info.appendChild(el("div", { class: "msgobj-image-name", text: caption }));
+        const metaBits = [];
+        const mimeType = String(entry.mime_type || "").trim();
+        if (mimeType) metaBits.push(mimeType);
+        if (metaBits.length) info.appendChild(el("div", { class: "msgobj-image-sub", text: metaBits.join(" · ") }));
+        card.appendChild(info);
+        grid.appendChild(card);
+      });
+      if (!grid.childNodes.length) return null;
+      wrap.appendChild(grid);
+      return wrap;
+    }
+
     function renderMessageObjectViewerBody() {
       const body = document.getElementById("msgObjectViewerBody");
       if (!body) return;
@@ -4218,12 +4542,20 @@
         meta.appendChild(el("div", { class: "msgobj-meta-card", html: "<div class=\"k\">目录</div><div class=\"v\">" + escapeHtml(String(item.path || "")) + "</div>" }));
         meta.appendChild(el("div", { class: "msgobj-meta-card", html: "<div class=\"k\">条目数</div><div class=\"v\">" + String(item.entry_count || 0) + (item.truncated ? "（已截断）" : "") + "</div>" }));
         body.appendChild(meta);
+        const imageGrid = renderMessageObjectViewerImageGrid(messageObjectViewerImageEntries(item));
+        if (imageGrid) body.appendChild(imageGrid);
         const list = el("div", { class: "msgobj-dir-list" });
         const entries = Array.isArray(item.entries) ? item.entries : [];
-        if (!entries.length) {
-          list.appendChild(el("div", { class: "hint", text: "目录为空。" }));
+        const listEntries = imageGrid
+          ? entries.filter((row) => !isMessageObjectViewerImageEntry(row))
+          : entries;
+        if (!listEntries.length) {
+          list.appendChild(el("div", { class: "hint", text: imageGrid ? "目录内仅包含图片条目。" : "目录为空。" }));
         } else {
-          entries.forEach((row) => {
+          if (imageGrid) {
+            body.appendChild(el("div", { class: "msgobj-image-grid-title", text: "其余条目" }));
+          }
+          listEntries.forEach((row) => {
             const name = String((row && row.name) || "").trim() || "-";
             const kind = String((row && row.kind) || "file").trim();
             const itemNode = el("div", { class: "msgobj-dir-item" });
@@ -4235,14 +4567,29 @@
         body.appendChild(list);
         return;
       }
+      if (item.is_image) {
+        const imageStage = renderMessageObjectViewerImageStage(item, { target: MESSAGE_OBJECT_VIEWER.target, item });
+        if (imageStage) {
+          body.appendChild(imageStage);
+          return;
+        }
+        body.appendChild(el("div", {
+          class: "hint",
+          text: "当前识别为图片文件，但未拿到可访问预览地址；建议直接新标签打开或 Finder 定位。",
+        }));
+        return;
+      }
       if (!item.is_text) {
-        body.appendChild(el("div", { class: "hint", text: item.is_image ? "当前识别为图片文件；建议优先通过可访问 URL 或 Finder 打开。" : "当前对象不是文本文件，暂不展示正文预览。" }));
+        body.appendChild(el("div", { class: "hint", text: "当前对象不是文本文件，暂不展示正文预览。" }));
         return;
       }
       const mode = String(item.preview_mode || "text");
       if (mode === "markdown") {
         const box = el("div", { class: "msgobj-preview mdview" });
         box.innerHTML = markdownToHtml(String(item.content || ""));
+        if (typeof enhanceMessageInteractiveObjects === "function") {
+          enhanceMessageInteractiveObjects(box, { force: true });
+        }
         body.appendChild(box);
         return;
       }

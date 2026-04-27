@@ -1336,7 +1336,7 @@
         raw.heartbeat_summary || raw.heartbeatSummary || rawHeartbeat.summary || {},
         heartbeatItems
       );
-      const normalizedConversationListMetrics = typeof normalizeConversationListMetricsClient === "function"
+      const normalizeConversationListMetricsClientResult = typeof normalizeConversationListMetricsClient === "function"
         ? normalizeConversationListMetricsClient(raw.conversation_list_metrics || raw.conversationListMetrics || null)
         : (((raw.conversation_list_metrics || raw.conversationListMetrics) && typeof (raw.conversation_list_metrics || raw.conversationListMetrics) === "object")
           ? { ...(raw.conversation_list_metrics || raw.conversationListMetrics) }
@@ -1345,8 +1345,8 @@
         ? { ...raw.memo_summary }
         : ((raw.memoSummary && typeof raw.memoSummary === "object")
           ? { ...raw.memoSummary }
-          : ((normalizedConversationListMetrics && normalizedConversationListMetrics.memo_summary && typeof normalizedConversationListMetrics.memo_summary === "object")
-            ? { ...normalizedConversationListMetrics.memo_summary }
+          : ((normalizeConversationListMetricsClientResult && normalizeConversationListMetricsClientResult.memo_summary && typeof normalizeConversationListMetricsClientResult.memo_summary === "object")
+            ? { ...normalizeConversationListMetricsClientResult.memo_summary }
             : null));
 
       return {
@@ -1416,7 +1416,7 @@
           raw.project_execution_context || raw.projectExecutionContext || null
         ),
         task_tracking: normalizeTaskTrackingClient(raw.task_tracking || raw.taskTracking || null),
-        conversation_list_metrics: normalizedConversationListMetrics,
+        conversation_list_metrics: normalizeConversationListMetricsClientResult,
         memo_summary: memoSummary,
         memoSummary: memoSummary,
       };
@@ -1448,10 +1448,28 @@
     function mergeConversationSessions(localSessions, serverSessions) {
       const map = new Map();
       const serverChannelSessions = new Map();
+      const hiddenServerSessionIds = new Set();
+      const isVisibleSessionRow = (row) => {
+        const item = (row && typeof row === "object") ? row : {};
+        if (typeof isVisibleConversationSession === "function") {
+          return isVisibleConversationSession(item);
+        }
+        const deleted = typeof isDeletedSession === "function"
+          ? isDeletedSession(item)
+          : boolLike(item.is_deleted || item.isDeleted);
+        const inactive = typeof isInactiveSession === "function"
+          ? isInactiveSession(item)
+          : String(item.status || item.session_status || item.sessionStatus || "").trim().toLowerCase() === "inactive";
+        return !deleted && !inactive;
+      };
 
       for (const raw of (Array.isArray(serverSessions) ? serverSessions : [])) {
         const n = normalizeConversationSession(raw);
         if (!n) continue;
+        if (!isVisibleSessionRow(n)) {
+          hiddenServerSessionIds.add(n.sessionId);
+          continue;
+        }
         const channelKey = String(n.channel_name || n.primaryChannel || "").trim();
         if (channelKey) {
           let bucket = serverChannelSessions.get(channelKey);
@@ -1466,6 +1484,7 @@
       for (const raw of (Array.isArray(localSessions) ? localSessions : [])) {
         const n = normalizeConversationSession(raw);
         if (!n) continue;
+        if (hiddenServerSessionIds.has(n.sessionId) || !isVisibleSessionRow(n)) continue;
         const channelKey = String(n.channel_name || n.primaryChannel || "").trim();
         const channelBucket = channelKey ? serverChannelSessions.get(channelKey) : null;
         if (channelBucket && channelBucket.size && !channelBucket.has(n.sessionId)) continue;
@@ -1474,6 +1493,10 @@
       for (const raw of (Array.isArray(serverSessions) ? serverSessions : [])) {
         const n = normalizeConversationSession(raw);
         if (!n) continue;
+        if (hiddenServerSessionIds.has(n.sessionId) || !isVisibleSessionRow(n)) {
+          map.delete(n.sessionId);
+          continue;
+        }
         const prev = map.get(n.sessionId);
         if (!prev) {
           map.set(n.sessionId, n);

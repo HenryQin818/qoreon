@@ -16,6 +16,26 @@ ROLE_LABELS = {
     "自定义责任位": "custom_roles",
 }
 
+LEGACY_ROLE_FIELDS = (
+    "main_owner",
+    "collaborators",
+    "validators",
+    "challengers",
+    "backup_owners",
+    "management_slot",
+    "custom_roles",
+)
+
+ADDITIVE_ROLE_FIELDS = (
+    "executors",
+    "acceptors",
+    "reviewers",
+    "visual_reviewers",
+)
+
+REVIEWER_KEYWORDS = ("审核", "门禁", "用户审核", "用户验收", "评审", "审查")
+VISUAL_REVIEWER_KEYWORDS = ("视觉审核", "视觉审核位", "视觉验收", "视觉验收位")
+
 EMPTY_MARKERS = {"", "空", "无", "暂无", "待补", "待定", "未定", "无此项"}
 ROLE_LINE_RE = re.compile(
     r"^\s*-\s*(主负责位|协同位|验证位|质疑位|备份位|管理位|自定义责任位)(?:（[^）]*）)?\s*[:：]\s*(.*)\s*$"
@@ -328,6 +348,79 @@ def _build_registry_management_slot(registry: dict[str, Any]) -> list[dict[str, 
     return out
 
 
+def _copy_role_entry(entry: Any) -> dict[str, str]:
+    if not isinstance(entry, dict):
+        return {}
+    return {str(key): _clean_value(value) for key, value in entry.items()}
+
+
+def _copy_role_entries(entries: Any) -> list[dict[str, str]]:
+    if not isinstance(entries, list):
+        return []
+    return [row for row in (_copy_role_entry(entry) for entry in entries) if row]
+
+
+def _role_entry_search_text(entry: dict[str, str]) -> str:
+    return " ".join(
+        _clean_value(entry.get(key))
+        for key in ("name", "responsibility", "agent_name", "alias", "channel_name")
+        if _clean_value(entry.get(key))
+    )
+
+
+def _is_visual_reviewer(entry: dict[str, str]) -> bool:
+    text = _role_entry_search_text(entry)
+    return any(keyword in text for keyword in VISUAL_REVIEWER_KEYWORDS)
+
+
+def _is_custom_reviewer(entry: dict[str, str]) -> bool:
+    if _is_visual_reviewer(entry):
+        return False
+    text = _role_entry_search_text(entry)
+    return any(keyword in text for keyword in REVIEWER_KEYWORDS)
+
+
+def _empty_task_harness_roles() -> dict[str, Any]:
+    return {
+        "main_owner": None,
+        "collaborators": [],
+        "validators": [],
+        "challengers": [],
+        "backup_owners": [],
+        "management_slot": [],
+        "custom_roles": [],
+        "executors": [],
+        "acceptors": [],
+        "reviewers": [],
+        "visual_reviewers": [],
+    }
+
+
+def normalize_task_harness_roles(parsed: dict[str, Any] | None) -> dict[str, Any]:
+    """
+    Return the unified task role read model.
+
+    The first seven fields are the legacy contract. The additive fields are
+    projections from those same parsed roles, not a second source of truth.
+    """
+    source = parsed if isinstance(parsed, dict) else {}
+    out = _empty_task_harness_roles()
+    main_owner = source.get("main_owner")
+    out["main_owner"] = _copy_role_entry(main_owner) if isinstance(main_owner, dict) else None
+    for field_name in LEGACY_ROLE_FIELDS:
+        if field_name == "main_owner":
+            continue
+        out[field_name] = _copy_role_entries(source.get(field_name))
+    out["executors"] = _copy_role_entries(out["collaborators"])
+    out["acceptors"] = _copy_role_entries(out["validators"])
+    out["reviewers"] = _copy_role_entries(out["management_slot"])
+    out["reviewers"].extend(entry for entry in _copy_role_entries(out["custom_roles"]) if _is_custom_reviewer(entry))
+    out["visual_reviewers"] = [
+        entry for entry in _copy_role_entries(out["custom_roles"]) if _is_visual_reviewer(entry)
+    ]
+    return out
+
+
 def parse_task_harness(
     *,
     root: Path,
@@ -336,15 +429,7 @@ def parse_task_harness(
     item_type: str,
     markdown: str,
 ) -> dict[str, Any]:
-    empty = {
-        "main_owner": None,
-        "collaborators": [],
-        "validators": [],
-        "challengers": [],
-        "backup_owners": [],
-        "management_slot": [],
-        "custom_roles": [],
-    }
+    empty = _empty_task_harness_roles()
     if _clean_value(item_type) != "任务":
         return empty
 
@@ -416,4 +501,4 @@ def parse_task_harness(
     if not out["management_slot"] and _inherits_management_slot(registry, bool(section_lines), explicit_inherit):
         out["management_slot"] = _build_registry_management_slot(registry)
 
-    return out
+    return normalize_task_harness_roles(out)

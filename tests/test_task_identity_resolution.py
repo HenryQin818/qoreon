@@ -4,13 +4,18 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from task_dashboard.task_identity import normalize_task_path, record_task_identity, render_task_front_matter, resolve_task_reference
+from task_dashboard.task_identity import normalize_task_id, normalize_task_path, record_task_identity, render_task_front_matter, resolve_task_reference
 
 
 class TaskIdentityResolutionTests(unittest.TestCase):
+    def test_normalize_task_id_treats_placeholder_values_as_empty(self) -> None:
+        for raw in ["", "-", "—", '""', "''", "none", "null", "undefined", "未关联任务"]:
+            self.assertEqual(normalize_task_id(raw), "")
+        self.assertEqual(normalize_task_id("task_20260423_main"), "task_20260423_main")
+
     def test_normalize_task_path_decodes_percent_and_repairs_users_prefix(self) -> None:
-        repo = Path("/Users/liutingqzh/workspace/xiaomishu/项目管理-小秘书/项目看板/task-dashboard")
-        encoded = "Users/liutingqzh/workspace/xiaomishu/项目管理-小秘书/项目看板/task-dashboard/任务规划/子级04-前端体验（task-overview%20页面交互）/任务/【已完成】【任务】20260326-通道阶段工作总结与存量知识梳理.md"
+        repo = Path("/tmp/qoreon-demo/examples/standard-project")
+        encoded = "/tmp/qoreon-demo/examples/standard-project/任务规划/子级04-前端体验（task-overview%20页面交互）/任务/【已完成】【任务】20260326-通道阶段工作总结与存量知识梳理.md"
         self.assertEqual(
             normalize_task_path(encoded, repo_root=repo),
             "任务规划/子级04-前端体验（task-overview 页面交互）/任务/【已完成】【任务】20260326-通道阶段工作总结与存量知识梳理.md",

@@ -739,7 +739,7 @@ def _build_communication_playbook() -> dict[str, Any]:
         ],
         "templates": templates,
         "self_test_checklist": [
-            "生成 registry/collab-registry.v1.json 与 registry/collab-registry.view.md",
+            "生成 project metadata files 与可读视图",
             "执行一次 dialog_now 并确认能当场回复",
             "执行一次 task_with_receipt 并确认有结构化回执",
             "执行一次 notify_only 并确认不要求回执",

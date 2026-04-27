@@ -201,6 +201,8 @@ class HealthApiTests(unittest.TestCase):
                     self.assertFalse(bool(body.get("compat_shell")))
                     self.assertEqual(body.get("environment"), "refactor")
                     self.assertEqual(int(body.get("port") or 0), port)
+                    self.assertEqual(body.get("localOrigin"), f"http://127.0.0.1:{port}")
+                    self.assertEqual(body.get("publicOrigin"), f"http://127.0.0.1:{port}")
                     self.assertEqual(body.get("runsDir"), str(run_store.runs_dir.resolve()))
                     self.assertEqual(body.get("sessionsFile"), str((run_store.runs_dir.parent / ".sessions" / "task_dashboard_dev.json").resolve()))
                     self.assertEqual(body.get("staticRoot"), str(static_root.resolve()))

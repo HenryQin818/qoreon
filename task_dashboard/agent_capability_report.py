@@ -13,7 +13,7 @@ from .sender_identity_audit import audit_run_sender_integrity
 
 
 HOT_RUNS_REL = Path(".runtime/stable/.runs/hot")
-PERFORMANCE_DOC_REL = Path("docs/background/2026-03-31-agent-detail-performance-diagnostics.md")
+PERFORMANCE_DOC_REL = Path("docs/public/performance-diagnostics.md")
 UTF8_HEADER_ERROR_PATTERN = "failed to convert header to a str for header name 'x-codex-turn-metadata'"
 PRIMARY_PROJECT_ID = "task_dashboard"
 

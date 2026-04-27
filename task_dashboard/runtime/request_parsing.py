@@ -148,6 +148,7 @@ def parse_session_create_request(body: dict[str, Any]) -> dict[str, Any]:
         ),
         "purpose": _safe_text_local(row.get("purpose"), 200).strip(),
         "reuse_strategy": reuse_strategy or "reuse_active",
+        "reuse_strategy_explicit": bool(reuse_strategy),
         "create_timeout_s": max(0, create_timeout_s),
         "set_as_primary": set_as_primary,
         "first_message": _safe_text_local(

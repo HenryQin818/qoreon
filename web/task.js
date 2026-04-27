@@ -2677,12 +2677,19 @@
       });
     }
 
+    function normalizeTaskRoleMemberDisplayText(value) {
+      return String(value == null ? "" : value)
+        .replace(/`+/g, "")
+        .replace(/\s+/g, " ")
+        .trim();
+    }
+
     function taskRoleMemberDisplayMeta(rawMember) {
       if (rawMember == null) {
         return { text: "", meta: "", sessionId: "", channelName: "", raw: null };
       }
       if (typeof rawMember === "string") {
-        const text = String(rawMember || "").trim();
+        const text = normalizeTaskRoleMemberDisplayText(rawMember);
         return {
           text,
           meta: "",
@@ -2692,17 +2699,24 @@
         };
       }
       const member = (rawMember && typeof rawMember === "object") ? rawMember : {};
-      const text = String(firstNonEmptyText([
+      const resolved = resolveTaskRoleMemberSession(member);
+      const text = normalizeTaskRoleMemberDisplayText(firstNonEmptyText([
         member.display_name,
         member.agent_alias,
         member.alias,
         member.agent_name,
         member.name,
-      ], "") || "").trim();
+        resolved && resolved.display_name,
+        resolved && resolved.alias,
+        resolved && resolved.desc,
+      ], ""));
       const metaParts = [];
       const channelName = String(firstNonEmptyText([
         member.channel_name,
         member.channelName,
+        resolved && resolved.channel_name,
+        resolved && resolved.primaryChannel,
+        resolved && resolved.name,
       ], "") || "").trim();
       const responsibilityText = String(member.responsibility || "").trim();
       if (channelName) metaParts.push(channelName);
@@ -2710,9 +2724,15 @@
       return {
         text,
         meta: metaParts.join(" · "),
-        sessionId: String(firstNonEmptyText([member.session_id, member.sessionId], "") || "").trim(),
+        sessionId: String(firstNonEmptyText([
+          member.session_id,
+          member.sessionId,
+          resolved && resolved.session_id,
+          resolved && resolved.sessionId,
+          resolved && resolved.id,
+        ], "") || "").trim(),
         channelName,
-        raw: member,
+        raw: resolved && typeof resolved === "object" ? resolved : member,
       };
     }
 
@@ -2725,6 +2745,300 @@
         meta.text.toLowerCase(),
         meta.channelName,
       ].filter(Boolean).join("::");
+    }
+
+    function normalizeTaskRoleLookupText(value) {
+      return String(value || "")
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, "");
+    }
+
+    function uniqueTaskRoleValues(values) {
+      const out = [];
+      const seen = new Set();
+      (Array.isArray(values) ? values : []).forEach((value) => {
+        const text = String(value || "").trim();
+        if (!text || seen.has(text)) return;
+        seen.add(text);
+        out.push(text);
+      });
+      return out;
+    }
+
+    function taskRoleMemberIdentityHints(rawMember) {
+      if (rawMember == null) {
+        return {
+          projectId: "",
+          sessionId: "",
+          fullNames: [],
+          agentNames: [],
+          channelNames: [],
+        };
+      }
+      if (typeof rawMember === "string") {
+        const text = String(rawMember || "").trim();
+        const split = text.match(/^(.+?)\s*\/\s*(.+)$/);
+        return {
+          projectId: String(STATE.project || DATA.project_id || "").trim(),
+          sessionId: "",
+          fullNames: text ? [text] : [],
+          agentNames: uniqueTaskRoleValues([text, split && split[2]]),
+          channelNames: uniqueTaskRoleValues([split && split[1]]),
+        };
+      }
+      const member = (rawMember && typeof rawMember === "object") ? rawMember : {};
+      const names = uniqueTaskRoleValues([
+        member.display_name,
+        member.agent_alias,
+        member.alias,
+        member.agent_name,
+        member.name,
+      ]);
+      const channelNames = uniqueTaskRoleValues([
+        member.channel_name,
+        member.channelName,
+      ]);
+      const agentNames = [];
+      names.forEach((name) => {
+        agentNames.push(name);
+        const split = String(name || "").match(/^(.+?)\s*\/\s*(.+)$/);
+        if (!split) return;
+        channelNames.push(String(split[1] || "").trim());
+        agentNames.push(String(split[2] || "").trim());
+      });
+      return {
+        projectId: String(firstNonEmptyText([
+          member.project_id,
+          member.projectId,
+          STATE.project,
+          DATA.project_id,
+        ], "") || "").trim(),
+        sessionId: String(firstNonEmptyText([member.session_id, member.sessionId], "") || "").trim(),
+        fullNames: names,
+        agentNames: uniqueTaskRoleValues(agentNames),
+        channelNames: uniqueTaskRoleValues(channelNames),
+      };
+    }
+
+    function getTaskRoleProjectSessionCandidates(projectId = "") {
+      const pid = String(projectId || STATE.project || DATA.project_id || "").trim();
+      if (!pid || pid === "overview") return [];
+      if (!PCONV.taskRoleSessionCandidateCache || typeof PCONV.taskRoleSessionCandidateCache !== "object") {
+        PCONV.taskRoleSessionCandidateCache = Object.create(null);
+      }
+      if (Array.isArray(PCONV.taskRoleSessionCandidateCache[pid])) {
+        return PCONV.taskRoleSessionCandidateCache[pid];
+      }
+      const project = projectById(pid);
+      if (!project || typeof project !== "object") {
+        PCONV.taskRoleSessionCandidateCache[pid] = [];
+        return [];
+      }
+      const rows = [];
+      const seen = new Set();
+      const push = (raw, fallback = {}) => {
+        const src = (raw && typeof raw === "object") ? raw : {};
+        const sid = String(firstNonEmptyText([
+          src.session_id,
+          src.sessionId,
+          src.id,
+        ], "") || "").trim();
+        if (!looksLikeSessionId(sid)) return;
+        const row = {
+          project_id: pid,
+          projectId: pid,
+          session_id: sid,
+          sessionId: sid,
+          id: sid,
+          channel_name: String(firstNonEmptyText([
+            src.channel_name,
+            src.channelName,
+            src.name,
+            fallback.channel_name,
+            fallback.channelName,
+          ], "") || "").trim(),
+          alias: String(firstNonEmptyText([
+            src.alias,
+            src.display_name,
+            src.displayName,
+            src.desc,
+            fallback.alias,
+            fallback.display_name,
+            fallback.displayName,
+            fallback.desc,
+          ], "") || "").trim(),
+          display_name: String(firstNonEmptyText([
+            src.display_name,
+            src.displayName,
+            src.alias,
+            src.desc,
+            fallback.display_name,
+            fallback.displayName,
+            fallback.alias,
+            fallback.desc,
+          ], "") || "").trim(),
+          desc: String(firstNonEmptyText([
+            src.desc,
+            src.display_name,
+            src.displayName,
+            src.alias,
+            fallback.desc,
+            fallback.display_name,
+            fallback.displayName,
+            fallback.alias,
+          ], "") || "").trim(),
+          session_role: String(firstNonEmptyText([
+            src.session_role,
+            src.sessionRole,
+            fallback.session_role,
+            fallback.sessionRole,
+            boolLike(src.is_primary || src.isPrimary || fallback.is_primary || fallback.isPrimary) ? "primary" : "",
+          ], "") || "").trim(),
+          is_primary: boolLike(src.is_primary || src.isPrimary || fallback.is_primary || fallback.isPrimary),
+          cli_type: String(firstNonEmptyText([src.cli_type, src.cliType, fallback.cli_type, fallback.cliType], "codex") || "codex").trim() || "codex",
+          source: String(firstNonEmptyText([src.source, fallback.source], "") || "").trim(),
+        };
+        const key = [
+          row.session_id,
+          row.channel_name,
+          row.display_name,
+          row.alias,
+          row.session_role,
+        ].join("::");
+        if (seen.has(key)) return;
+        seen.add(key);
+        rows.push(row);
+      };
+      (Array.isArray(project.channel_sessions) ? project.channel_sessions : []).forEach((row) => push(row));
+      (Array.isArray(project.channels) ? project.channels : []).forEach((row) => push(row));
+      const registryChannels = Array.isArray(project.registry && project.registry.channels)
+        ? project.registry.channels
+        : [];
+      registryChannels.forEach((channel) => {
+        const channelName = String((channel && channel.channel_name) || "").trim();
+        const primarySessionId = String((channel && channel.primary_session_id) || "").trim();
+        const primaryAlias = String((channel && channel.primary_session_alias) || "").trim();
+        if (primarySessionId) {
+          push({
+            session_id: primarySessionId,
+            channel_name: channelName,
+            display_name: primaryAlias,
+            alias: primaryAlias,
+            desc: primaryAlias,
+            session_role: "primary",
+            is_primary: true,
+            cli_type: channel && channel.primary_cli_type,
+            source: "registry_primary",
+          });
+        }
+        (Array.isArray(channel && channel.session_candidates) ? channel.session_candidates : []).forEach((candidate) => {
+          push(candidate, {
+            channel_name: channelName,
+            display_name: candidate && (candidate.display_name || candidate.desc || primaryAlias),
+            alias: candidate && (candidate.display_name || candidate.desc || primaryAlias),
+            desc: candidate && (candidate.desc || candidate.display_name || primaryAlias),
+            session_role: candidate && (candidate.session_role || (candidate.is_primary ? "primary" : "")),
+            is_primary: !!(candidate && candidate.is_primary),
+            cli_type: candidate && candidate.cli_type,
+            source: "registry_candidate",
+          });
+        });
+      });
+      if (typeof conversationRuntimeSessionsForProject === "function") {
+        conversationRuntimeSessionsForProject(pid).forEach((row) => push(row, { source: "runtime" }));
+      }
+      PCONV.taskRoleSessionCandidateCache[pid] = rows;
+      return rows;
+    }
+
+    function resolveTaskRoleMemberSession(rawMember) {
+      const hints = taskRoleMemberIdentityHints(rawMember);
+      const member = (rawMember && typeof rawMember === "object") ? rawMember : {};
+      const projectId = String(hints.projectId || "").trim();
+      const sessionId = String(hints.sessionId || "").trim();
+      const candidates = getTaskRoleProjectSessionCandidates(projectId);
+      const bySessionId = sessionId
+        ? candidates.find((row) => String(row.session_id || row.sessionId || row.id || "").trim() === sessionId)
+        : null;
+      if (bySessionId) {
+        return Object.assign({}, member, bySessionId, {
+          alias: String(firstNonEmptyText([member.alias, member.agent_alias, bySessionId.alias], "") || "").trim(),
+          display_name: String(firstNonEmptyText([member.display_name, bySessionId.display_name, bySessionId.alias, bySessionId.desc], "") || "").trim(),
+          project_id: projectId || bySessionId.project_id || "",
+          projectId: projectId || bySessionId.projectId || "",
+        });
+      }
+      const normalizedFull = new Set(hints.fullNames.map(normalizeTaskRoleLookupText).filter(Boolean));
+      const normalizedAgent = new Set(hints.agentNames.map(normalizeTaskRoleLookupText).filter(Boolean));
+      const normalizedChannel = new Set(hints.channelNames.map(normalizeTaskRoleLookupText).filter(Boolean));
+      let best = null;
+      let bestScore = -1;
+      const scoreCandidate = (candidate) => {
+        const current = (candidate && typeof candidate === "object") ? candidate : {};
+        const candidateChannel = String(firstNonEmptyText([
+          current.channel_name,
+          current.channelName,
+          current.name,
+        ], "") || "").trim();
+        const candidateNames = uniqueTaskRoleValues([
+          current.display_name,
+          current.displayName,
+          current.alias,
+          current.desc,
+          current.name,
+        ]);
+        const normalizedCandidateChannel = normalizeTaskRoleLookupText(candidateChannel);
+        const normalizedCandidateNames = candidateNames.map(normalizeTaskRoleLookupText).filter(Boolean);
+        const normalizedComposite = candidateNames
+          .map((name) => normalizeTaskRoleLookupText(candidateChannel ? (candidateChannel + " / " + name) : name))
+          .filter(Boolean);
+        let score = 0;
+        if (normalizedCandidateChannel && normalizedChannel.has(normalizedCandidateChannel)) score += 40;
+        if (normalizedComposite.some((value) => normalizedFull.has(value))) score += 120;
+        if (normalizedCandidateNames.some((value) => normalizedAgent.has(value))) score += 80;
+        if (normalizedCandidateNames.some((value) => normalizedFull.has(value))) score += 60;
+        if (!normalizedAgent.size && normalizedCandidateChannel && normalizedChannel.has(normalizedCandidateChannel)) {
+          if (boolLike(current.is_primary) || String(current.session_role || "").trim().toLowerCase() === "primary") {
+            score += 24;
+          }
+        }
+        return score;
+      };
+      candidates.forEach((candidate) => {
+        const score = scoreCandidate(candidate);
+        if (score <= 0) return;
+        if (score > bestScore) {
+          best = candidate;
+          bestScore = score;
+        }
+      });
+      if (best) {
+        return Object.assign({}, member, best, {
+          alias: String(firstNonEmptyText([member.alias, member.agent_alias, best.alias], "") || "").trim(),
+          display_name: String(firstNonEmptyText([member.display_name, best.display_name, best.alias, best.desc], "") || "").trim(),
+          project_id: projectId || best.project_id || "",
+          projectId: projectId || best.projectId || "",
+        });
+      }
+      const fallbackChannel = hints.channelNames[0];
+      if (fallbackChannel && typeof sessionForChannel === "function") {
+        const fallbackSession = sessionForChannel(projectId, fallbackChannel);
+        if (fallbackSession && typeof fallbackSession === "object") {
+          return Object.assign({}, member, fallbackSession, {
+            channel_name: String(member.channel_name || member.channelName || fallbackChannel || fallbackSession.name || "").trim(),
+            alias: String(firstNonEmptyText([member.alias, member.agent_alias, fallbackSession.alias], "") || "").trim(),
+            display_name: String(firstNonEmptyText([member.display_name, fallbackSession.display_name, fallbackSession.alias, fallbackSession.desc], "") || "").trim(),
+            project_id: projectId || fallbackSession.project_id || fallbackSession.projectId || "",
+            projectId: projectId || fallbackSession.projectId || fallbackSession.project_id || "",
+          });
+        }
+      }
+      if (!member || typeof member !== "object") return null;
+      return Object.assign({}, member, {
+        project_id: projectId || member.project_id || member.projectId || "",
+        projectId: projectId || member.projectId || member.project_id || "",
+      });
     }
 
     function taskRoleGroups(raw, opts = {}) {
@@ -2763,8 +3077,12 @@
         alias: meta.text,
         displayName: meta.text,
         display_name: meta.text,
+        agentDisplayName: meta.text,
+        agent_display_name: meta.text,
+        codexTitle: meta.text,
         channel_name: meta.channelName || "",
         primaryChannel: meta.channelName || "",
+        project_id: String((meta.raw && typeof meta.raw === "object" && (meta.raw.project_id || meta.raw.projectId)) || STATE.project || DATA.project_id || "").trim(),
       });
       const node = typeof buildConversationAvatarNode === "function"
         ? buildConversationAvatarNode(sessionLike)
@@ -3278,6 +3596,68 @@
     ].map(([id, name, emoji, c1, c2]) => ({ id, name, emoji, c1, c2 }));
     const CONVERSATION_AVATAR_MAP = new Map(CONVERSATION_AVATAR_CATALOG.map((it) => [String(it.id || ""), it]));
 
+    function normalizeSharedConversationAvatarStore(rawStore) {
+      const out = {
+        version: 2,
+        bySessionId: Object.create(null),
+        clearedSessionIds: Object.create(null),
+      };
+      const src = (rawStore && typeof rawStore === "object") ? rawStore : {};
+      const bySessionId = (src.bySessionId && typeof src.bySessionId === "object") ? src.bySessionId : {};
+      Object.keys(bySessionId).forEach((rawSid) => {
+        const sid = String(rawSid || "").trim();
+        const avatarId = String(bySessionId[rawSid] || "").trim();
+        if (sid && avatarId && CONVERSATION_AVATAR_MAP.has(avatarId)) {
+          out.bySessionId[sid] = avatarId;
+        }
+      });
+      const clearedSessionIds = (src.clearedSessionIds && typeof src.clearedSessionIds === "object") ? src.clearedSessionIds : {};
+      Object.keys(clearedSessionIds).forEach((rawSid) => {
+        const sid = String(rawSid || "").trim();
+        if (sid && clearedSessionIds[rawSid]) out.clearedSessionIds[sid] = true;
+      });
+      return out;
+    }
+
+    function resolveConversationAvatarProjectId(sessionLike) {
+      const s = (sessionLike && typeof sessionLike === "object") ? sessionLike : {};
+      const candidates = [
+        s.project_id,
+        s.projectId,
+        s.project,
+        STATE.project,
+        DATA.project_id,
+      ];
+      for (const raw of candidates) {
+        const pid = String(raw || "").trim();
+        if (pid && pid !== "overview") return pid;
+      }
+      return "";
+    }
+
+    function getSharedConversationAvatarStore(projectId = "") {
+      const pid = String(projectId || "").trim() || resolveConversationAvatarProjectId({});
+      if (!pid) {
+        return {
+          version: 2,
+          bySessionId: Object.create(null),
+          clearedSessionIds: Object.create(null),
+        };
+      }
+      if (!PCONV.sharedAvatarStoreCache || typeof PCONV.sharedAvatarStoreCache !== "object") {
+        PCONV.sharedAvatarStoreCache = Object.create(null);
+      }
+      if (PCONV.sharedAvatarStoreCache[pid]) return PCONV.sharedAvatarStoreCache[pid];
+      const projectRows = Array.isArray(DATA.projects) ? DATA.projects : [];
+      const project = projectRows.find((row) => String((row && row.id) || "").trim() === pid) || null;
+      const rawStore = project && typeof project.avatar_assignments === "object"
+        ? project.avatar_assignments
+        : (project && typeof project.avatarAssignments === "object" ? project.avatarAssignments : null);
+      const normalized = normalizeSharedConversationAvatarStore(rawStore);
+      PCONV.sharedAvatarStoreCache[pid] = normalized;
+      return normalized;
+    }
+
     function getConversationAvatarAssignments() {
       const empty = Object.create(null);
       let raw = "";
@@ -3363,7 +3743,7 @@
         ? window.location.origin
         : ((window.location.protocol && window.location.host)
           ? `${window.location.protocol}//${window.location.host}`
-          : "http://127.0.0.1:18770");
+          : "http://localhost:18770");
       return {
         primary: new URL("/share/avatar-library.html", origin).toString(),
         fallback: new URL("/dist/avatar-library.html", origin).toString(),
@@ -3373,6 +3753,7 @@
     function getAssignedAvatarIdForSession(sessionLike) {
       const s = (sessionLike && typeof sessionLike === "object") ? sessionLike : {};
       const sid = String(getSessionId(s) || s.sessionId || s.id || "").trim();
+      const sharedStore = getSharedConversationAvatarStore(resolveConversationAvatarProjectId(s));
       if (sid) {
         const storeV2 = getConversationAvatarStoreV2();
         if (storeV2.clearedSessionIds && storeV2.clearedSessionIds[sid]) return "";
@@ -3399,11 +3780,18 @@
         const avatarId = String(assignments[key] || "").trim();
         if (avatarId && CONVERSATION_AVATAR_MAP.has(avatarId)) return avatarId;
       }
+      if (sid) {
+        if (sharedStore.clearedSessionIds && sharedStore.clearedSessionIds[sid]) return "";
+        const sharedAvatarId = String((sharedStore.bySessionId && sharedStore.bySessionId[sid]) || "").trim();
+        if (sharedAvatarId && CONVERSATION_AVATAR_MAP.has(sharedAvatarId)) return sharedAvatarId;
+      }
       return "";
     }
 
     function conversationAvatarFallbackLabel(name) {
-      const s = String(name || "").trim();
+      const s = typeof normalizeTaskRoleMemberDisplayText === "function"
+        ? normalizeTaskRoleMemberDisplayText(name)
+        : String(name || "").replace(/`+/g, "").trim();
       if (!s) return "会";
       const matched = s.match(/\d+/);
       if (matched && matched[0]) return matched[0];
@@ -3416,6 +3804,7 @@
       const channelName = String(getSessionChannelName(s) || s.channel_name || s.primaryChannel || "").trim();
       const agentName = String(conversationAgentName(s) || "").trim();
       const storeV2 = getConversationAvatarStoreV2();
+      const sharedStore = getSharedConversationAvatarStore(resolveConversationAvatarProjectId(s));
       if (sid && storeV2.clearedSessionIds && storeV2.clearedSessionIds[sid]) {
         const fallbackBase = agentName || sid || "未命名会话";
         return {
@@ -3476,6 +3865,37 @@
           matchedOn: key,
           avatarId,
         };
+      }
+      if (sid && sharedStore.clearedSessionIds && sharedStore.clearedSessionIds[sid]) {
+        const fallbackBase = agentName || sid || "未命名会话";
+        return {
+          mode: "fallback",
+          text: conversationAvatarFallbackLabel(fallbackBase),
+          accent: "#edf2ff",
+          accent2: "#dbe5ff",
+          title: fallbackBase,
+          label: "",
+          matchedOn: "shared_cleared",
+          avatarId: "",
+        };
+      }
+      if (sid) {
+        const sharedAvatarId = String((sharedStore.bySessionId && sharedStore.bySessionId[sid]) || "").trim();
+        if (sharedAvatarId) {
+          const sharedAvatar = CONVERSATION_AVATAR_MAP.get(sharedAvatarId);
+          if (sharedAvatar) {
+            return {
+              mode: "assigned",
+              text: String(sharedAvatar.emoji || "🧑"),
+              accent: String(sharedAvatar.c1 || "#e0e7ff"),
+              accent2: String(sharedAvatar.c2 || "#c7d2fe"),
+              title: (agentName || sid || "当前会话") + " · " + String(sharedAvatar.name || sharedAvatarId),
+              label: String(sharedAvatar.name || sharedAvatarId),
+              matchedOn: "shared:" + sid,
+              avatarId: sharedAvatarId,
+            };
+          }
+        }
       }
       const fallbackBase = candidates[0] || sid || "未命名会话";
       return {
@@ -4994,14 +5414,38 @@
       return null;
     }
 
+    function explicitProjectIdFromHash() {
+      try {
+        const h = String(location.hash || "").replace(/^#/, "");
+        const params = new URLSearchParams(h || "");
+        return String(params.get("p") || "").trim();
+      } catch (_) {
+        return "";
+      }
+    }
+
+    function resolveImplicitProjectPageId() {
+      const pid = explicitProjectIdFromHash();
+      if (!pid) return "";
+      return (DATA.projects || []).some((item) => String(item && item.id || "") === pid) ? "" : pid;
+    }
+
+    function buildImplicitProjectPage(id) {
+      const pid = String(id || "").trim();
+      if (!pid) return null;
+      return { id: pid, name: pid, color: "#2f6fed", implicit: true };
+    }
+
     function pages() {
       const out = [];
       for (const p of (DATA.projects || [])) out.push({ id: p.id, name: p.name, color: p.color || "#2f6fed" });
+      const implicit = buildImplicitProjectPage(resolveImplicitProjectPageId());
+      if (implicit && !out.some((item) => item.id === implicit.id)) out.push(implicit);
       return out;
     }
 
     function projectById(id) {
-      return (DATA.projects || []).find(x => x.id === id) || null;
+      return pages().find(x => x.id === id) || null;
     }
 
     const ITEM_INDEX = {
@@ -5571,6 +6015,10 @@
             ? isDeletedSession(row)
             : ["1", "true", "yes", "y"].includes(String(row.is_deleted || row.isDeleted || "").trim().toLowerCase());
           if (deleted) return false;
+          const inactive = typeof isInactiveSession === "function"
+            ? isInactiveSession(row)
+            : String(row.status || row.session_status || row.sessionStatus || "").trim().toLowerCase() === "inactive";
+          if (inactive) return false;
           const rowProjectId = String(row.project_id || row.projectId || "").trim();
           if (rowProjectId) return rowProjectId === currentPid;
           return lastPid === currentPid;
@@ -5590,6 +6038,10 @@
             ? isDeletedSession(row)
             : ["1", "true", "yes", "y"].includes(String(row.is_deleted || row.isDeleted || "").trim().toLowerCase());
           if (deleted) return false;
+          const inactive = typeof isInactiveSession === "function"
+            ? isInactiveSession(row)
+            : String(row.status || row.session_status || row.sessionStatus || "").trim().toLowerCase() === "inactive";
+          if (inactive) return false;
           const rowProjectId = String(row.project_id || row.projectId || "").trim();
           return !rowProjectId || rowProjectId === pid;
         });
@@ -6175,19 +6627,60 @@
       return setSelectedTaskRef(p, "");
     }
 
+    function taskDetailForceTypeForSelection(item, opts = {}) {
+      const explicit = String((opts && opts.forceTaskType) || "").trim();
+      if (explicit) return explicit;
+      if (!item || !isTaskItem(item) || typeof buildTaskGroups !== "function") return "";
+      const projectId = String(item.project_id || STATE.project || "").trim();
+      const selectedPath = normalizeScheduleTaskPath(item.path || item.task_path || "");
+      const selectedTaskId = taskStableIdOfItem(item);
+      if (!projectId || (!selectedPath && !selectedTaskId)) return "";
+      const groups = buildTaskGroups(projectId);
+      for (const group of Array.isArray(groups) ? groups : []) {
+        if (group && group.master && taskSelectionMatchesItem(group.master, selectedPath, selectedTaskId)) return "parent";
+        const children = Array.isArray(group && group.children) ? group.children : [];
+        if (children.some((child) => taskSelectionMatchesItem(child, selectedPath, selectedTaskId))) return "child";
+      }
+      return "";
+    }
+
+    function openUnifiedTaskDetailForSelection(item, opts = {}) {
+      if (!item || !isTaskItem(item) || typeof openUnifiedTaskDetail !== "function") return false;
+      const projectId = String(item.project_id || STATE.project || "").trim();
+      const project = projectId && projectId !== "overview" ? projectById(projectId) : null;
+      return openUnifiedTaskDetail(item, {
+        source: opts.source || "task-selection",
+        projectId,
+        projectName: project ? (project.name || project.id || "") : "",
+        channelName: item.channel || STATE.channel || "",
+        groupTitle: opts.groupTitle || item.__groupTitle || "",
+        forceTaskType: taskDetailForceTypeForSelection(item, opts),
+      });
+    }
+
     function setSelectedTaskRef(pathValue, taskIdValue = "", opts = null) {
       if (STATE.panelMode === "conv" || STATE.panelMode === "org" || STATE.panelMode === "arch") return;
       STATE.selectedPath = normalizeScheduleTaskPath(pathValue);
       STATE.selectedTaskId = normalizeTaskStableId(taskIdValue || resolveTaskIdByPath(STATE.selectedPath));
       const openCanvasDetail = !!(opts && opts.openCanvasDetail);
+      const forceUnifiedDetail = !!(opts && opts.openUnifiedDetail);
       // 选择任务时清除对话选中状态
       STATE.selectedSessionId = "";
       STATE.selectedSessionExplicit = false;
       syncSelectedTaskSelectionStorage();
-      renderDetail(selectedItem());
+      const selected = selectedItem();
+      renderDetail(selected);
       refreshCCB();
       updateSelectionUI();
       buildChannelConversationList();
+      if (selected && isTaskItem(selected) && (forceUnifiedDetail || STATE.panelMode === "task" || openCanvasDetail)) {
+        if (typeof closeTaskCanvasDetail === "function") closeTaskCanvasDetail();
+        openUnifiedTaskDetailForSelection(selected, {
+          source: "task-list-selection",
+          forceTaskType: opts && opts.forceTaskType,
+        });
+        return;
+      }
       if (typeof isTaskSingleCanvasMode === "function" && isTaskSingleCanvasMode()) {
         if (openCanvasDetail && typeof openTaskCanvasDetail === "function") {
           openTaskCanvasDetail();

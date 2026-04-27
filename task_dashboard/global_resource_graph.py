@@ -709,6 +709,10 @@ def build_global_resource_graph(
                 backup_owners=it.backup_owners,
                 management_slot=it.management_slot,
                 custom_roles=it.custom_roles,
+                executors=it.executors,
+                acceptors=it.acceptors,
+                reviewers=it.reviewers,
+                visual_reviewers=it.visual_reviewers,
                 **(_build_task_support_snapshot(it.path, assist_index) if node_type == "task" else {}),
             )
             add_edge(ch_id, node_id, "channel_item")

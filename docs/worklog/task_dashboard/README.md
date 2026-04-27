@@ -8,7 +8,7 @@
 ## 当前固定目录
 - 日志目录：`docs/worklog/task_dashboard/`
 - 资源目录：`docs/worklog/task_dashboard/assets/`
-- 列表清单：`docs/background/task_dashboard-worklog-index.json`
+- 列表清单：`docs/worklog/task_dashboard/worklog-index.json`
 
 ## 约定
 1. 每篇日志 HTML 直接放在 `docs/worklog/task_dashboard/`

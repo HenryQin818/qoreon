@@ -10,7 +10,16 @@
   <div class="shell">
     <header class="head" id="header">
       <div class="head-left">
-        <h1 class="title" id="title">Qoreon</h1>
+        <div class="brand-row">
+          <h1 class="title" id="title">Qoreon</h1>
+          <a class="official-site-link" id="officialSiteLink" href="https://qoreon.com" target="_blank" rel="noopener noreferrer" title="打开 Qoreon 官网" aria-label="打开 Qoreon 官网">
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.8"/>
+              <path d="M3.6 9h16.8M3.6 15h16.8M12 3c2.1 2.4 3.2 5.4 3.2 9s-1.1 6.6-3.2 9M12 3c-2.1 2.4-3.2 5.4-3.2 9s1.1 6.6 3.2 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+            </svg>
+            <span>官网</span>
+          </a>
+        </div>
         <p class="sub" id="sub" hidden></p>
       </div>
       <div class="head-actions">

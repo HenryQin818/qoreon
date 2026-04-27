@@ -45,12 +45,19 @@
       return channelManageNormalizeText(row && row.desc) || "暂未填写通道说明";
     }
 
+    function channelManageResolveMenuLayerRoot(node) {
+      if (!node || typeof node.closest !== "function") return null;
+      return node.closest(".channel-row, .conv-channel-group");
+    }
+
     function closeChannelManageMenus() {
       CHANNEL_MANAGE_UI.menuChannelName = "";
       const menus = Array.from(document.querySelectorAll(".channel-row-menu"));
       for (const node of menus) node.classList.remove("show");
       const btns = Array.from(document.querySelectorAll(".channel-row-menu-trigger"));
       for (const btn of btns) btn.setAttribute("aria-expanded", "false");
+      const layerRoots = Array.from(document.querySelectorAll(".channel-row.menu-open, .conv-channel-group.menu-open"));
+      for (const node of layerRoots) node.classList.remove("menu-open");
     }
 
     function toggleChannelManageMenu(channelName, forceOpen = null) {
@@ -66,6 +73,8 @@
       const btn = document.querySelector(`.channel-row-menu-trigger[data-channel-name="${CSS.escape(name)}"]`);
       if (menu) menu.classList.add("show");
       if (btn) btn.setAttribute("aria-expanded", "true");
+      const layerRoot = channelManageResolveMenuLayerRoot(menu) || channelManageResolveMenuLayerRoot(btn);
+      if (layerRoot) layerRoot.classList.add("menu-open");
     }
 
     function buildChannelManageMenuItem(title, desc, onClick, danger = false) {
@@ -119,7 +128,7 @@
       ));
       menu.appendChild(buildChannelManageMenuItem(
         "删除通道",
-        "删除通道目录与配套文件夹，保留 .runtime/.runs 历史",
+        "删除通道目录与配套文件夹，保留运行历史记录",
         () => openChannelDeleteModal(projectId, channelName),
         true,
       ));
@@ -175,7 +184,7 @@
 
     function channelManageNotifyRequestSent(agent, data) {
       const result = (data && typeof data === "object") ? data : {};
-      const agentName = String(agent && (agent.displayName || agent.alias || agent.channelName || agent.sessionId) || "目标 Agent");
+      const agentName = String(agent && (agent.alias || agent.displayName || agent.channelName || agent.sessionId) || "目标 Agent");
       const targetChannel = String(agent && agent.channelName || "").trim();
       const runId = channelManageNormalizeText(result && result.dispatch && result.dispatch.runId);
       let message = "已给 " + agentName + " 发送正式消息。";
@@ -205,8 +214,8 @@
       if (!sessionId) return null;
       return {
         sessionId,
-        alias: channelManageNormalizeText(s.alias || s.display_name || s.displayName),
-        displayName: channelManageNormalizeText(s.display_name || s.displayName || s.alias || s.channel_name || s.channelName || sessionId),
+        alias: channelManageNormalizeText(s.alias),
+        displayName: channelManageNormalizeText(s.alias || s.display_name || s.displayName || s.channel_name || s.channelName || sessionId),
         channelName: channelManageNormalizeText(s.channel_name || s.primaryChannel || s.channelName),
         cliType: channelManageNormalizeText(s.cli_type || s.cliType || "codex") || "codex",
         model: channelManageNormalizeText(s.model),
@@ -279,7 +288,7 @@
         const sa = scoreChannelManageAgentCandidate(a);
         const sb = scoreChannelManageAgentCandidate(b);
         if (sa !== sb) return sb - sa;
-        return String(a.displayName || a.alias || a.channelName || a.sessionId || "").localeCompare(String(b.displayName || b.alias || b.channelName || b.sessionId || ""), "zh-Hans-CN");
+        return String(a.alias || a.displayName || a.channelName || a.sessionId || "").localeCompare(String(b.alias || b.displayName || b.channelName || b.sessionId || ""), "zh-Hans-CN");
       });
 
       CHANNEL_MANAGE_UI.agentCandidatesProjectId = projectId;
@@ -329,12 +338,12 @@
         CHANNEL_MANAGE_UI.selectedAgent = selected;
       }
 
-      if (nameEl) nameEl.textContent = selected ? String(selected.displayName || selected.alias || selected.channelName || selected.sessionId || "-") : "-";
+      if (nameEl) nameEl.textContent = selected ? agentDisplayTitle(selected, "-") : "-";
       if (tagEl) tagEl.textContent = selected && selected.isPrimary ? "主会话" : "子会话";
       if (metaEl) {
         if (CHANNEL_MANAGE_UI.agentLoading) metaEl.textContent = "正在加载可选 Agent…";
         else if (CHANNEL_MANAGE_UI.agentError) metaEl.textContent = CHANNEL_MANAGE_UI.agentError;
-        else if (selected) metaEl.textContent = [selected.channelName, selected.sessionId].filter(Boolean).join(" · ");
+        else if (selected) metaEl.textContent = agentDisplaySubtitle(selected, { includeSessionIdFallback: true });
         else metaEl.textContent = "当前项目暂无可选 Agent";
       }
       if (!menu) return;
@@ -356,13 +365,13 @@
         option.appendChild(el("div", {
           class: "agent-card-head",
           children: [
-            el("span", { class: "agent-name", text: String(item.displayName || item.alias || item.channelName || item.sessionId || "-") }),
+            el("span", { class: "agent-name", text: agentDisplayTitle(item, "-") }),
             el("span", { class: "agent-tag", text: item.isPrimary ? "主会话" : "子会话" }),
           ],
         }));
         option.appendChild(el("div", {
           class: "agent-meta",
-          text: [item.channelName, item.sessionId, item.runtimeState && item.runtimeState.display_state ? item.runtimeState.display_state : ""].filter(Boolean).join(" · "),
+          text: agentDisplaySubtitle(item, { includeSessionIdFallback: true }),
         }));
         option.addEventListener("click", (e) => {
           e.preventDefault();
@@ -429,7 +438,7 @@
       const channelEl = document.getElementById("channelEditAgentConfirmChannel");
       const targetEl = document.getElementById("channelEditAgentConfirmTarget");
       if (channelEl) channelEl.textContent = CHANNEL_MANAGE_UI.requestChannelName || "-";
-      if (targetEl) targetEl.textContent = String(agent.displayName || agent.alias || agent.channelName || agent.sessionId || "-");
+      if (targetEl) targetEl.textContent = String(agent.alias || agent.displayName || agent.channelName || agent.sessionId || "-");
       const mask = document.getElementById("channelEditAgentConfirmMask");
       if (mask) mask.classList.add("show");
     }
@@ -557,6 +566,12 @@
           PCONV.sessions = PCONV.sessions.filter((row) => !sessionMatchesChannel(row, ch));
         }
       } catch (_) {}
+      try {
+        if (PCONV && PCONV.sessionDirectoryByProject && Array.isArray(PCONV.sessionDirectoryByProject[pid])) {
+          PCONV.sessionDirectoryByProject[pid] = PCONV.sessionDirectoryByProject[pid]
+            .filter((row) => !sessionMatchesChannel(row, ch));
+        }
+      } catch (_) {}
       if (STATE && channelManageNormalizeText(STATE.channel) === ch) {
         const remaining = typeof unionChannelNames === "function"
           ? unionChannelNames(pid).filter((name) => channelManageNormalizeText(name) !== ch)
@@ -565,6 +580,46 @@
         STATE.selectedPath = "";
         STATE.selectedSessionId = "";
         STATE.selectedSessionExplicit = false;
+      }
+    }
+
+    function isMissingChannelDeleteResponse(response, payload) {
+      const status = Number((response && response.status) || 0) || 0;
+      const body = (payload && typeof payload === "object") ? payload : {};
+      const step = channelManageNormalizeText(body.step).toLowerCase();
+      const hay = [
+        body.error,
+        body.message,
+      ].map((item) => channelManageNormalizeText(item).toLowerCase()).join(" ");
+      return status === 404 && (step === "resolve_channel" || hay.includes("channel not found"));
+    }
+
+    async function healMissingDeletedChannel(projectId, channelName) {
+      const pid = channelManageNormalizeText(projectId);
+      const ch = channelManageNormalizeText(channelName);
+      if (!pid || !ch) return;
+      pruneDeletedChannelFromLocalState(pid, ch);
+      if (
+        typeof refreshConversationPanel === "function"
+        && STATE
+        && channelManageNormalizeText(STATE.project) === pid
+      ) {
+        try {
+          await refreshConversationPanel();
+        } catch (_) {}
+      }
+      if (typeof render === "function") render();
+    }
+
+    function notifyMissingDeletedChannel(channelName) {
+      const ch = channelManageNormalizeText(channelName) || "当前通道";
+      const message = "通道「" + ch + "」在真源中已不存在，页面已自动移除旧项；如仍看到异常，请刷新页面重新拉取通道列表。";
+      if (typeof toast === "function") {
+        toast(message, { tone: "success", duration: 3600 });
+        return;
+      }
+      if (typeof setHintText === "function") {
+        setHintText((STATE && STATE.panelMode) || "channel", message);
       }
     }
 
@@ -594,6 +649,12 @@
         });
         const j = await r.json().catch(() => ({}));
         if (!r.ok) {
+          if (isMissingChannelDeleteResponse(r, j)) {
+            await healMissingDeletedChannel(CHANNEL_MANAGE_UI.deleteProjectId, CHANNEL_MANAGE_UI.deleteChannelName);
+            closeChannelDeleteModal(true);
+            notifyMissingDeletedChannel(CHANNEL_MANAGE_UI.deleteChannelName);
+            return;
+          }
           const msg = String((j && (j.error || j.message)) || (await parseResponseDetail(r)) || "删除失败");
           channelManageSetError("channelDeleteErr", msg);
           return;

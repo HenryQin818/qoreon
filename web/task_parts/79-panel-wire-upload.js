@@ -201,6 +201,7 @@
       autoExpandDone: false,
       autoExpandedLatestBubbleKey: "",
       runActionBusy: Object.create(null),
+      locallyHiddenRunIds: new Set(), // runId -> locally hidden after accepted UI actions
       skillsExpandedByRun: Object.create(null),
       businessRefsExpandedByRun: Object.create(null),
       agentRefsExpandedByRun: Object.create(null),
@@ -244,6 +245,7 @@
       fileStarredBySessionKey: loadSessionScopedMap(CONV_FILE_STARRED_KEY), // projectId::sessionId -> { fileKey:true }
       trainingSentBySessionKey: loadSessionScopedMap(CONV_TRAINING_SENT_KEY), // projectId::sessionId -> sentAt
       trainingDismissedBySessionKey: Object.create(null), // projectId::sessionId -> true
+      trainingManualOpenBySessionKey: Object.create(null), // projectId::sessionId -> true
       fileOnlyStarredBySessionKey: Object.create(null),
       fileSortBySessionKey: Object.create(null),
       fileTypeFilterBySessionKey: Object.create(null),
@@ -699,11 +701,37 @@
       const trainingDesc = document.getElementById("convTrainingDesc");
       const trainingSendBtn = document.getElementById("convTrainingSendBtn");
       const trainingCloseBtn = document.getElementById("convTrainingCloseBtn");
+      let trainingReopenBtn = document.getElementById("convTrainingReopenBtn");
+      const senderActions = senderRow ? senderRow.querySelector(".convsenderactions") : null;
       let recentAgentContainer = document.getElementById("convRecentAgents");
       let recentAgentToggle = document.getElementById("convRecentAgentsGlobalToggle");
       let mentionContainer = document.getElementById("convMentions");
       let replyContainer = document.getElementById("convReplyContext");
       let mentionSuggest = document.getElementById("convMentionSuggest");
+      if (senderActions && !trainingReopenBtn) {
+        trainingReopenBtn = document.createElement("button");
+        trainingReopenBtn.id = "convTrainingReopenBtn";
+        trainingReopenBtn.className = "conv-training-toggle";
+        trainingReopenBtn.type = "button";
+        trainingReopenBtn.title = "重新显示 Agent 培训";
+        trainingReopenBtn.setAttribute("aria-label", "重新显示 Agent 培训");
+        trainingReopenBtn.style.display = "none";
+        trainingReopenBtn.innerHTML = [
+          '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true">',
+          '<path d="M4 8.8 12 5l8 3.8-8 3.8L4 8.8Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>',
+          '<path d="M7 11.4V15c0 .9 2 2.4 5 2.4s5-1.5 5-2.4v-3.6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>',
+          '</svg>',
+        ].join("");
+        senderActions.insertBefore(trainingReopenBtn, senderActions.firstChild || null);
+      }
+      if (trainingReopenBtn && !trainingReopenBtn.__convTrainingReopenBound) {
+        trainingReopenBtn.__convTrainingReopenBound = true;
+        trainingReopenBtn.addEventListener("click", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (typeof reopenConversationTrainingPrompt === "function") reopenConversationTrainingPrompt();
+        });
+      }
       if (composer && !mentionContainer) {
         mentionContainer = document.createElement("div");
         mentionContainer.id = "convMentions";
@@ -794,6 +822,7 @@
         trainingDesc,
         trainingSendBtn,
         trainingCloseBtn,
+        trainingReopenBtn,
         mentionContainer,
         replyContainer,
         mentionSuggest,
@@ -949,7 +978,7 @@
         const ok = await apiHealth();
         if (!ok) {
           stopCCBPoll();
-          hint.textContent = "CCB API 未启用：请用 run_local.sh 启动看板服务（需要同源 API 才能发消息/回看回复）。";
+          hint.textContent = "CCB API 未启用：请启动本地开发服务（需要同源 API 才能发消息/回看回复）。";
           sendBtn.disabled = true;
           refreshBtn.disabled = true;
           renderRuns([]);
@@ -1552,6 +1581,10 @@
       const tm = params.get("tm");
       const tl = params.get("tl");
       const cl = params.get("cl");
+      const sid = params.get("sid");
+      const sp = params.get("sp") || params.get("task_path");
+      const tid = params.get("tid") || params.get("task_id");
+      const ud = params.get("ud") || params.get("unified_detail");
       HASH_BOOTSTRAP.projectOnly = false;
       if (p && pages().some(x => x.id === p)) STATE.project = p;
       else if (!hasProjectParam && preferredProjectId && pages().some(x => x.id === preferredProjectId)) {
@@ -1578,6 +1611,16 @@
       }
       if (cl) STATE.convListLayout = normalizeConversationListLayout(cl);
       else if (pm === "c") STATE.convListLayout = "channel";
+      if (sid !== null) {
+        STATE.selectedSessionId = String(sid || "").trim();
+        STATE.selectedSessionExplicit = !!String(STATE.selectedSessionId || "").trim();
+      }
+      if (sp !== null) {
+        STATE.selectedPath = normalizeScheduleTaskPath(sp);
+        if (tid === null) STATE.selectedTaskId = "";
+      }
+      if (tid !== null) STATE.selectedTaskId = normalizeTaskStableId(tid);
+      STATE.unifiedDetailRequested = ud === "1" || ud === "true";
       if (vm === "c") STATE.view = "comms";
       if (vm === "w") STATE.view = "work";
       if (pm === "c") STATE.panelMode = "conv";
@@ -1642,6 +1685,8 @@
         const moduleMode = normalizeTaskModule(STATE.taskModule);
         if (moduleMode !== "tasks") params.set("tm", moduleMode);
         if (STATE.taskLane && STATE.taskLane !== "全部") params.set("tl", STATE.taskLane);
+        if (STATE.panelMode === "task" && STATE.selectedPath) params.set("sp", STATE.selectedPath);
+        if (STATE.panelMode === "task" && STATE.selectedTaskId) params.set("tid", STATE.selectedTaskId);
         // layout 参数已废弃
         const s = params.toString();
         history.replaceState(null, "", s ? ("#" + s) : "#");
@@ -1710,7 +1755,12 @@
           buildChannelConversationList();
         }
         ensureSelection();
-        renderDetail(selectedItem());
+        const selected = selectedItem();
+        renderDetail(selected);
+        if (STATE.unifiedDetailRequested && selected && isTaskItem(selected)) {
+          STATE.unifiedDetailRequested = false;
+          openUnifiedTaskDetailForSelection(selected, { source: "task-deeplink" });
+        }
         stopCCBPoll();
         updateSelectionUI();
       }

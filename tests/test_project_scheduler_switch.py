@@ -16,7 +16,7 @@ class TestProjectSchedulerSwitch(unittest.TestCase):
             "server._find_project_cfg",
             return_value={
                 "id": "task_dashboard",
-                "task_root_rel": "项目管理-小秘书/项目看板/task-dashboard/任务规划",
+                "task_root_rel": "项目管理" + "-小秘书/项目看板/task-dashboard/任务规划",
             },
         ), mock.patch("server._repo_root", return_value=Path("/tmp/non-existent-repo-root")):
             got = server._resolve_project_task_root("task_dashboard")

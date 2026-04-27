@@ -245,6 +245,10 @@ def iter_items(
                 backup_owners=task_harness.get("backup_owners") or [],
                 management_slot=task_harness.get("management_slot") or [],
                 custom_roles=task_harness.get("custom_roles") or [],
+                executors=task_harness.get("executors") or [],
+                acceptors=task_harness.get("acceptors") or [],
+                reviewers=task_harness.get("reviewers") or [],
+                visual_reviewers=task_harness.get("visual_reviewers") or [],
             )
         )
 

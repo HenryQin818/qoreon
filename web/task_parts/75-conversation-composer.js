@@ -820,7 +820,7 @@
         "- 至少重点学习：agent-init-training-playbook、collab-message-send（或当前项目等效的正式消息技能）、当前通道自己的专项 skill。",
         "",
         "4. 学会怎么发正式消息",
-        "- 跨 Agent / 跨通道协作只能走 http://127.0.0.1:18765/api/codex/announce（announce_to_channel），不能把内部草稿、内部 spawn、非正式 resume 当成“已通知通道”。",
+        "- 跨 Agent / 跨通道协作只能走同源 /api/codex/announce（announce_to_channel），不能把内部草稿、内部 spawn、非正式 resume 当成“已通知通道”。",
         "- 正式消息默认用你当前执行 Agent 自己的身份发送，不借用项目主会话、总控或其他通道 Agent 身份。",
         "- 没有 announce_run_id 时，不得写已发出 / 已送达 / 已通知通道。",
         "- 正式通知成功至少分三层判断：已生成待发送正文 / 已提交发送，待验证 / 已完成证据闭环。",
@@ -882,6 +882,19 @@
       else delete PCONV.trainingDismissedBySessionKey[draftKey];
     }
 
+    function isConversationTrainingManualOpenByKey(key) {
+      const draftKey = String(key || "").trim();
+      if (!draftKey) return false;
+      return !!PCONV.trainingManualOpenBySessionKey[draftKey];
+    }
+
+    function setConversationTrainingManualOpenByKey(key, open) {
+      const draftKey = String(key || "").trim();
+      if (!draftKey) return;
+      if (open) PCONV.trainingManualOpenBySessionKey[draftKey] = true;
+      else delete PCONV.trainingManualOpenBySessionKey[draftKey];
+    }
+
     function conversationTrainingVisibleMessageCount(runs) {
       return (Array.isArray(runs) ? runs : [])
         .filter((run) => !!String((run && run.id) || "").trim())
@@ -922,8 +935,41 @@
       return buildUnifiedAgentInitMessage(channelName);
     }
 
+    function currentConversationTrainingRuns(ctx) {
+      const context = (ctx && typeof ctx === "object") ? ctx : currentConversationCtx();
+      if (!context) return [];
+      const timelineKey = String(context.projectId || STATE.project || "") + "::" + String(context.sessionId || "").trim();
+      return resolveConversationRunsBySessionKey(timelineKey, context.sessionId).slice();
+    }
+
+    function renderConversationTrainingReopenButtonState(button, opts = {}) {
+      if (!button) return;
+      const visible = !!opts.visible;
+      const dismissed = !!opts.dismissed;
+      const showing = !!opts.showing;
+      const sending = !!opts.sending;
+      const completed = !!opts.completed;
+      button.style.display = visible ? "" : "none";
+      button.disabled = !visible || !!sending;
+      button.classList.toggle("active", visible && (showing || dismissed));
+      button.setAttribute("aria-hidden", visible ? "false" : "true");
+      let label = "查看 Agent 培训";
+      if (showing) label = "Agent 培训已显示";
+      else if (completed) label = "查看已发送的 Agent 培训";
+      else if (dismissed) label = "重新显示 Agent 培训";
+      button.title = label;
+      button.setAttribute("aria-label", label);
+    }
+
     function renderConversationTrainingPrompt(ctx, runs, opts = {}) {
-      const { trainingContainer, trainingCount, trainingDesc, trainingSendBtn, trainingCloseBtn } = convComposerUiElements();
+      const {
+        trainingContainer,
+        trainingCount,
+        trainingDesc,
+        trainingSendBtn,
+        trainingCloseBtn,
+        trainingReopenBtn,
+      } = convComposerUiElements();
       const timeline = document.getElementById("convTimeline");
       const trainingDock = document.getElementById("convTrainingDock");
       const convWrap = document.getElementById("convWrap");
@@ -931,9 +977,13 @@
       const timelineReady = opts && Object.prototype.hasOwnProperty.call(opts, "timelineReady")
         ? !!opts.timelineReady
         : true;
-      if (!trainingContainer) return;
+      if (!trainingContainer) {
+        renderConversationTrainingReopenButtonState(trainingReopenBtn, { visible: false });
+        return;
+      }
       const draftKey = ctx ? convComposerDraftKey(ctx.projectId, ctx.sessionId) : "";
       if (!draftKey) {
+        renderConversationTrainingReopenButtonState(trainingReopenBtn, { visible: false });
         trainingContainer.style.display = "none";
         if (trainingDock) trainingDock.classList.remove("show");
         if (convWrap) convWrap.style.removeProperty("--conv-training-offset");
@@ -941,6 +991,7 @@
         return;
       }
       if (!timelineReady) {
+        renderConversationTrainingReopenButtonState(trainingReopenBtn, { visible: false });
         trainingContainer.style.display = "none";
         if (trainingDock) trainingDock.classList.remove("show");
         if (convWrap) convWrap.style.removeProperty("--conv-training-offset");
@@ -953,9 +1004,18 @@
       }
       const alreadySent = !!getConversationTrainingSentAtByKey(draftKey);
       const remaining = conversationTrainingRemainingCount(runs);
-      if (alreadySent || remaining <= 0) setConversationTrainingDismissedByKey(draftKey, false);
+      const manualOpen = isConversationTrainingManualOpenByKey(draftKey);
+      if (alreadySent && !manualOpen) setConversationTrainingDismissedByKey(draftKey, false);
+      if (!alreadySent && remaining <= 0 && !manualOpen) setConversationTrainingDismissedByKey(draftKey, false);
       const dismissed = isConversationTrainingDismissedByKey(draftKey);
-      const shouldShow = !alreadySent && !dismissed && remaining > 0;
+      const shouldShow = manualOpen || (!alreadySent && !dismissed && remaining > 0);
+      renderConversationTrainingReopenButtonState(trainingReopenBtn, {
+        visible: true,
+        dismissed,
+        showing: shouldShow,
+        completed: alreadySent,
+        sending: !!PCONV.sending,
+      });
       trainingContainer.style.display = shouldShow ? "flex" : "none";
       if (trainingDock) trainingDock.classList.toggle("show", shouldShow);
       if (convWrap) {
@@ -969,16 +1029,18 @@
       if (timeline) timeline.classList.toggle("has-training-banner", shouldShow);
       if (!shouldShow) return;
       if (trainingCount) {
-        trainingCount.textContent = remaining > 0
-          ? ("再 " + remaining + " 条消息后自动消失")
-          : "本轮将自动收起";
+        if (alreadySent) trainingCount.textContent = "已发送";
+        else if (remaining > 0) trainingCount.textContent = "再 " + remaining + " 条消息后自动消失";
+        else trainingCount.textContent = "已手动显示";
       }
       if (trainingDesc) {
-        trainingDesc.textContent = "新 Agent 开始协作前，先完成初始化：对齐项目真源、阅读入口、确认正式消息门禁与回执口径。";
+        trainingDesc.textContent = alreadySent
+          ? "Agent 培训已发送，可在上方消息记录中查看执行结果。"
+          : "新 Agent 开始协作前，先完成初始化：对齐项目真源、阅读入口、确认正式消息门禁与回执口径。";
       }
       if (trainingSendBtn) {
-        trainingSendBtn.disabled = !!PCONV.sending;
-        trainingSendBtn.textContent = PCONV.sending ? "发送中..." : "发送培训";
+        trainingSendBtn.disabled = alreadySent || !!PCONV.sending;
+        trainingSendBtn.textContent = alreadySent ? "已发送" : (PCONV.sending ? "发送中..." : "发送培训");
       }
       if (trainingCloseBtn) {
         trainingCloseBtn.disabled = !!PCONV.sending;
@@ -989,8 +1051,19 @@
       const ctx = currentConversationCtx();
       const draftKey = ctx ? convComposerDraftKey(ctx.projectId, ctx.sessionId) : "";
       if (!ctx || !draftKey) return;
+      setConversationTrainingManualOpenByKey(draftKey, false);
       setConversationTrainingDismissedByKey(draftKey, true);
-      renderConversationTrainingPrompt(ctx, [], { timelineReady: true });
+      renderConversationTrainingPrompt(ctx, currentConversationTrainingRuns(ctx), { timelineReady: true });
+    }
+
+    function reopenConversationTrainingPrompt() {
+      const ctx = currentConversationCtx();
+      const draftKey = ctx ? convComposerDraftKey(ctx.projectId, ctx.sessionId) : "";
+      if (!ctx || !draftKey) return;
+      const runs = currentConversationTrainingRuns(ctx);
+      setConversationTrainingManualOpenByKey(draftKey, true);
+      setConversationTrainingDismissedByKey(draftKey, false);
+      renderConversationTrainingPrompt(ctx, runs, { timelineReady: true });
     }
 
     async function sendConversationTrainingMessage() {
@@ -1002,11 +1075,12 @@
         pendingHint: "发送中（Agent培训）…",
         successHint: "已发送 Agent 培训，等待执行回溯刷新…",
         onSuccess: () => {
+          setConversationTrainingManualOpenByKey(draftKey, false);
           setConversationTrainingDismissedByKey(draftKey, false);
           setConversationTrainingSentByKey(draftKey, true);
         },
       });
-      if (sentOk) renderConversationTrainingPrompt(ctx, []);
+      if (sentOk) renderConversationTrainingPrompt(ctx, currentConversationTrainingRuns(ctx), { timelineReady: true });
       return sentOk;
     }
 
@@ -3072,6 +3146,13 @@
             resp || {},
             { source: "announce-ack" }
           );
+          if (typeof triggerConversationEasterEggForText === "function") {
+            triggerConversationEasterEggForText(outboundMessage, {
+              sessionId: ctx.sessionId,
+              runId,
+              source: "send-ack",
+            });
+          }
           PCONV.optimistic = null;
           PCONV.sending = false;
           const doneHint = ctx.routeReason === "explicit-sub"
@@ -3653,9 +3734,13 @@
       try {
         setHintText("conv", "正在撤回排队消息…");
         const resp = await callRunAction(rid, "cancel_edit");
+        markConversationRunLocallyHidden(rid, true);
         restoreConversationDraft(resp && resp.restored ? resp.restored : {});
+        renderConversationDetail(false);
         setHintText("conv", "已撤回到输入框，可编辑后重新发送。");
-        await refreshConversationPanel();
+        Promise.resolve(refreshConversationPanel()).catch(() => {
+          scheduleConversationPoll(1200);
+        });
       } catch (e) {
         const msg = String((e && e.message) || e || "未知错误");
         const lower = msg.toLowerCase();

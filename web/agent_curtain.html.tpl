@@ -70,6 +70,7 @@
               <div class="time-col" id="timeCol"></div>
               <div class="regions-layer" id="regionsLayer"></div>
               <div class="projects-layer" id="projectsLayer"></div>
+              <div class="agent-heads-layer" id="agentHeadsLayer"></div>
               <div class="links-layer"><svg id="linksSvg" aria-hidden="true"></svg></div>
               <div class="agents-layer" id="agentsLayer"></div>
               <div class="events-layer" id="eventsLayer"></div>
@@ -81,6 +82,18 @@
             <button class="zoom-btn" id="zoomOutBtn" type="button">－</button>
             <button class="zoom-btn" id="zoomResetBtn" type="button">100%</button>
             <button class="zoom-btn" id="zoomInBtn" type="button">＋</button>
+          </div>
+          <div class="zoom-mini time-scale-panel" id="timeScalePanel">
+            <div class="zoom-mini-title">时间尺拉伸</div>
+            <div class="time-scale-row">
+              <button class="zoom-btn time-scale-btn" id="timeScaleShrinkBtn" type="button" aria-label="缩短时间尺">－</button>
+              <input class="time-scale-slider" id="timeScaleSlider" type="range" min="1" max="3.5" step="0.25" value="1" aria-label="时间尺拉伸倍率" />
+              <button class="zoom-btn time-scale-btn" id="timeScaleExpandBtn" type="button" aria-label="拉长时间尺">＋</button>
+            </div>
+            <div class="time-scale-meta">
+              <span class="time-scale-hint">拉长后可拉开近时间消息</span>
+              <strong class="time-scale-value" id="timeScaleLabel">1.0x</strong>
+            </div>
           </div>
           <div class="zoom-mini" id="zoomMini">
             <div class="zoom-mini-title">全局缩略图</div>

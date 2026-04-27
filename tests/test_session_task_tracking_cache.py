@@ -95,6 +95,66 @@ class SessionTaskTrackingCacheTests(unittest.TestCase):
         self.assertEqual(read_mock.call_count, 1)
         self.assertEqual(parse_mock.call_count, 1)
 
+    def test_task_tracking_prefers_project_workdir_over_dashboard_worktree(self) -> None:
+        class FakeStore:
+            def list_runs(self, *args, **kwargs):
+                return [
+                    {
+                        "id": "run-1",
+                        "status": "done",
+                        "finishedAt": "2026-04-27T19:40:00+0800",
+                    }
+                ]
+
+            def load_meta(self, run_id):
+                return {}
+
+        with tempfile.TemporaryDirectory() as project_td, tempfile.TemporaryDirectory() as dashboard_td:
+            project_root = Path(project_td)
+            dashboard_root = Path(dashboard_td)
+            channel_name = "主体01-产品方案与业务结构"
+            task_file = (
+                project_root
+                / "任务规划"
+                / channel_name
+                / "任务"
+                / "【进行中】【任务】20260422-会后任务05-NDT沙盘推演与预案组合配置业务规格建立.md"
+            )
+            task_file.parent.mkdir(parents=True, exist_ok=True)
+            task_file.write_text("# 任务目标\n- 继续推进沙盘推演与预案组合配置。\n", encoding="utf-8")
+
+            session = {
+                "id": "019dce85-d87a-7163-82ac-1a09911b0242",
+                "channel_name": channel_name,
+                "worktree_root": str(dashboard_root),
+                "workdir": str(project_root),
+                "project_execution_context": {
+                    "target": {
+                        "worktree_root": str(dashboard_root),
+                        "workdir": str(project_root),
+                    }
+                },
+            }
+
+            tracking = session_task_tracking.build_session_task_tracking(
+                session=session,
+                store=FakeStore(),
+                project_id="ndt",
+                session_id="019dce85-d87a-7163-82ac-1a09911b0242",
+                runtime_state={"updated_at": "2026-04-27T19:40:00+0800"},
+            )
+
+        current = tracking.get("current_task_ref") or {}
+        self.assertEqual(
+            current.get("task_path"),
+            str(task_file.relative_to(project_root)),
+        )
+        self.assertEqual(current.get("task_primary_status"), "进行中")
+        self.assertEqual(
+            current.get("task_summary_text"),
+            "继续推进沙盘推演与预案组合配置。",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

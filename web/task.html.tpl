@@ -388,6 +388,12 @@
                   <div class="convhint" id="convHint">在该会话下继续发送消息，系统会按 5 秒频率自动刷新处理状态。</div>
                 </div>
                 <div class="convsenderactions">
+                  <button class="conv-training-toggle" id="convTrainingReopenBtn" type="button" title="重新显示 Agent 培训" aria-label="重新显示 Agent 培训" style="display:none;">
+                    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                      <path d="M4 8.8 12 5l8 3.8-8 3.8L4 8.8Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+                      <path d="M7 11.4V15c0 .9 2 2.4 5 2.4s5-1.5 5-2.4v-3.6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+                    </svg>
+                  </button>
                   <button class="convrecentagents-global-toggle active" id="convRecentAgentsGlobalToggle" type="button" title="已显示最近联系，点击隐藏" aria-label="隐藏最近联系" aria-pressed="true">
                     <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
                       <path d="M8 11.2a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4Z" stroke="currentColor" stroke-width="1.6"/>
@@ -961,7 +967,7 @@
           </div>
         </section>
         <div class="channel-delete-warning">
-          会删除该通道目录及配套文件夹，并清理相关会话绑定；不会删除历史回溯记录。
+          会删除该通道目录及配套文件夹，并清理相关会话绑定；不会删除运行历史记录。
         </div>
         <div class="ncfield">
           <label for="channelDeleteConfirmInput">请输入完整通道名确认删除</label>

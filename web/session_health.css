@@ -485,6 +485,10 @@ body {
   width: 76px;
 }
 
+.agent-cell {
+  min-width: 230px;
+}
+
 .rank-number {
   width: 42px;
   height: 42px;
@@ -600,6 +604,33 @@ body {
   margin-top: 6px;
   font-size: 13px;
   line-height: 1.5;
+}
+
+.agent-session-id {
+  display: grid;
+  gap: 2px;
+  margin-top: 8px;
+  padding: 7px 8px;
+  border: 1px solid rgba(100, 69, 31, 0.12);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.58);
+}
+
+.agent-session-id-label {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.2;
+  letter-spacing: 0.04em;
+}
+
+.agent-session-id-value {
+  color: var(--text);
+  font-family: "SFMono-Regular", "Cascadia Code", "Liberation Mono", Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  user-select: text;
+  word-break: break-all;
 }
 
 .task-handoff-block {

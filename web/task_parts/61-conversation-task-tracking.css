@@ -421,15 +421,27 @@
       line-height: 1.45;
       color: rgba(0,0,0,0.56);
     }
+    .convtask-owned-collapsed-note {
+      padding: 9px 11px;
+      border-radius: 12px;
+      border: 1px dashed rgba(15,23,42,0.12);
+      background: rgba(248,250,252,0.82);
+      font-size: 12px;
+      line-height: 1.45;
+      color: rgba(15,23,42,0.56);
+    }
     .convtaskerror {
       color: #8f1f1f;
     }
     .conv-task-drawer-mask {
+      top: var(--task-header-offset, 66px);
+      bottom: 0;
       z-index: 42;
     }
     .conv-task-drawer {
-      width: min(520px, 96vw);
+      width: min(560px, 96vw);
       background: rgba(255,255,255,0.985);
+      border-left: 1px solid rgba(15,23,42,0.08);
       grid-template-rows: auto auto minmax(0, 1fr);
     }
     .conv-task-drawer-hint {
@@ -440,7 +452,7 @@
     }
     .conv-task-drawer-stack {
       display: grid;
-      gap: 10px;
+      gap: 8px;
       align-content: start;
     }
     .conv-task-drawer .convtasksummary-card {
@@ -451,7 +463,7 @@
       border-bottom: none;
     }
     .conv-task-detail-mask {
-      z-index: 48;
+      z-index: 1320;
       background: rgba(15,23,42,0.24);
       backdrop-filter: blur(10px);
     }
@@ -752,6 +764,9 @@
       flex-wrap: wrap;
     }
     @media (max-width: 760px) {
+      .conv-task-drawer-mask {
+        top: var(--task-mobile-header-offset, 58px);
+      }
       .convtasksummary {
         padding: 6px 10px 0;
       }

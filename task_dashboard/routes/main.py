@@ -115,6 +115,7 @@ from task_dashboard.runtime.task_assistant_runtime import (
     put_task_assistant_response,
     run_task_assistant_now_response,
 )
+from task_dashboard.runtime.session_task_tracking import build_session_task_tracking
 from task_dashboard.runtime.task_plan_registry import (
     activate_task_plan_response,
     upsert_task_plan_response,
@@ -123,6 +124,10 @@ from task_dashboard.runtime.task_push_registry import (
     handle_task_push_action_response,
 )
 from task_dashboard.task_identity import runtime_base_dir_for_repo
+from task_dashboard.task_cli import (
+    create_task_from_payload as task_workflow_create_from_payload,
+    validate_task_from_payload as task_workflow_validate_from_payload,
+)
 
 if TYPE_CHECKING:
     from http.server import BaseHTTPRequestHandler
@@ -296,6 +301,7 @@ class RouteContext:
     extract_sender_fields: Callable[[dict[str, Any]], dict[str, str]] = field(repr=False)
     extract_run_extra_fields: Callable[[dict[str, Any]], dict[str, Any]] = field(repr=False)
     build_local_server_origin: Callable[[str, int], str] = field(repr=False)
+    build_public_server_origin: Callable[[str, int], str] = field(repr=False)
     resolve_attachment_local_path: Callable[[Path, Any], Optional[Path]] = field(repr=False)
 
 
@@ -492,6 +498,28 @@ class RouteDispatcher:
         for raw in rows:
             row = dict(raw) if isinstance(raw, dict) else {}
             tracking = row.get("task_tracking") if isinstance(row.get("task_tracking"), dict) else None
+            if tracking is None:
+                project_id_for_tracking = canonicalize_runtime_project_id(
+                    str(
+                        row.get("project_id")
+                        or row.get("projectId")
+                        or payload.get("project_id")
+                        or payload.get("projectId")
+                        or fallback_project_id
+                        or ""
+                    ).strip()
+                )
+                session_id = str(row.get("id") or row.get("session_id") or "").strip()
+                try:
+                    tracking = build_session_task_tracking(
+                        session=row,
+                        store=self.ctx.store,
+                        project_id=project_id_for_tracking,
+                        session_id=session_id,
+                        runtime_state=row.get("runtime_state") if isinstance(row.get("runtime_state"), dict) else {},
+                    )
+                except Exception:
+                    tracking = None
             current_task_ref = (tracking.get("current_task_ref") or {}) if isinstance(tracking, dict) else {}
             if not isinstance(current_task_ref, dict):
                 next_rows.append(row)
@@ -873,7 +901,8 @@ class RouteDispatcher:
             environment=self.ctx.environment_name,
             port=self.ctx.server_port,
             bind_host=bind_host,
-            public_origin=str(os.environ.get("TASK_DASHBOARD_PUBLIC_ORIGIN") or "").strip(),
+            local_origin=self.ctx.build_local_server_origin(bind_host, self.ctx.server_port),
+            public_origin=self.ctx.build_public_server_origin(bind_host, self.ctx.server_port),
             runs_dir=self.ctx.runs_dir,
             sessions_file=sessions_file,
             static_root=self.ctx.static_root,
@@ -1156,13 +1185,24 @@ class RouteDispatcher:
                     pr.iterdir(),
                     key=lambda item: (not item.is_dir(), item.name.lower()),
                 )
-                entries = [
-                    {
-                        "name": child.name,
-                        "kind": "dir" if child.is_dir() else "file",
-                    }
-                    for child in entries_all[: self.ctx.fs_preview_dir_limit]
-                ]
+                entries = []
+                for child in entries_all[: self.ctx.fs_preview_dir_limit]:
+                    child_is_dir = child.is_dir()
+                    child_rel = self.ctx.relative_path_to_repo_root(child)
+                    child_mime_type = "inode/directory"
+                    if not child_is_dir:
+                        child_mime_type = str(mimetypes.guess_type(child.name)[0] or "application/octet-stream")
+                    entries.append(
+                        {
+                            "name": child.name,
+                            "kind": "dir" if child_is_dir else "file",
+                            "path": str(child),
+                            "relative_path": child_rel,
+                            "extension": "" if child_is_dir else str(child.suffix or "").lower(),
+                            "mime_type": child_mime_type,
+                            "is_image": bool((not child_is_dir) and child_mime_type.startswith("image/")),
+                        }
+                    )
                 self.ctx.json_response(
                     handler,
                     200,
@@ -1852,6 +1892,11 @@ class RouteDispatcher:
         """Handle GET /api/codex/runs."""
         project_id = str(getattr(handler.server, "project_id", "") or "").strip()
         runtime_role = str(getattr(handler.server, "runtime_role", "") or "").strip()
+        bind_host = ""
+        try:
+            bind_host = str(handler.server.server_address[0] or "").strip()
+        except Exception:
+            bind_host = ""
         query_string, requested_project_id = self._alias_project_query_string(query_string, param_names=("projectId", "project_id"))
         code, payload = self.ctx.runtime_list_runs_response(
             query_string=query_string,
@@ -1861,7 +1906,7 @@ class RouteDispatcher:
             maybe_trigger_queued_recovery_lazy=self.ctx.maybe_trigger_queued_recovery_lazy,
             build_run_observability_fields=self.ctx.build_run_observability_fields,
             environment_name=self.ctx.environment_name,
-            local_server_origin=self.ctx.build_local_server_origin("", self.ctx.server_port),
+            local_server_origin=self.ctx.build_local_server_origin(bind_host, self.ctx.server_port),
             worktree_root=str(self.ctx.worktree_root),
         )
         if isinstance(payload, dict):
@@ -2176,6 +2221,10 @@ class RouteDispatcher:
             self._handle_project_task_plans_post(handler, parts[2])
             return True
 
+        if len(parts) == 5 and parts[:2] == ["api", "projects"] and parts[3] == "tasks" and parts[4] in {"create", "validate"}:
+            self._handle_project_task_workflow_post(handler, parts[2], parts[4])
+            return True
+
         if len(parts) == 4 and parts[:2] == ["api", "projects"] and parts[3] == "assist-requests":
             self._handle_project_assist_request_create_post(handler, parts[2])
             return True
@@ -2306,6 +2355,41 @@ class RouteDispatcher:
             task_plan_runtime=self.ctx.task_plan_runtime,
             find_project_cfg=self.ctx.find_project_cfg,
         )
+        self.ctx.json_response(handler, code, payload)
+
+    def _handle_project_task_workflow_post(
+        self,
+        handler: "BaseHTTPRequestHandler",
+        project_id: str,
+        action: str,
+    ) -> None:
+        """Handle POST /api/projects/{project_id}/tasks/(create|validate)."""
+        if not self.ctx.require_token():
+            return
+        pid = str(project_id or "").strip()
+        if not pid:
+            self.ctx.json_response(handler, 400, {"ok": False, "error": "missing_project_id", "step": "request_validate"})
+            return
+        if not self.ctx.find_project_cfg(pid):
+            self.ctx.json_response(handler, 404, {"ok": False, "error": "project_not_found", "step": "request_validate"})
+            return
+        try:
+            body = self.ctx.read_body_json(handler, max_bytes=120_000)
+        except Exception as e:
+            self.ctx.json_response(handler, 400, {"ok": False, "error": "bad_json", "message": str(e), "step": "request_parse"})
+            return
+        if action == "create":
+            code, payload = task_workflow_create_from_payload(
+                root=self.ctx.repo_root(),
+                project_id=pid,
+                payload=body,
+            )
+        else:
+            code, payload = task_workflow_validate_from_payload(
+                root=self.ctx.repo_root(),
+                project_id=pid,
+                payload=body,
+            )
         self.ctx.json_response(handler, code, payload)
 
     def _handle_project_heartbeat_tasks_post(
@@ -3393,7 +3477,11 @@ class RouteDispatcher:
     ) -> dict[str, Any]:
         framework_path = self._channel_root_path(project_id, channel_name)
         readme_path = f"{framework_path}/README.md" if framework_path else ""
-        inbox_path = f"{framework_path}/沟通-收件箱.md" if framework_path else ""
+        inbox_path = ""
+        if framework_path:
+            candidate = Path(framework_path) / "沟通-收件箱.md"
+            if candidate.exists():
+                inbox_path = str(candidate)
         payload: dict[str, Any] = {
             "ok": True,
             "status": "done",

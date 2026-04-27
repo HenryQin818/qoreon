@@ -8,12 +8,18 @@
   const TIME_WIDTH = 108;
   const AGENT_WIDTH = 196;
   const EVENT_WIDTH = 148;
+  const CANVAS_RIGHT_GUTTER = 236;
+  const CANVAS_BOTTOM_GUTTER = 208;
   const PROJECT_HEADER_HEIGHT = 42;
   const AGENT_HEADER_HEIGHT = 96;
   const BASE_HEIGHT_MIN = 920;
   const MIN_ZOOM = 0.45;
   const MAX_ZOOM = 1.4;
   const ZOOM_STEP = 0.1;
+  const TIMELINE_STRETCH_KEY = "taskDashboard.agentCurtain.timelineStretch";
+  const MIN_TIMELINE_STRETCH = 1;
+  const MAX_TIMELINE_STRETCH = 3.5;
+  const TIMELINE_STRETCH_STEP = 0.25;
   const WINDOW_MS = {
     "1h": 60 * 60 * 1000,
     "6h": 6 * 60 * 60 * 1000,
@@ -117,6 +123,7 @@
     showSystem: true,
     showDone: true,
     zoom: 1,
+    timelineStretch: 1,
     customRange: {
       startMs: 0,
       endMs: 0,
@@ -163,6 +170,7 @@
     timeCol: document.getElementById("timeCol"),
     regionsLayer: document.getElementById("regionsLayer"),
     projectsLayer: document.getElementById("projectsLayer"),
+    agentHeadsLayer: document.getElementById("agentHeadsLayer"),
     agentsLayer: document.getElementById("agentsLayer"),
     eventsLayer: document.getElementById("eventsLayer"),
     linksSvg: document.getElementById("linksSvg"),
@@ -180,9 +188,15 @@
     zoomOutBtn: document.getElementById("zoomOutBtn"),
     zoomResetBtn: document.getElementById("zoomResetBtn"),
     zoomInBtn: document.getElementById("zoomInBtn"),
+    timeScaleSlider: document.getElementById("timeScaleSlider"),
+    timeScaleLabel: document.getElementById("timeScaleLabel"),
+    timeScaleShrinkBtn: document.getElementById("timeScaleShrinkBtn"),
+    timeScaleExpandBtn: document.getElementById("timeScaleExpandBtn"),
     miniMap: document.getElementById("miniMap"),
     miniViewport: document.getElementById("miniViewport"),
   };
+
+  let viewportSyncFrame = 0;
 
   function authHeaders(base = {}) {
     const headers = { ...(base || {}) };
@@ -236,6 +250,33 @@
 
   function pad2(value) {
     return String(Math.max(0, Number(value) || 0)).padStart(2, "0");
+  }
+
+  function clampTimelineStretch(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return MIN_TIMELINE_STRETCH;
+    const rounded = Math.round(numeric / TIMELINE_STRETCH_STEP) * TIMELINE_STRETCH_STEP;
+    return Math.max(MIN_TIMELINE_STRETCH, Math.min(MAX_TIMELINE_STRETCH, Number(rounded.toFixed(2))));
+  }
+
+  function formatTimelineStretch(value) {
+    const numeric = clampTimelineStretch(value);
+    const text = numeric.toFixed(2).replace(/\.00$/, ".0").replace(/(\.\d)0$/, "$1");
+    return `${text}x`;
+  }
+
+  function readTimelineStretch() {
+    try {
+      return clampTimelineStretch(localStorage.getItem(TIMELINE_STRETCH_KEY));
+    } catch (_) {
+      return MIN_TIMELINE_STRETCH;
+    }
+  }
+
+  function persistTimelineStretch() {
+    try {
+      localStorage.setItem(TIMELINE_STRETCH_KEY, String(clampTimelineStretch(STATE.timelineStretch)));
+    } catch (_) {}
   }
 
   function formatDateTimeLocal(value) {
@@ -589,7 +630,7 @@
     const runtimeState = (raw.runtime_state && typeof raw.runtime_state === "object") ? raw.runtime_state : {};
     return {
       session_id: sessionId,
-      alias: firstText([raw.alias, raw.display_name, raw.displayName, raw.channel_name, raw.channelName, sessionId]),
+      alias: firstText([raw.alias, raw.channel_name, raw.channelName, raw.display_name, raw.displayName, sessionId]),
       channel_name: firstText([raw.channel_name, raw.channelName]),
       project_id: firstText([raw.project_id, raw.projectId]),
       project_name: firstText([raw.project_name, raw.projectName]),
@@ -736,7 +777,7 @@
       agent_name: firstText([src.agent_name, src.agentName, src.name]),
       session_id: firstText([src.session_id, src.sessionId]),
       role: firstText([src.role]).toLowerCase(),
-      alias: firstText([src.alias, src.display_name, src.displayName]),
+      alias: firstText([src.alias, src.agent_name, src.agentName, src.display_name, src.displayName]),
     };
     return Object.values(out).some(Boolean) ? out : null;
   }
@@ -785,7 +826,7 @@
         channel_name: firstText([src.channel_name, src.channelName]),
         session_id: firstText([src.session_id, src.sessionId]),
         cli_type: firstText([src.cli_type, src.cliType]).toLowerCase(),
-        display_name: firstText([src.display_name, src.displayName, src.agent_name, src.agentName, src.alias]),
+        display_name: firstText([src.alias, src.display_name, src.displayName, src.agent_name, src.agentName]),
       };
       return Object.values(out).some(Boolean) ? out : null;
     }).filter(Boolean);
@@ -1371,6 +1412,11 @@
     });
   }
 
+  function syncTimeScaleControls() {
+    if (dom.timeScaleSlider) dom.timeScaleSlider.value = String(clampTimelineStretch(STATE.timelineStretch));
+    if (dom.timeScaleLabel) dom.timeScaleLabel.textContent = formatTimelineStretch(STATE.timelineStretch);
+  }
+
   function syncLegendControls() {
     Array.from(dom.toolbarLegend?.querySelectorAll("[data-link-type]") || []).forEach((node) => {
       const type = safeText(node.getAttribute("data-link-type")).toLowerCase();
@@ -1396,6 +1442,7 @@
           "按项目 / session_id 分列",
           `窗口 ${STATE.activeRange.isCustom ? STATE.activeRange.label : STATE.windowKey}`,
           `排序 ${STATE.agentOrderMode === "volume" ? "消息量" : "默认"}`,
+          `时间尺 ${formatTimelineStretch(STATE.timelineStretch)}`,
           `${Math.round(STATE.zoom * 100)}%`,
         ]
         : [
@@ -1404,6 +1451,7 @@
           STATE.sessionHint ? `会话 ${shortId(STATE.sessionHint)}` : "按 session_id 分列",
           `窗口 ${STATE.activeRange.isCustom ? STATE.activeRange.label : STATE.windowKey}`,
           `排序 ${STATE.agentOrderMode === "volume" ? "消息量" : "默认"}`,
+          `时间尺 ${formatTimelineStretch(STATE.timelineStretch)}`,
           `${Math.round(STATE.zoom * 100)}%`,
         ];
       dom.projectMeta.textContent = parts.join(" · ");
@@ -1414,6 +1462,7 @@
     if (dom.zoomResetBtn) dom.zoomResetBtn.textContent = `${Math.round(STATE.zoom * 100)}%`;
     syncWindowControls();
     syncOrderControls();
+    syncTimeScaleControls();
     syncLegendControls();
   }
 
@@ -1469,7 +1518,9 @@
 
   function renderAgents(agentRows, height) {
     dom.agentsLayer.innerHTML = "";
+    if (dom.agentHeadsLayer) dom.agentHeadsLayer.innerHTML = "";
     dom.agentsLayer.style.height = `${height}px`;
+    if (dom.agentHeadsLayer) dom.agentHeadsLayer.style.height = `${height}px`;
     agentRows.forEach((agent, index) => {
       const col = el("div", { class: `agent-col${agent.session_id === STATE.sessionHint ? " is-active" : ""}` });
       const accent = projectAccent(agent.project_id);
@@ -1491,7 +1542,9 @@
       ]);
       head.appendChild(top);
       head.appendChild(el("span", { class: "pill", text: statusLabel(agent.status) }));
-      col.appendChild(head);
+      head.style.left = `${index * AGENT_WIDTH}px`;
+      if (dom.agentHeadsLayer) dom.agentHeadsLayer.appendChild(head);
+      else col.appendChild(head);
       dom.agentsLayer.appendChild(col);
     });
   }
@@ -1546,16 +1599,23 @@
     const offsetX = dom.curtainViewport.scrollLeft / scale;
     const offsetY = dom.curtainViewport.scrollTop / scale;
     if (dom.timeCol) {
-      dom.timeCol.style.transform = `translateX(${offsetX}px)`;
+      dom.timeCol.style.transform = `translate3d(${offsetX}px, 0, 0)`;
     }
     if (dom.timeCorner) {
-      dom.timeCorner.style.transform = `translate(${offsetX}px, ${offsetY}px)`;
+      dom.timeCorner.style.transform = `translate3d(${offsetX}px, ${offsetY}px, 0)`;
     }
     if (dom.projectsLayer) {
-      dom.projectsLayer.style.transform = `translateY(${offsetY}px)`;
+      dom.projectsLayer.style.transform = `translate3d(0, ${offsetY}px, 0)`;
     }
-    dom.agentsLayer.querySelectorAll(".agent-head").forEach((node) => {
-      node.style.transform = `translateY(${offsetY}px)`;
+    if (dom.agentHeadsLayer) dom.agentHeadsLayer.style.transform = `translate3d(0, ${offsetY}px, 0)`;
+  }
+
+  function scheduleViewportSync() {
+    if (viewportSyncFrame) return;
+    viewportSyncFrame = window.requestAnimationFrame(() => {
+      viewportSyncFrame = 0;
+      updateMiniViewport();
+      updateFrozenAxes();
     });
   }
 
@@ -1719,6 +1779,23 @@
     updateMiniViewport();
   }
 
+  function applyTimelineStretch(nextStretch, opts = {}) {
+    const view = dom.curtainViewport;
+    const prevTotalHeight = dom.curtainSizer?.offsetHeight || Math.round(STATE.canvasHeight * STATE.zoom) || 1;
+    const anchorRatio = view
+      ? (view.scrollTop + (view.clientHeight / 2)) / Math.max(1, prevTotalHeight)
+      : 0;
+    STATE.timelineStretch = clampTimelineStretch(nextStretch);
+    persistTimelineStretch();
+    render();
+    if (view && !opts.skipRecenter) {
+      const nextTotalHeight = dom.curtainSizer?.offsetHeight || Math.round(STATE.canvasHeight * STATE.zoom) || 1;
+      view.scrollTop = Math.max(0, Math.round(anchorRatio * nextTotalHeight - (view.clientHeight / 2)));
+      updateMiniViewport();
+      updateFrozenAxes();
+    }
+  }
+
   function render() {
     renderHeader();
     const events = STATE.events.slice();
@@ -1735,13 +1812,16 @@
     const hasEvents = events.length > 0;
     const maxTs = Number(activeRange.endMs) || Date.now();
     const minTs = Math.max(0, Number(activeRange.startMs) || (maxTs - WINDOW_MS["1h"]));
-    const height = hasEvents ? Math.max(BASE_HEIGHT_MIN, 220 + (events.length * 86)) : BASE_HEIGHT_MIN;
-    const width = TIME_WIDTH + Math.max(1, STATE.agentRows.length) * AGENT_WIDTH;
-    updateCanvasSize(width, height);
-    renderTimeSlots(buildTimeSlots(minTs, maxTs, height), height);
+    const baseHeight = hasEvents ? Math.max(BASE_HEIGHT_MIN, 220 + (events.length * 86)) : BASE_HEIGHT_MIN;
+    const contentHeight = Math.max(BASE_HEIGHT_MIN, Math.round(baseHeight * clampTimelineStretch(STATE.timelineStretch)));
+    const canvasHeight = contentHeight + CANVAS_BOTTOM_GUTTER;
+    const contentWidth = TIME_WIDTH + Math.max(1, STATE.agentRows.length) * AGENT_WIDTH;
+    const canvasWidth = contentWidth + CANVAS_RIGHT_GUTTER;
+    updateCanvasSize(canvasWidth, canvasHeight);
+    renderTimeSlots(buildTimeSlots(minTs, maxTs, contentHeight), canvasHeight);
     renderProjects(STATE.agentRows);
-    renderAgents(STATE.agentRows, height);
-    STATE.layoutEvents = hasEvents ? layoutEvents(STATE.agentRows, events, minTs, maxTs, height) : [];
+    renderAgents(STATE.agentRows, canvasHeight);
+    STATE.layoutEvents = hasEvents ? layoutEvents(STATE.agentRows, events, minTs, maxTs, contentHeight) : [];
     renderEvents(STATE.layoutEvents);
     renderLinks(STATE.layoutEvents);
     if (!hasEvents) {
@@ -1940,9 +2020,13 @@
     dom.zoomInBtn?.addEventListener("click", () => applyZoom(STATE.zoom + ZOOM_STEP));
     dom.zoomOutBtn?.addEventListener("click", () => applyZoom(STATE.zoom - ZOOM_STEP));
     dom.zoomResetBtn?.addEventListener("click", () => applyZoom(1));
+    dom.timeScaleSlider?.addEventListener("input", (event) => {
+      applyTimelineStretch(event && event.target ? event.target.value : MIN_TIMELINE_STRETCH);
+    });
+    dom.timeScaleShrinkBtn?.addEventListener("click", () => applyTimelineStretch(STATE.timelineStretch - TIMELINE_STRETCH_STEP));
+    dom.timeScaleExpandBtn?.addEventListener("click", () => applyTimelineStretch(STATE.timelineStretch + TIMELINE_STRETCH_STEP));
     dom.curtainViewport?.addEventListener("scroll", () => {
-      updateMiniViewport();
-      updateFrozenAxes();
+      scheduleViewportSync();
     });
     dom.curtainViewport?.addEventListener("pointerdown", (event) => {
       if (!dom.curtainViewport) return;
@@ -2004,6 +2088,7 @@
     STATE.projectId = route.projectId;
     STATE.channelHint = route.channelName;
     STATE.sessionHint = route.sessionId;
+    STATE.timelineStretch = readTimelineStretch();
     STATE.projectCatalog = projectCatalog();
     STATE.activeRange = resolveTimeRange([]);
     STATE.health = await readHealth();

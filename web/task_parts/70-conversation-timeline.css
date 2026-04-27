@@ -67,6 +67,119 @@
       opacity: 0.74;
     }
     .mbubble { border-radius: 12px; border: 1px solid rgba(0,0,0,0.10); background: rgba(255,255,255,0.82); padding: 8px 10px; font-size: 13px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .mbubble.md,
+    .conv-inline-snippet-body.md,
+    .conv-receipt-raw-body.md {
+      white-space: normal;
+    }
+    .mbubble.md p,
+    .conv-inline-snippet-body.md p,
+    .conv-receipt-raw-body.md p {
+      margin: 0 0 8px;
+    }
+    .mbubble.md p:last-child,
+    .conv-inline-snippet-body.md p:last-child,
+    .conv-receipt-raw-body.md p:last-child {
+      margin-bottom: 0;
+    }
+    .md-table-wrap {
+      max-width: 100%;
+      overflow-x: auto;
+      margin: 8px 0;
+      border: 1px solid rgba(15,23,42,0.10);
+      border-radius: 12px;
+      background: rgba(255,255,255,0.64);
+    }
+    .md-table {
+      width: 100%;
+      min-width: min(520px, 100%);
+      border-collapse: collapse;
+      white-space: normal;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .md-table th,
+    .md-table td {
+      padding: 7px 9px;
+      border-bottom: 1px solid rgba(15,23,42,0.08);
+      border-right: 1px solid rgba(15,23,42,0.06);
+      vertical-align: top;
+      overflow-wrap: anywhere;
+    }
+    .md-table th:last-child,
+    .md-table td:last-child {
+      border-right: none;
+    }
+    .md-table tbody tr:last-child td {
+      border-bottom: none;
+    }
+    .md-table th {
+      background: rgba(15,23,42,0.045);
+      color: rgba(15,23,42,0.78);
+      font-weight: 800;
+      text-align: left;
+    }
+    .md-table-align-center {
+      text-align: center !important;
+    }
+    .md-table-align-right {
+      text-align: right !important;
+    }
+    .md-list {
+      margin: 6px 0 6px 18px;
+      padding: 0;
+      white-space: normal;
+    }
+    .md-list li + li {
+      margin-top: 3px;
+    }
+    .md-task-item {
+      list-style: none;
+      display: flex;
+      align-items: flex-start;
+      gap: 7px;
+      margin-left: -18px;
+    }
+    .md-task-item input[type="checkbox"] {
+      width: 14px;
+      height: 14px;
+      margin: 2px 0 0;
+      accent-color: #2f6fed;
+      flex: 0 0 auto;
+    }
+    .md-code {
+      position: relative;
+      margin: 8px 0;
+      padding: 12px;
+      border-radius: 12px;
+      border: 1px solid rgba(15,23,42,0.10);
+      background: rgba(15,23,42,0.045);
+      white-space: pre;
+      overflow-x: auto;
+      overflow-wrap: normal;
+    }
+    .md-code[data-lang] {
+      padding-top: 28px;
+    }
+    .md-code[data-lang]::before {
+      content: attr(data-lang);
+      position: absolute;
+      top: 7px;
+      right: 10px;
+      color: rgba(15,23,42,0.46);
+      font: 11px/1.2 var(--mono);
+      text-transform: lowercase;
+    }
+    .md-code code {
+      background: transparent;
+      padding: 0;
+      border-radius: 0;
+    }
+    .md-hr {
+      border: none;
+      border-top: 1px solid rgba(15,23,42,0.12);
+      margin: 10px 0;
+    }
     .msgrow.user .mbubble { border-color: rgba(47,111,237,0.28); background: rgba(47,111,237,0.12); }
     .msgrow.user.collab-inbound .mbubble {
       border-color: rgba(15,23,42,0.12);
@@ -988,8 +1101,12 @@
     .run-state-actions .btn.textbtn.run-action-danger {
       color: rgba(156,34,55,0.92);
     }
-    .run-state-actions .btn.textbtn.run-action-danger:hover {
+    .run-state-actions .btn.textbtn.run-action-danger:hover,
+    .callback-event-ops .btn.textbtn.run-action-danger:hover {
       color: rgba(126,24,42,0.98);
+    }
+    .callback-event-ops .btn.textbtn.run-action-danger {
+      color: rgba(156,34,55,0.92);
     }
     .memo-count-dot {
       display: inline-flex;
@@ -1728,6 +1845,36 @@
       overflow: hidden;
       text-overflow: ellipsis;
       max-width: 320px;
+    }
+    .msg-generated-media-card {
+      margin-top: 6px;
+      display: grid;
+      gap: 8px;
+      padding: 10px 12px;
+      border-radius: 12px;
+      border: 1px solid rgba(0,0,0,0.08);
+      background: rgba(255,255,255,0.82);
+    }
+    .msg-generated-media-head {
+      display: grid;
+      gap: 4px;
+      min-width: 0;
+    }
+    .msg-generated-media-title {
+      font-size: 12px;
+      font-weight: 800;
+      color: rgba(0,0,0,0.84);
+    }
+    .msg-generated-media-sub {
+      font-size: 11px;
+      color: var(--muted2);
+      line-height: 1.5;
+      overflow-wrap: anywhere;
+    }
+    .msg-generated-media-actions {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
     }
     @media (max-width: 720px) {
       .msgrow { max-width: 88%; }

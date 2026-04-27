@@ -8,7 +8,7 @@ from pathlib import Path
 class PublicWorklogManifestTest(unittest.TestCase):
     def test_manifest_uses_public_share_paths_and_existing_local_files(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
-        manifest_path = repo_root / "docs" / "background" / "task_dashboard-worklog-index.json"
+        manifest_path = repo_root / "docs" / "worklog" / "task_dashboard" / "worklog-index.json"
         payload = json.loads(manifest_path.read_text(encoding="utf-8"))
         items = payload.get("items")
         self.assertIsInstance(items, list)

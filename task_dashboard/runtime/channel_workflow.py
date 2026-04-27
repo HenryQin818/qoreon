@@ -6,6 +6,16 @@ from typing import Any, Mapping
 from task_dashboard.helpers import looks_like_uuid, safe_text
 
 
+def _resolve_channel_kind(row: Mapping[str, Any]) -> str:
+    mode = safe_text(row.get("channelKindMode"), 20).strip().lower()
+    raw_kind = safe_text(row.get("channelKind"), 20).strip()
+    custom_kind = safe_text(row.get("channelKindCustom"), 20).strip()
+    if raw_kind == "__custom__":
+        mode = "custom"
+    kind = custom_kind if mode == "custom" else raw_kind
+    return safe_text(kind, 20).strip()
+
+
 def compose_channel_display_name(channel_kind: str, channel_index: str, channel_name: str) -> tuple[str, str]:
     kind = safe_text(channel_kind, 20).strip()
     index = safe_text(channel_index, 40).strip()
@@ -22,7 +32,7 @@ def normalize_channel_bootstrap_v3_request(body: Mapping[str, Any] | None) -> di
     mode = mode.replace("-", "_").replace(" ", "_")
     if mode not in {"direct", "agent_assist"}:
         mode = "direct"
-    channel_kind = safe_text(row.get("channelKind"), 20).strip()
+    channel_kind = _resolve_channel_kind(row)
     channel_index = safe_text(row.get("channelIndex"), 40).strip()
     channel_theme = safe_text(row.get("channelName"), 200).strip()
     channel_name, normalized_theme = compose_channel_display_name(channel_kind, channel_index, channel_theme)
@@ -123,6 +133,32 @@ def _trim_text(value: Any, max_len: int = 4000) -> str:
     return safe_text(value, max_len).strip()
 
 
+def _resolve_target_session_identity(session: Mapping[str, Any] | None) -> dict[str, str]:
+    row = session if isinstance(session, Mapping) else {}
+    session_id = _trim_text(row.get("sessionId") or row.get("session_id") or row.get("id"), 80)
+    channel_name = _trim_text(
+        row.get("channel_name")
+        or row.get("primaryChannel")
+        or row.get("channelName")
+        or "",
+        200,
+    )
+    alias = _trim_text(row.get("alias"), 200)
+    agent_name = alias or channel_name or session_id
+    cli_type = _trim_text(row.get("cli_type") or row.get("cliType") or "codex", 40) or "codex"
+    model = _trim_text(row.get("model") or "", 120)
+    reasoning_effort = _trim_text(row.get("reasoning_effort") or row.get("reasoningEffort") or "", 40)
+    return {
+        "session_id": session_id,
+        "channel_name": channel_name,
+        "alias": alias,
+        "agent_name": agent_name,
+        "cli_type": cli_type,
+        "model": model,
+        "reasoning_effort": reasoning_effort,
+    }
+
+
 def build_channel_assist_message_payload(
     *,
     project_id: str,
@@ -138,28 +174,14 @@ def build_channel_assist_message_payload(
     source_agent_alias: str = "",
     source_agent_id: str = "task_dashboard",
 ) -> dict[str, Any]:
-    session = target_session if isinstance(target_session, Mapping) else {}
-    target_session_id = _trim_text(session.get("sessionId") or session.get("session_id") or session.get("id"), 80)
-    target_channel_name = _trim_text(
-        session.get("channel_name")
-        or session.get("primaryChannel")
-        or session.get("channelName")
-        or session.get("displayChannel")
-        or "",
-        200,
-    )
-    target_alias = _trim_text(
-        session.get("alias")
-        or session.get("display_name")
-        or session.get("displayName")
-        or target_channel_name
-        or target_session_id
-        or "",
-        200,
-    )
-    target_cli_type = _trim_text(session.get("cli_type") or session.get("cliType") or "codex", 40) or "codex"
-    target_model = _trim_text(session.get("model") or "", 120)
-    target_reasoning = _trim_text(session.get("reasoning_effort") or session.get("reasoningEffort") or "", 40)
+    identity = _resolve_target_session_identity(target_session)
+    target_session_id = identity["session_id"]
+    target_channel_name = identity["channel_name"]
+    target_alias = identity["alias"]
+    target_agent_name = identity["agent_name"]
+    target_cli_type = identity["cli_type"]
+    target_model = identity["model"]
+    target_reasoning = identity["reasoning_effort"]
     origin_channel_name = _trim_text(source_channel_name or created_channel_name, 200)
     origin_session_id = _trim_text(source_session_id, 80)
     origin_agent_name = _trim_text(source_agent_name, 200) or "任务看板"
@@ -176,21 +198,23 @@ def build_channel_assist_message_payload(
             f"已创建空通道框架: {created_channel_name}",
             f"通道主题: {theme_name}",
             f"通道说明: {created_desc or created_channel_name}",
-            f"处理Agent: {target_alias or target_channel_name or target_session_id}",
+            f"处理Agent: {target_agent_name}",
             f"处理Agent会话: {target_session_id or '-'}",
             f"提示词预设: {preset}",
             "",
             "文件维度:",
             "- `README.md`：通道说明与目录结构索引",
-            "- `沟通-收件箱.md`：通道沟通收件箱",
             "- `任务/`：后续任务拆解与执行",
-            "- `产出物/沉淀/`：阶段成果与沉淀",
-            "- `反馈/`：反馈与验收回执",
             "- `问题/`：问题留痕与聚合",
-            "- `讨论空间/`：协作讨论与澄清",
+            "- `产出物/材料/`：方案、交付件与过程材料",
+            "- `产出物/沉淀/`：阶段成果与可复用沉淀",
+            "- `已完成/`：已完成任务归档",
+            "- `暂缓/`：暂缓任务归档",
+            "- `已完成/目录.md` 与 `产出物/沉淀/目录.md`：默认索引文件",
             "",
             "边界:",
             "- 仅基于已创建的空框架继续补齐，不要把 direct 模式不该生成的主任务/主对话补出来。",
+            "- `沟通-收件箱.md`、`反馈/`、`答复/`、`讨论空间/` 为历史兼容入口，非默认骨架。",
             "- 信息不足时先回执追问，不要擅自扩展到无关专项。",
             "- 回执请直接给出可执行建议、缺口与下一步。",
             "",
@@ -213,7 +237,7 @@ def build_channel_assist_message_payload(
 
     target_ref: dict[str, str] = {
         "project_id": project_id,
-        "channel_name": target_channel_name or target_alias or created_channel_name,
+        "channel_name": target_channel_name or created_channel_name,
     }
     if target_session_id and looks_like_uuid(target_session_id):
         target_ref["session_id"] = target_session_id
@@ -229,8 +253,8 @@ def build_channel_assist_message_payload(
         "message": message,
         "sender_fields": {
             "sender_type": "agent",
-            "sender_id": source_agent_id or "task_dashboard",
-            "sender_name": origin_agent_name or "任务看板",
+            "sender_id": origin_session_id or source_agent_id or "task_dashboard",
+            "sender_name": origin_agent_alias or origin_agent_name or "任务看板",
         },
         "run_extra_fields": {
             "message_kind": "collab_update",
@@ -251,14 +275,14 @@ def build_channel_assist_message_payload(
             "callback_to": callback_to,
             "sender_agent_ref": sender_agent_ref,
             "target_agent_ref": {
-                "agent_name": target_alias or target_channel_name or target_session_id,
-                "alias": target_alias or target_channel_name or target_session_id,
+                "agent_name": target_agent_name,
+                "alias": target_alias or "",
                 **({"session_id": target_session_id} if target_session_id and looks_like_uuid(target_session_id) else {}),
             },
         },
         "target_session_id": target_session_id,
-        "target_session_channel_name": target_channel_name or target_alias or created_channel_name,
-        "target_session_alias": target_alias or target_channel_name or target_session_id,
+        "target_session_channel_name": target_channel_name or created_channel_name,
+        "target_session_alias": target_alias,
         "target_cli_type": target_cli_type,
         "target_model": target_model,
         "target_reasoning_effort": target_reasoning,
@@ -278,28 +302,14 @@ def build_channel_edit_request_message_payload(
     source_agent_alias: str = "",
     source_agent_id: str = "task_dashboard",
 ) -> dict[str, Any]:
-    session = target_session if isinstance(target_session, Mapping) else {}
-    target_session_id = _trim_text(session.get("sessionId") or session.get("session_id") or session.get("id"), 80)
-    target_channel_name = _trim_text(
-        session.get("channel_name")
-        or session.get("primaryChannel")
-        or session.get("channelName")
-        or session.get("displayChannel")
-        or "",
-        200,
-    )
-    target_alias = _trim_text(
-        session.get("alias")
-        or session.get("display_name")
-        or session.get("displayName")
-        or target_channel_name
-        or target_session_id
-        or "",
-        200,
-    )
-    target_cli_type = _trim_text(session.get("cli_type") or session.get("cliType") or "codex", 40) or "codex"
-    target_model = _trim_text(session.get("model") or "", 120)
-    target_reasoning = _trim_text(session.get("reasoning_effort") or session.get("reasoningEffort") or "", 40)
+    identity = _resolve_target_session_identity(target_session)
+    target_session_id = identity["session_id"]
+    target_channel_name = identity["channel_name"]
+    target_alias = identity["alias"]
+    target_agent_name = identity["agent_name"]
+    target_cli_type = identity["cli_type"]
+    target_model = identity["model"]
+    target_reasoning = identity["reasoning_effort"]
     origin_channel_name = _trim_text(source_channel_name or channel_name, 200)
     origin_session_id = _trim_text(source_session_id, 80)
     origin_agent_name = _trim_text(source_agent_name, 200) or "任务看板"
@@ -313,7 +323,7 @@ def build_channel_edit_request_message_payload(
             f"项目: {project_id}",
             f"当前通道: {channel_name}",
             f"当前说明: {current_desc or channel_name}",
-            f"处理Agent: {target_alias or target_channel_name or target_session_id}",
+            f"处理Agent: {target_agent_name}",
             f"处理Agent会话: {target_session_id or '-'}",
             "",
             "边界:",
@@ -339,7 +349,7 @@ def build_channel_edit_request_message_payload(
 
     target_ref: dict[str, str] = {
         "project_id": project_id,
-        "channel_name": target_channel_name or target_alias or channel_name,
+        "channel_name": target_channel_name or channel_name,
     }
     if target_session_id and looks_like_uuid(target_session_id):
         target_ref["session_id"] = target_session_id
@@ -355,8 +365,8 @@ def build_channel_edit_request_message_payload(
         "message": message,
         "sender_fields": {
             "sender_type": "agent",
-            "sender_id": source_agent_id or "task_dashboard",
-            "sender_name": origin_agent_name or "任务看板",
+            "sender_id": origin_session_id or source_agent_id or "task_dashboard",
+            "sender_name": origin_agent_alias or origin_agent_name or "任务看板",
         },
         "run_extra_fields": {
             "message_kind": "collab_update",
@@ -375,14 +385,14 @@ def build_channel_edit_request_message_payload(
             "callback_to": callback_to,
             "sender_agent_ref": sender_agent_ref,
             "target_agent_ref": {
-                "agent_name": target_alias or target_channel_name or target_session_id,
-                "alias": target_alias or target_channel_name or target_session_id,
+                "agent_name": target_agent_name,
+                "alias": target_alias or "",
                 **({"session_id": target_session_id} if target_session_id and looks_like_uuid(target_session_id) else {}),
             },
         },
         "target_session_id": target_session_id,
-        "target_session_channel_name": target_channel_name or target_alias or channel_name,
-        "target_session_alias": target_alias or target_channel_name or target_session_id,
+        "target_session_channel_name": target_channel_name or channel_name,
+        "target_session_alias": target_alias,
         "target_cli_type": target_cli_type,
         "target_model": target_model,
         "target_reasoning_effort": target_reasoning,

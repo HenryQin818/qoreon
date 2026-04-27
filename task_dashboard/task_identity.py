@@ -6,6 +6,7 @@ import secrets
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote
 
 from .helpers import atomic_write_text, now_iso, read_json_file
 from .utils import safe_read_text
@@ -27,18 +28,27 @@ def generate_task_id(prefix: str = _TASK_ID_PREFIX) -> str:
 
 
 def normalize_task_id(value: Any) -> str:
-    return str(value or "").strip()
+    text = str(value or "").strip()
+    if text in {"", "-", "—", '""', "''", "未关联任务"}:
+        return ""
+    if text.lower() in {"none", "null", "undefined"}:
+        return ""
+    return text
 
 
 def normalize_task_path(value: Any, *, repo_root: Path | None = None) -> str:
     text = str(value or "").strip()
     if not text or text == "未关联任务":
         return ""
-    text = text.replace("\\", "/").strip()
+    text = unquote(text).replace("\\", "/").strip()
     if text.startswith("task:"):
         text = text[5:].strip()
     if repo_root is not None:
         root = Path(repo_root).expanduser().resolve()
+        root_text = str(root).replace("\\", "/").strip("/")
+        text_without_leading_slash = text.strip("/")
+        if root_text and text_without_leading_slash.startswith(root_text + "/"):
+            text = text_without_leading_slash[len(root_text) + 1 :]
         try:
             path = Path(text)
             if path.is_absolute():
@@ -374,6 +384,7 @@ def _ensure_task_identity_for_file(
         "task_path": resolved_task_path,
         "task_id": task_id,
         "parent_task_id": parent_task_id,
+        "created_at": created_at,
     }
 
 
@@ -531,6 +542,7 @@ def resolve_task_reference(
         )
         resolved_task_id = normalize_task_id(identity.get("task_id") or normalized_task_id)
         resolved_parent_task_id = normalize_task_id(identity.get("parent_task_id"))
+        resolved_created_at = str(identity.get("created_at") or "").strip()
         if resolved_task_id or found_norm:
             if normalized_path and found_norm and normalized_path != found_norm:
                 record_task_move(
@@ -555,17 +567,18 @@ def resolve_task_reference(
             "task_path": found_norm or normalized_path,
             "task_id": resolved_task_id,
             "parent_task_id": resolved_parent_task_id,
+            "created_at": resolved_created_at,
             "matched_by": matched_by,
         }
+
+    if normalized_path and _resolve_task_file(root, normalized_path) is not None:
+        return _finalize(normalized_path, matched_by="task_path")
 
     if normalized_task_id:
         row = task_ids.get(normalized_task_id) if isinstance(task_ids, dict) else None
         candidate = normalize_task_path((row or {}).get("current_path"), repo_root=root) if isinstance(row, dict) else ""
         if candidate and _resolve_task_file(root, candidate) is not None:
             return _finalize(candidate, matched_by="task_id_state")
-
-    if normalized_path and _resolve_task_file(root, normalized_path) is not None:
-        return _finalize(normalized_path, matched_by="task_path")
 
     if normalized_path:
         candidate = _follow_path_aliases(path_aliases if isinstance(path_aliases, dict) else {}, normalized_path)
@@ -587,11 +600,13 @@ def resolve_task_reference(
             "task_path": normalized_path,
             "task_id": normalized_task_id,
             "parent_task_id": "",
+            "created_at": "",
             "matched_by": "unresolved_path",
         }
     return {
         "task_path": "",
         "task_id": normalized_task_id,
         "parent_task_id": "",
+        "created_at": "",
         "matched_by": "missing",
     }

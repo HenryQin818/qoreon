@@ -54,7 +54,7 @@
           value: "project_privileged_full",
           tone: "warn",
           optionLabel: "project_privileged_full · 完全放开（当前用户态）",
-          summary: "后续新发起的 CCB 执行会按当前用户态直接放开，不再继续按目录补权限，默认覆盖项目、Codex 会话、Service Hub、LaunchAgents 和本机管理动作。",
+          summary: "后续新发起的 CCB 执行会按当前用户态直接放开，不再继续按目录补权限，默认覆盖项目、Codex 会话、本地服务集成和本机管理动作。",
           effect: "适合你要直接开干的场景；选中后新 run 不再走细碎权限补救，但不会回头改变已在运行的会话。",
         };
       }
@@ -201,7 +201,18 @@
       };
     }
 
-    function projectShareSpacePageHref(projectId, draft) {
+    function normalizeProjectShareOrigin(raw) {
+      const text = String(raw || "").trim();
+      if (!text) return "";
+      try {
+        const target = /^https?:\/\//i.test(text) ? text : ("http://" + text.replace(/^\/+/, ""));
+        return new URL(target).origin;
+      } catch (_error) {
+        return "";
+      }
+    }
+
+    function projectSharePagePath() {
       const links = (DATA && DATA.links && typeof DATA.links === "object") ? DATA.links : {};
       const base = String(firstNonEmptyText([
         links.task_page,
@@ -212,8 +223,26 @@
         DATA && DATA.share_space_page,
         "/share/project-task-dashboard.html",
       ]) || "/share/project-task-dashboard.html").trim();
-      const href = /^https?:\/\//i.test(base) || base.startsWith("/") ? base : "/share/" + base.replace(/^\/+/, "");
-      const url = new URL(href, window.location.origin);
+      if (/^https?:\/\//i.test(base)) {
+        try {
+          const parsed = new URL(base);
+          return String(parsed.pathname || "/share/project-task-dashboard.html").trim() || "/share/project-task-dashboard.html";
+        } catch (_error) {
+          return "/share/project-task-dashboard.html";
+        }
+      }
+      return base.startsWith("/") ? base : "/share/" + base.replace(/^\/+/, "");
+    }
+
+    function projectShareCurrentOrigin() {
+      const health = (PROJECT_CONFIG_UI.liveHealth && typeof PROJECT_CONFIG_UI.liveHealth === "object") ? PROJECT_CONFIG_UI.liveHealth : {};
+      const liveOrigin = normalizeProjectShareOrigin(firstNonEmptyText([health.publicOrigin, health.public_origin]));
+      if (liveOrigin) return liveOrigin;
+      return normalizeProjectShareOrigin(window.location.origin) || window.location.origin;
+    }
+
+    function projectShareSpacePageHref(projectId, draft) {
+      const url = new URL(projectSharePagePath(), projectShareCurrentOrigin());
       url.searchParams.set("project_id", String(projectId || "").trim());
       url.searchParams.set("share_id", String((draft && draft.share_id) || "").trim());
       if (draft && draft.access_token) url.searchParams.set("token", String(draft.access_token).trim());
@@ -480,6 +509,16 @@
         throw new Error(detail || ("HTTP " + resp.status));
       }
       PROJECT_CONFIG_UI.liveHealth = await resp.json().catch(() => ({}));
+      return PROJECT_CONFIG_UI.liveHealth;
+    }
+
+    async function refreshProjectShareRuntimeHealth() {
+      try {
+        await fetchProjectConfigHealth(true);
+      } catch (_error) {
+        return PROJECT_CONFIG_UI.liveHealth;
+      }
+      if (PROJECT_CONFIG_UI.open) renderProjectConfigDrawer();
       return PROJECT_CONFIG_UI.liveHealth;
     }
 
@@ -907,6 +946,7 @@
       PROJECT_CONFIG_UI.error = "";
       PROJECT_CONFIG_UI.note = "";
       renderProjectConfigDrawer();
+      void refreshProjectShareRuntimeHealth();
     }
 
     function closeProjectShareEditor() {
@@ -1500,7 +1540,10 @@
       PROJECT_CONFIG_UI.activeSection = String((opts && opts.section) || "config").trim() || "config";
       PROJECT_CONFIG_UI.projectId = pid;
       renderProjectConfigDrawer();
-      void loadProjectConfigData(pid, { force: false, preserveMessage: true });
+      void loadProjectConfigData(pid, {
+        force: PROJECT_CONFIG_UI.activeSection === "share",
+        preserveMessage: true,
+      });
     }
 
     function openShareProjectDrawer() {

@@ -912,8 +912,13 @@
 
     function conversationTaskTitleText(row) {
       const raw = String(firstNonEmptyText([
+        row && row.title,
         row && row.task_title,
+        row && row.taskTitle,
+        row && row.name,
+        row && row.path,
         row && row.task_path,
+        row && row.taskPath,
       ]) || "").trim();
       return raw ? shortTitle(raw) : "未命名任务";
     }
@@ -928,6 +933,10 @@
     }
 
     function cloneConversationTaskRoleMember(rawMember) {
+      if (typeof rawMember === "string") {
+        const text = String(rawMember || "").trim();
+        return text ? { display_name: text, alias: text, agent_name: text } : null;
+      }
       const member = (rawMember && typeof rawMember === "object") ? rawMember : null;
       return member ? { ...member } : null;
     }
@@ -943,12 +952,15 @@
 
     function conversationTaskRoleMemberDisplayMeta(rawMember) {
       const member = (rawMember && typeof rawMember === "object") ? rawMember : {};
-      const text = String(firstNonEmptyText([
+      const normalizeRoleText = typeof normalizeTaskRoleMemberDisplayText === "function"
+        ? normalizeTaskRoleMemberDisplayText
+        : (value) => String(value == null ? "" : value).replace(/`+/g, "").replace(/\s+/g, " ").trim();
+      const text = normalizeRoleText(firstNonEmptyText([
         member.display_name,
         member.agent_alias,
         member.agent_name,
         member.name,
-      ]) || "待补充").trim() || "待补充";
+      ]) || "待补充") || "待补充";
       const metaParts = [];
       const channelText = String(member.channel_name || "").trim();
       const responsibilityText = String(member.responsibility || "").trim();
@@ -960,10 +972,158 @@
       };
     }
 
+    function conversationTaskIdentityText(value) {
+      return String(value || "")
+        .trim()
+        .toLowerCase()
+        .replace(/[`"'“”‘’]/g, "")
+        .replace(/\s+/g, "");
+    }
+
+    function pushConversationTaskIdentityText(target, value) {
+      const raw = String(value || "").trim();
+      if (!raw) return;
+      const normalized = conversationTaskIdentityText(raw);
+      if (normalized) target.add(normalized);
+      raw.split(/\s*\/\s*/).forEach((part) => {
+        const text = String(part || "").trim();
+        if (!text || /^session[_\s-]?id\s*=/i.test(text)) return;
+        const partNormalized = conversationTaskIdentityText(text);
+        if (partNormalized) target.add(partNormalized);
+      });
+    }
+
+    function conversationTaskRoleMemberIdentity(rawMember) {
+      const member = typeof rawMember === "string"
+        ? { display_name: rawMember, alias: rawMember, agent_name: rawMember }
+        : ((rawMember && typeof rawMember === "object") ? rawMember : {});
+      const meta = typeof taskRoleMemberDisplayMeta === "function"
+        ? taskRoleMemberDisplayMeta(member)
+        : conversationTaskRoleMemberDisplayMeta(member);
+      const sessionIds = new Set();
+      [
+        member.session_id,
+        member.sessionId,
+        meta && meta.sessionId,
+      ].forEach((value) => {
+        const text = String(value || "").trim();
+        if (text) sessionIds.add(text);
+      });
+      const agentNames = new Set();
+      [
+        member.display_name,
+        member.displayName,
+        member.agent_alias,
+        member.alias,
+        member.agent_name,
+        member.agentName,
+        member.name,
+        meta && meta.text,
+      ].forEach((value) => pushConversationTaskIdentityText(agentNames, value));
+      const channelNames = new Set();
+      [
+        member.channel_name,
+        member.channelName,
+        meta && meta.channelName,
+      ].forEach((value) => pushConversationTaskIdentityText(channelNames, value));
+      const fullNames = new Set(agentNames);
+      channelNames.forEach((channel) => {
+        agentNames.forEach((agent) => {
+          const composite = channel && agent ? (channel + "/" + agent) : "";
+          if (composite) fullNames.add(composite);
+        });
+      });
+      return { sessionIds, agentNames, channelNames, fullNames };
+    }
+
+    function conversationTaskSessionIdentity(session, ctx = {}) {
+      const s = (session && typeof session === "object") ? session : {};
+      const currentCtx = (ctx && typeof ctx === "object") ? ctx : {};
+      const sessionIds = new Set();
+      [
+        currentCtx.sessionId,
+        currentCtx.session_id,
+        s.sessionId,
+        s.session_id,
+        s.id,
+      ].forEach((value) => {
+        const text = String(value || "").trim();
+        if (text) sessionIds.add(text);
+      });
+      const agentNames = new Set();
+      [
+        typeof conversationAgentName === "function" ? conversationAgentName(s) : "",
+        s.alias,
+        s.display_name,
+        s.displayName,
+        s.agent_name,
+        s.agentName,
+      ].forEach((value) => pushConversationTaskIdentityText(agentNames, value));
+      const channelNames = new Set();
+      [
+        currentCtx.channelName,
+        currentCtx.channel_name,
+        s.channel_name,
+        s.channelName,
+        s.primaryChannel,
+        s.name,
+      ].forEach((value) => pushConversationTaskIdentityText(channelNames, value));
+      const fullNames = new Set(agentNames);
+      channelNames.forEach((channel) => {
+        agentNames.forEach((agent) => {
+          const composite = channel && agent ? (channel + "/" + agent) : "";
+          if (composite) fullNames.add(composite);
+        });
+      });
+      return { sessionIds, agentNames, channelNames, fullNames };
+    }
+
+    function conversationTaskIdentityIntersects(left, right) {
+      const a = left instanceof Set ? left : new Set();
+      const b = right instanceof Set ? right : new Set();
+      for (const value of a) {
+        if (b.has(value)) return true;
+      }
+      return false;
+    }
+
+    function conversationTaskMainOwnerMembers(raw) {
+      const item = (raw && typeof raw === "object") ? raw : {};
+      const responsibility = item.responsibilityModel && typeof item.responsibilityModel === "object"
+        ? item.responsibilityModel
+        : (item.responsibility_model && typeof item.responsibility_model === "object" ? item.responsibility_model : null);
+      const candidates = [
+        item.main_owner,
+        item.mainOwner,
+        responsibility && responsibility.main_owner,
+        responsibility && responsibility.mainOwner,
+      ];
+      const mainOwner = candidates.find((value) => {
+        if (Array.isArray(value)) return value.length > 0;
+        if (value && typeof value === "object") return true;
+        return String(value || "").trim();
+      });
+      if (!mainOwner) return [];
+      return (Array.isArray(mainOwner) ? mainOwner : [mainOwner]).filter(Boolean);
+    }
+
+    function conversationTaskMainOwnerMatchesSession(row, session, ctx = {}) {
+      const owners = conversationTaskMainOwnerMembers(row);
+      if (!owners.length) return false;
+      const sessionIdentity = conversationTaskSessionIdentity(session, ctx);
+      return owners.some((owner) => {
+        const ownerIdentity = conversationTaskRoleMemberIdentity(owner);
+        if (conversationTaskIdentityIntersects(ownerIdentity.sessionIds, sessionIdentity.sessionIds)) return true;
+        if (conversationTaskIdentityIntersects(ownerIdentity.agentNames, sessionIdentity.agentNames)) return true;
+        if (conversationTaskIdentityIntersects(ownerIdentity.fullNames, sessionIdentity.fullNames)) return true;
+        return false;
+      });
+    }
+
     function conversationTaskResponsibilityModel(raw) {
       const item = (raw && typeof raw === "object") ? raw : {};
       const model = {
-        main_owner: cloneConversationTaskRoleMember(item.main_owner),
+        main_owner: cloneConversationTaskRoleMember(conversationTaskMainOwnerMembers(item)[0]),
         collaborators: Array.isArray(item.collaborators) ? item.collaborators.map(cloneConversationTaskRoleMember).filter(Boolean) : [],
         validators: Array.isArray(item.validators) ? item.validators.map(cloneConversationTaskRoleMember).filter(Boolean) : [],
         challengers: Array.isArray(item.challengers) ? item.challengers.map(cloneConversationTaskRoleMember).filter(Boolean) : [],
@@ -1320,14 +1480,19 @@
         next_owner: item.next_owner && typeof item.next_owner === "object"
           ? { ...item.next_owner }
           : item.next_owner || null,
-        main_owner: cloneConversationTaskRoleMember(item.main_owner),
+        main_owner: cloneConversationTaskRoleMember(conversationTaskMainOwnerMembers(item)[0]),
         collaborators: Array.isArray(item.collaborators) ? item.collaborators.map(cloneConversationTaskRoleMember).filter(Boolean) : [],
         validators: Array.isArray(item.validators) ? item.validators.map(cloneConversationTaskRoleMember).filter(Boolean) : [],
         challengers: Array.isArray(item.challengers) ? item.challengers.map(cloneConversationTaskRoleMember).filter(Boolean) : [],
         backup_owners: Array.isArray(item.backup_owners) ? item.backup_owners.map(cloneConversationTaskRoleMember).filter(Boolean) : [],
         management_slot: Array.isArray(item.management_slot) ? item.management_slot.map(cloneConversationTaskRoleMember).filter(Boolean) : [],
         custom_roles: Array.isArray(item.custom_roles) ? item.custom_roles.map(cloneConversationTaskCustomRole).filter(Boolean) : [],
-        task_summary_text: String(item.task_summary_text || "").trim(),
+        task_summary_text: String(firstNonEmptyText([item.task_summary_text, item.summary, item.excerpt]) || "").trim(),
+        task_title: String(firstNonEmptyText([item.task_title, item.taskTitle, item.title, item.name]) || "").trim(),
+        task_path: String(firstNonEmptyText([item.task_path, item.taskPath, item.path]) || "").trim(),
+        task_primary_status: String(firstNonEmptyText([item.task_primary_status, item.primary_status, item.status]) || "").trim(),
+        latest_action_text: String(firstNonEmptyText([item.latest_action_text, item.latestActionText]) || "").trim(),
+        latest_action_at: String(firstNonEmptyText([item.latest_action_at, item.latestActionAt, item.updated_at]) || "").trim(),
       };
     }
 
@@ -1340,6 +1505,7 @@
       return normalizeConversationTaskStableId(firstNonEmptyText([
         item && item.task_id,
         item && item.taskId,
+        item && item.id,
       ]) || "");
     }
 
@@ -1348,6 +1514,7 @@
       return String(firstNonEmptyText([
         item && item.task_path,
         item && item.taskPath,
+        item && item.path,
       ]) || "").trim();
     }
 
@@ -1585,13 +1752,21 @@
       if (!titleSource) return null;
       const taskId = String(firstNonEmptyText([
         matchedRef && matchedRef.task_id,
+        matchedRef && matchedRef.taskId,
+        matchedRef && matchedRef.id,
         latestAction && latestAction.task_id,
         fallback && fallback.task_id,
+        fallback && fallback.taskId,
+        fallback && fallback.id,
       ]) || "").trim();
       const taskPath = String(firstNonEmptyText([
         matchedRef && matchedRef.task_path,
+        matchedRef && matchedRef.taskPath,
+        matchedRef && matchedRef.path,
         latestAction && latestAction.task_path,
         fallback && fallback.task_path,
+        fallback && fallback.taskPath,
+        fallback && fallback.path,
       ]) || "").trim();
       const relation = String(firstNonEmptyText([
         matchedRef && matchedRef.relation,
@@ -1607,7 +1782,12 @@
       const relationLabel = conversationTaskRelationLabel(relation);
       const statusText = String(firstNonEmptyText([
         matchedRef && matchedRef.task_primary_status,
+        matchedRef && matchedRef.primary_status,
+        matchedRef && matchedRef.status,
         latestAction && latestAction.status,
+        fallback && fallback.task_primary_status,
+        fallback && fallback.primary_status,
+        fallback && fallback.status,
       ]) || "").trim();
       const latestActionLabel = conversationTaskActionLabel(firstNonEmptyText([
         latestAction && latestAction.action_kind,
@@ -1616,10 +1796,18 @@
       const latestActionText = String(firstNonEmptyText([
         latestAction && latestAction.action_text,
         matchedRef && matchedRef.latest_action_text,
+        matchedRef && matchedRef.latestActionText,
+        fallback && fallback.latest_action_text,
+        fallback && fallback.latestActionText,
       ]) || "").trim();
       const latestActionAt = String(firstNonEmptyText([
         latestAction && latestAction.at,
         matchedRef && matchedRef.latest_action_at,
+        matchedRef && matchedRef.latestActionAt,
+        matchedRef && matchedRef.updated_at,
+        fallback && fallback.latest_action_at,
+        fallback && fallback.latestActionAt,
+        fallback && fallback.updated_at,
       ]) || "").trim();
       const latestActionSource = String(firstNonEmptyText([
         latestAction && latestAction.source_agent_name,
@@ -1633,7 +1821,11 @@
       const responsibilityModel = conversationTaskResponsibilityModel(matchedRef || fallback || null);
       const taskSummaryText = String(firstNonEmptyText([
         matchedRef && matchedRef.task_summary_text,
+        matchedRef && matchedRef.summary,
+        matchedRef && matchedRef.excerpt,
         fallback && fallback.task_summary_text,
+        fallback && fallback.summary,
+        fallback && fallback.excerpt,
       ]) || "").trim();
       const taskSummaryPlaceholder = "任务一句话说明待接入正式真源。";
       const whyParts = [];
@@ -1697,6 +1889,9 @@
       if (mode === "markdown" && typeof markdownToHtml === "function") {
         body.classList.add("is-markdown");
         body.innerHTML = markdownToHtml(String(item.content || ""));
+        if (typeof enhanceMessageInteractiveObjects === "function") {
+          enhanceMessageInteractiveObjects(body, { force: true });
+        }
         return body;
       }
       body.classList.add("is-plain");
@@ -1758,6 +1953,7 @@
     }
 
     function closeConversationTaskDetailViewer() {
+      if (typeof closeUnifiedTaskDetail === "function") closeUnifiedTaskDetail({ notify: false });
       resetConversationTaskDetailViewer();
       renderConversationTaskDetailViewer();
     }
@@ -1779,7 +1975,7 @@
         currentConvComposerDraftKey(),
       ]) || "").trim();
       viewer.taskId = conversationTaskStableId(item);
-      viewer.taskPath = String(item && item.task_path || "").trim();
+      viewer.taskPath = conversationTaskStablePath(item);
       viewer.groupTitle = conversationTaskGroupLabel(opts.groupTitle || "", item && item.relation);
       viewer.showActionContext = false;
       viewer.fallbackRef = cloneConversationTaskDetailFallback(item);
@@ -1802,6 +1998,33 @@
     function buildConversationTaskRefCard(row, opts = {}) {
       const item = (row && typeof row === "object") ? row : {};
       const compact = !!opts.compact;
+      const relationLabel = String(item.relation_label || conversationTaskRelationLabel(item.relation) || "").trim();
+      if (typeof buildUnifiedTaskListCard === "function") {
+        const activityCountText = conversationTaskActivityCountText(item.activity_count);
+        const metaItems = [];
+        if (activityCountText) metaItems.push([activityCountText, "muted"]);
+        if (item.latest_action_kind) {
+          metaItems.push([
+            conversationTaskActionLabel(item.latest_action_kind),
+            conversationTaskActionTone(item.latest_action_kind),
+          ]);
+        }
+        return buildUnifiedTaskListCard({
+          ...item,
+          title: conversationTaskTitleText(item),
+          latest_action_text: String(item.latest_action_text || "").trim() || "最近暂无补充说明。",
+        }, {
+          source: "conversation-task-panel",
+          projectId: typeof STATE !== "undefined" && STATE ? STATE.project : "",
+          groupTitle: relationLabel && relationLabel !== "当前任务" ? relationLabel : "",
+          compact: true,
+          panel: true,
+          metaItems,
+          onOpen: () => {
+            if (typeof opts.onOpenDetail === "function") opts.onOpenDetail(item, opts);
+          },
+        });
+      }
       const card = el("div", { class: "convtaskcard" + (compact ? " compact" : "") });
       const titleRow = el("div", { class: "convtaskcard-title-row" });
       titleRow.appendChild(el("div", {
@@ -1812,7 +2035,6 @@
       if (item.task_primary_status) {
         titleRow.appendChild(chip(String(item.task_primary_status || ""), conversationTaskStatusTone(item.task_primary_status)));
       }
-      const relationLabel = String(item.relation_label || conversationTaskRelationLabel(item.relation) || "").trim();
       if (relationLabel && relationLabel !== "当前任务") {
         titleRow.appendChild(chip(relationLabel, "muted"));
       }
@@ -2002,6 +2224,237 @@
       };
     }
 
+    function conversationTaskOwnedStatusText(row) {
+      const item = (row && typeof row === "object") ? row : {};
+      if (typeof resolveTaskPrimaryStatusText === "function") {
+        return resolveTaskPrimaryStatusText(item, "待办") || "待办";
+      }
+      const text = String(firstNonEmptyText([
+        item.task_primary_status,
+        item.primary_status,
+        item.status,
+      ]) || "").trim();
+      if (!text) return "待办";
+      if (/(?:已完成|完成|done)/i.test(text)) return "已完成";
+      if (/(?:待验收|验收|review)/i.test(text)) return "待验收";
+      if (/(?:进行中|处理中|running|in[_-]?progress)/i.test(text)) return "进行中";
+      if (/(?:待开始|待办|待处理|todo|pending|queued)/i.test(text)) return "待办";
+      return text;
+    }
+
+    function conversationTaskOwnedStatusRank(row) {
+      const status = conversationTaskOwnedStatusText(row);
+      if (status === "进行中") return 10;
+      if (status === "待验收") return 20;
+      if (status === "待办" || status === "待开始") return 30;
+      if (status === "已完成") return 90;
+      return 70;
+    }
+
+    function conversationTaskOwnedIsActive(row) {
+      const status = conversationTaskOwnedStatusText(row);
+      return status === "进行中" || status === "待验收" || status === "待办" || status === "待开始";
+    }
+
+    function conversationTaskOwnedIsDone(row) {
+      const status = conversationTaskOwnedStatusText(row);
+      return status === "已完成" || /(?:已完成|完成|done)/i.test(String(row && row.status || ""));
+    }
+
+    function conversationTaskOwnedTime(row) {
+      const item = (row && typeof row === "object") ? row : {};
+      const value = firstNonEmptyText([
+        item.latest_action_at,
+        item.latestActionAt,
+        item.updated_at,
+        item.updatedAt,
+        item.created_at,
+        item.createdAt,
+      ]) || "";
+      if (typeof toTimeNum === "function") return toTimeNum(value);
+      const parsed = Date.parse(String(value || ""));
+      return Number.isFinite(parsed) ? parsed : 0;
+    }
+
+    function conversationTaskOwnedStableKey(row) {
+      const item = (row && typeof row === "object") ? row : {};
+      const taskId = typeof taskStableIdOfItem === "function"
+        ? taskStableIdOfItem(item)
+        : String(firstNonEmptyText([item.task_id, item.taskId, item.id]) || "").trim();
+      if (taskId) return "task_id::" + taskId;
+      const taskPath = conversationTaskStablePath(item);
+      if (taskPath) return "task_path::" + taskPath;
+      return "";
+    }
+
+    function conversationTaskOwnedForceTaskType(row, explicitType = "") {
+      const explicit = String(explicitType || "").trim();
+      if (explicit) return explicit;
+      const item = (row && typeof row === "object") ? row : {};
+      if (typeof unifiedTaskDetailTypeKey === "function") {
+        const typeKey = String(unifiedTaskDetailTypeKey(item) || "").trim();
+        if (typeKey) return typeKey;
+      }
+      if (item._isSubtask === true || item.is_subtask === true || item.isSubtask === true) return "child";
+      if (firstNonEmptyText([item.parent_task_id, item.parentTaskId, item.parent_task_path, item.parentTaskPath])) return "child";
+      return "parent";
+    }
+
+    function normalizeConversationAgentOwnedTaskRow(raw, forceType = "") {
+      const item = (raw && typeof raw === "object") ? raw : {};
+      const statusText = conversationTaskOwnedStatusText(item);
+      const forceTaskType = conversationTaskOwnedForceTaskType(item, forceType || item.__forceTaskType);
+      return {
+        ...item,
+        relation: "main_owner",
+        relation_label: "当前主负责",
+        __groupTitle: "当前主负责",
+        __forceTaskType: forceTaskType,
+        task_id: String(firstNonEmptyText([item.task_id, item.taskId, item.id]) || "").trim(),
+        task_path: conversationTaskStablePath(item),
+        task_title: conversationTaskTitleText(item),
+        task_primary_status: statusText,
+        task_summary_text: conversationTaskOwnedSnippet([item.task_summary_text, item.summary, item.excerpt]),
+        latest_action_text: conversationTaskOwnedSnippet([item.latest_action_text, item.latestActionText, item.summary, item.excerpt]),
+        latest_action_at: String(firstNonEmptyText([item.latest_action_at, item.latestActionAt, item.updated_at, item.updatedAt]) || "").trim(),
+      };
+    }
+
+    function conversationTaskOwnedForceTypeMap(projectId) {
+      const map = new Map();
+      if (typeof buildTaskGroups !== "function") return map;
+      const groups = buildTaskGroups(projectId);
+      (Array.isArray(groups) ? groups : []).forEach((group) => {
+        const master = group && group.master;
+        const masterKey = conversationTaskOwnedStableKey(master);
+        if (masterKey) map.set(masterKey, "parent");
+        (Array.isArray(group && group.children) ? group.children : []).forEach((child) => {
+          const childKey = conversationTaskOwnedStableKey(child);
+          if (childKey) map.set(childKey, "child");
+        });
+      });
+      return map;
+    }
+
+    function conversationAgentOwnedTaskOwnerLabel(session, ctx = {}) {
+      const s = (session && typeof session === "object") ? session : {};
+      return String(firstNonEmptyText([
+        typeof conversationAgentName === "function" ? conversationAgentName(s) : "",
+        s.alias,
+        s.display_name,
+        s.displayName,
+        ctx && ctx.channelName,
+        s.name,
+      ]) || "").trim() || "当前 Agent";
+    }
+
+    function conversationTaskOwnedSnippet(values, fallback = "") {
+      const text = String(firstNonEmptyText(Array.isArray(values) ? values : [values]) || fallback || "").trim();
+      if (!text) return "";
+      if (typeof normalizeTaskSummarySnippet === "function") return normalizeTaskSummarySnippet(text, 120);
+      return text.length > 120 ? (text.slice(0, 119).trimEnd() + "…") : text;
+    }
+
+    function resolveConversationAgentOwnedTaskPayload(payload = {}) {
+      const src = (payload && typeof payload === "object") ? payload : {};
+      const ctx = (src.ctx && typeof src.ctx === "object") ? src.ctx : currentConversationCtx();
+      const sessionId = String((ctx && ctx.sessionId) || "").trim();
+      const currentSession = sessionId ? findConversationSessionById(sessionId) : null;
+      const projectId = String(firstNonEmptyText([
+        ctx && ctx.projectId,
+        typeof STATE !== "undefined" && STATE ? STATE.project : "",
+        typeof DATA !== "undefined" && DATA ? DATA.project_id : "",
+      ]) || "").trim();
+      if (projectId && typeof ensureProjectItemsLoaded === "function") ensureProjectItemsLoaded(projectId);
+      const loading = projectId && typeof isProjectItemsLoading === "function"
+        ? isProjectItemsLoading(projectId)
+        : !!src.loading;
+      const errorText = projectId && typeof itemLoadErrorForProject === "function"
+        ? itemLoadErrorForProject(projectId)
+        : String(src.error || "").trim();
+      const pool = projectId && typeof itemsForProject === "function"
+        ? itemsForProject(projectId)
+        : [];
+      const forceTypeMap = conversationTaskOwnedForceTypeMap(projectId);
+      const rows = [];
+      const seen = new Set();
+      (Array.isArray(pool) ? pool : []).forEach((item) => {
+        if (typeof isTaskItem === "function" ? !isTaskItem(item) : String(item && item.type || "") !== "任务") return;
+        if (!conversationTaskMainOwnerMatchesSession(item, currentSession, ctx)) return;
+        const key = conversationTaskOwnedStableKey(item);
+        const row = normalizeConversationAgentOwnedTaskRow(item, forceTypeMap.get(key) || "");
+        if (key && seen.has(key)) return;
+        if (key) seen.add(key);
+        rows.push(row);
+      });
+      rows.sort((a, b) => {
+        const rankA = conversationTaskOwnedStatusRank(a);
+        const rankB = conversationTaskOwnedStatusRank(b);
+        if (rankA !== rankB) return rankA - rankB;
+        const timeA = conversationTaskOwnedTime(a);
+        const timeB = conversationTaskOwnedTime(b);
+        if (timeA !== timeB) return timeB - timeA;
+        return conversationTaskTitleText(a).localeCompare(conversationTaskTitleText(b), "zh-Hans-CN");
+      });
+      const activeRows = rows.filter(conversationTaskOwnedIsActive);
+      const doneRows = rows.filter(conversationTaskOwnedIsDone);
+      const inactiveRows = rows.filter((row) => !conversationTaskOwnedIsActive(row) && !conversationTaskOwnedIsDone(row));
+      return {
+        ctx,
+        projectId,
+        sessionId,
+        ownerLabel: conversationAgentOwnedTaskOwnerLabel(currentSession, ctx),
+        loading,
+        errorText,
+        rows,
+        activeRows,
+        doneRows,
+        inactiveRows,
+      };
+    }
+
+    function buildConversationAgentOwnedTaskCard(row, opts = {}) {
+      const item = normalizeConversationAgentOwnedTaskRow(row);
+      if (typeof buildUnifiedTaskListCard === "function") {
+        return buildUnifiedTaskListCard(item, {
+          source: "conversation-agent-main-owner-task-panel",
+          projectId: String(opts.projectId || item.project_id || (typeof STATE !== "undefined" && STATE ? STATE.project : "") || "").trim(),
+          groupTitle: "当前主负责",
+          forceTaskType: item.__forceTaskType,
+          compact: true,
+          panel: true,
+          latestText: item.latest_action_text || item.task_summary_text || "当前任务暂无摘要。",
+          updatedAt: item.latest_action_at || item.updated_at || item.updatedAt,
+          onOpen: () => {
+            openConversationTaskDetailViewer(item, {
+              sessionKey: PCONV.taskDrawerSessionKey,
+              groupTitle: "当前主负责",
+            });
+          },
+        });
+      }
+      return buildConversationTaskRefCard(item, {
+        compact: true,
+        onOpenDetail: () => openConversationTaskDetailViewer(item, {
+          sessionKey: PCONV.taskDrawerSessionKey,
+          groupTitle: "当前主负责",
+        }),
+      });
+    }
+
+    function buildConversationAgentOwnedCollapsedNote(view) {
+      const doneCount = Array.isArray(view && view.doneRows) ? view.doneRows.length : 0;
+      const inactiveCount = Array.isArray(view && view.inactiveRows) ? view.inactiveRows.length : 0;
+      if (!doneCount && !inactiveCount) return null;
+      const parts = [];
+      if (doneCount) parts.push("已完成主负责任务 " + doneCount + " 项已收起");
+      if (inactiveCount) parts.push("非当前态主负责任务 " + inactiveCount + " 项不默认平铺");
+      return el("div", {
+        class: "convtask-owned-collapsed-note",
+        text: parts.join("；") + "。",
+      });
+    }
+
     function buildConversationTaskSummaryCard(data, opts = {}) {
       const view = (data && typeof data === "object") ? data : {};
       const tracking = view.tracking || null;
@@ -2010,6 +2463,31 @@
       const currentRef = view.currentRef || null;
       const card = el("div", { class: "convtasksummary-card" });
       if (currentRef) {
+        if (typeof buildUnifiedTaskListCard === "function") {
+          const trackingTime = tracking && tracking.updated_at
+            ? ("tracking " + (compactDateTime(tracking.updated_at) || shortDateTime(tracking.updated_at)))
+            : "";
+          const activityCountText = conversationTaskActivityCountText(currentRef.activity_count);
+          const metaItems = [];
+          if (activityCountText) metaItems.push([activityCountText, "muted"]);
+          if (trackingTime) metaItems.push([trackingTime, "muted"]);
+          return buildUnifiedTaskListCard({
+            ...currentRef,
+            title: conversationTaskTitleText(currentRef),
+            latest_action_text: String(currentRef.latest_action_text || "").trim() || "当前任务已建立，最近活动待补充。",
+          }, {
+            source: "conversation-current-task-panel",
+            projectId: typeof STATE !== "undefined" && STATE ? STATE.project : "",
+            groupTitle: "当前任务",
+            forceTaskType: "parent",
+            compact: true,
+            panel: true,
+            metaItems,
+            onOpen: () => {
+              if (typeof opts.onOpenDetail === "function") opts.onOpenDetail(currentRef, { groupTitle: "当前任务" });
+            },
+          });
+        }
         const main = el("div", { class: "convtasksummary-main" });
         main.appendChild(el("div", { class: "convtasksummary-label", text: "当前任务" }));
         const titleRow = el("div", { class: "convtasksummary-title-row" });
@@ -2174,6 +2652,63 @@
       return (Array.isArray(list) ? list : [])
         .map((item, index) => conversationTimelineStableAttachmentKey(item, index))
         .join("||");
+    }
+
+    function conversationGeneratedAttachmentRole(raw) {
+      const att = (raw && typeof raw === "object") ? raw : null;
+      if (!att) return "";
+      return String(firstNonEmptyText([
+        att.attachment_role,
+        att.attachmentRole,
+      ]) || "").trim().toLowerCase();
+    }
+
+    function isConversationGeneratedAssistantMediaAttachment(raw) {
+      const att = (raw && typeof raw === "object") ? raw : null;
+      if (!att) return false;
+      const attachmentRole = conversationGeneratedAttachmentRole(att);
+      if (attachmentRole && attachmentRole !== "assistant" && attachmentRole !== "agent") return false;
+      const generatedBy = String(firstNonEmptyText([
+        att.generatedBy,
+        att.generated_by,
+      ]) || "").trim().toLowerCase();
+      const source = String(firstNonEmptyText([
+        att.source,
+      ]) || "").trim().toLowerCase();
+      if (generatedBy !== "codex_imagegen" && source !== "generated") return false;
+      return true;
+    }
+
+    function isConversationGeneratedAssistantImageAttachment(raw) {
+      const att = (raw && typeof raw === "object") ? raw : null;
+      if (!att) return false;
+      if (!isConversationGeneratedAssistantMediaAttachment(att)) return false;
+      return typeof isImageAttachment === "function" ? !!isImageAttachment(att) : false;
+    }
+
+    function collectConversationGeneratedAssistantImageAttachments(list) {
+      return (Array.isArray(list) ? list : []).filter((item) => isConversationGeneratedAssistantImageAttachment(item));
+    }
+
+    function isConversationUserInputAttachment(raw) {
+      const att = (raw && typeof raw === "object") ? raw : null;
+      if (!att) return false;
+      const attachmentRole = conversationGeneratedAttachmentRole(att);
+      if (attachmentRole && attachmentRole !== "user") return false;
+      const generatedBy = String(firstNonEmptyText([
+        att.generatedBy,
+        att.generated_by,
+      ]) || "").trim().toLowerCase();
+      const source = String(firstNonEmptyText([
+        att.source,
+      ]) || "").trim().toLowerCase();
+      if (generatedBy === "codex_imagegen" || source === "generated") return false;
+      if (isConversationGeneratedAssistantMediaAttachment(att)) return false;
+      return true;
+    }
+
+    function collectConversationUserInputAttachments(list) {
+      return (Array.isArray(list) ? list : []).filter((item) => isConversationUserInputAttachment(item));
     }
 
     function buildConversationStableAttachmentPatchMap(list) {
@@ -2472,22 +3007,25 @@
 
     function buildConversationTaskDrawerRenderSignature(view, sessionKey = "") {
       const currentView = (view && typeof view === "object") ? view : {};
-      const tracking = currentView.tracking && typeof currentView.tracking === "object"
-        ? currentView.tracking
-        : null;
-      const displayLoading = !tracking && !!currentView.loading;
-      const displayError = !tracking ? String(currentView.errorText || "").trim() : "";
+      const activeRows = Array.isArray(currentView.activeRows) ? currentView.activeRows : [];
+      const doneRows = Array.isArray(currentView.doneRows) ? currentView.doneRows : [];
+      const inactiveRows = Array.isArray(currentView.inactiveRows) ? currentView.inactiveRows : [];
+      const rowSignature = (row) => {
+        const item = (row && typeof row === "object") ? row : {};
+        return {
+          key: conversationTaskOwnedStableKey(item),
+          status: conversationTaskOwnedStatusText(item),
+          updatedAt: String(firstNonEmptyText([item.latest_action_at, item.updated_at, item.updatedAt]) || "").trim(),
+        };
+      };
       return JSON.stringify({
         sessionKey: String(sessionKey || "").trim(),
-        loading: displayLoading,
-        errorText: displayError,
-        tracking: tracking ? {
-          version: String(tracking.version || "").trim(),
-          updated_at: String(tracking.updated_at || "").trim(),
-          current_task_ref: tracking.current_task_ref || null,
-          conversation_task_refs: Array.isArray(tracking.conversation_task_refs) ? tracking.conversation_task_refs : [],
-          recent_task_actions: Array.isArray(tracking.recent_task_actions) ? tracking.recent_task_actions : [],
-        } : null,
+        ownerLabel: String(currentView.ownerLabel || "").trim(),
+        loading: !!currentView.loading,
+        errorText: String(currentView.errorText || "").trim(),
+        activeRows: activeRows.map(rowSignature),
+        doneCount: doneRows.length,
+        inactiveCount: inactiveRows.length,
       });
     }
 
@@ -2499,6 +3037,7 @@
       ]) || "").trim();
       if (!PCONV.taskDrawerOpen || !viewer.open || !currentKey || viewer.sessionKey !== currentKey) {
         removeConversationTaskDetailViewerMask();
+        if (typeof closeUnifiedTaskDetail === "function") closeUnifiedTaskDetail({ notify: false });
         if (!PCONV.taskDrawerOpen || !currentKey || viewer.sessionKey !== currentKey) {
           resetConversationTaskDetailViewer();
         }
@@ -2510,6 +3049,21 @@
       );
       if (!detail) {
         removeConversationTaskDetailViewerMask();
+        if (typeof closeUnifiedTaskDetail === "function") closeUnifiedTaskDetail({ notify: false });
+        return;
+      }
+      if (typeof openUnifiedTaskDetail === "function") {
+        removeConversationTaskDetailViewerMask();
+        openUnifiedTaskDetail(detail, {
+          source: "conversation-task-detail",
+          projectId: typeof STATE !== "undefined" && STATE ? STATE.project : "",
+          groupTitle: detail.groupTitle,
+          onOpenSource: (model) => openConversationTaskSourceFile(model.taskPath, model.title),
+          onClose: () => {
+            resetConversationTaskDetailViewer();
+            renderConversationTaskDetailViewer();
+          },
+        });
         return;
       }
       const mask = el("div", {
@@ -2678,26 +3232,23 @@
         return;
       }
       const sessionKey = String(PCONV.taskDrawerSessionKey || "").trim();
-      const view = resolveConversationTaskTrackingPayload(payload);
+      const view = resolveConversationAgentOwnedTaskPayload(payload);
       const renderState = ensureConversationTaskDrawerRenderState();
-      const tracking = view.tracking;
       const loading = view.loading;
       const errorText = view.errorText;
-      const displayLoading = !tracking && loading;
-      const displayErrorText = !tracking ? errorText : "";
+      const displayLoading = !!loading;
+      const displayErrorText = String(errorText || "").trim();
       const renderView = {
         ...view,
         loading: displayLoading,
         errorText: displayErrorText,
       };
       const renderSignature = buildConversationTaskDrawerRenderSignature(renderView, sessionKey);
-      const relatedRows = renderView.relatedRows;
-      sub.textContent = tracking && tracking.updated_at
-        ? ("更新于 " + (compactDateTime(tracking.updated_at) || shortDateTime(tracking.updated_at)))
-        : (displayLoading ? "同步中…" : "当前会话暂无任务跟踪");
+      const activeRows = renderView.activeRows;
+      sub.textContent = "主负责位 · " + (renderView.ownerLabel || "当前 Agent") + " · 当前 " + activeRows.length + " 项";
       hint.textContent = displayErrorText
-        ? ("任务跟踪读取失败：" + displayErrorText)
-        : "这里会展示当前任务、相关任务，以及每条任务最近的一次活动。";
+        ? ("主负责任务读取失败：" + displayErrorText)
+        : "这里只展示当前 Agent 作为 main_owner 的待开始/进行中/待验收任务；点击任务会打开中间统一详情弹框。";
       if (
         renderState.sessionKey === sessionKey
         && renderState.signature === renderSignature
@@ -2709,29 +3260,24 @@
       const prevScrollTop = Number(list.scrollTop || 0);
       list.innerHTML = "";
       const stack = el("div", { class: "conv-task-drawer-stack" });
-      stack.appendChild(buildConversationTaskSummaryCard(renderView, {
-        onOpenDetail: (row, opts = {}) => openConversationTaskDetailViewer(row, {
-          sessionKey: PCONV.taskDrawerSessionKey,
-          groupTitle: opts.groupTitle || "当前任务",
-        }),
-      }));
       const groups = el("div", { class: "convtaskgroups" });
       groups.appendChild(renderConversationTaskGroup(
-        "相关任务",
-        relatedRows,
-        (row) => buildConversationTaskRefCard(row, {
-          onOpenDetail: (item) => openConversationTaskDetailViewer(item, {
-            sessionKey: PCONV.taskDrawerSessionKey,
-            groupTitle: "相关任务",
-          }),
-        }),
+        "当前主负责",
+        activeRows,
+        (row) => buildConversationAgentOwnedTaskCard(row, { projectId: renderView.projectId }),
         {
-          limit: 4,
-          emptyText: displayLoading && !relatedRows.length ? "相关任务同步中…" : "当前没有其他相关任务。",
-          loading: displayLoading && !relatedRows.length,
+          limit: 12,
+          singleColumn: true,
+          emptyText: displayLoading && !activeRows.length
+            ? "主负责任务同步中…"
+            : "当前没有该 Agent 主负责的待开始/进行中/待验收任务。",
+          loading: displayLoading && !activeRows.length,
+          error: !!displayErrorText && !activeRows.length,
         }
       ));
       stack.appendChild(groups);
+      const collapsedNote = buildConversationAgentOwnedCollapsedNote(renderView);
+      if (collapsedNote) stack.appendChild(collapsedNote);
       list.appendChild(stack);
       if (prevScrollTop > 0) {
         requestAnimationFrame(() => {
@@ -2814,6 +3360,74 @@
         });
       }
       if (closeBtn) closeBtn.addEventListener("click", closeConversationTaskDrawer);
+    }
+
+    function copyConversationSessionId(sessionId) {
+      const text = String(sessionId || "").trim();
+      if (!text) return;
+      if (typeof copyText === "function") {
+        Promise.resolve(copyText(text))
+          .then((ok) => {
+            setHintText("conv", ok === false ? "复制失败：请手动复制 session ID" : "已复制 session ID");
+          })
+          .catch(() => { setHintText("conv", "复制失败：请手动复制 session ID"); });
+        return;
+      }
+      navigator.clipboard?.writeText(text)
+        .then(() => { setHintText("conv", "已复制 session ID"); })
+        .catch(() => { setHintText("conv", "复制失败：请手动复制 session ID"); });
+    }
+
+    function buildConversationDetailSessionMeta(sessionId) {
+      const text = String(sessionId || "").trim();
+      if (!text) return null;
+      const row = el("div", { class: "detail-title-meta" });
+      row.appendChild(el("span", {
+        class: "detail-inline-id",
+        text,
+        title: text,
+      }));
+      const copyBtn = el("button", {
+        class: "detail-inline-copy-btn",
+        type: "button",
+        title: "复制 session ID",
+        "aria-label": "复制 session ID",
+        html: [
+          '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true">',
+          '  <rect x="9" y="9" width="10" height="10" rx="2" stroke="currentColor" stroke-width="1.8"></rect>',
+          '  <path d="M7 15H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h7a2 2 0 0 1 2 2v1" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"></path>',
+          '</svg>',
+        ].join(""),
+      });
+      copyBtn.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        copyConversationSessionId(text);
+      });
+      row.appendChild(copyBtn);
+      return row;
+    }
+
+    function ensureConversationLocallyHiddenRunIds() {
+      if (!PCONV.locallyHiddenRunIds || !(PCONV.locallyHiddenRunIds instanceof Set)) {
+        PCONV.locallyHiddenRunIds = new Set();
+      }
+      return PCONV.locallyHiddenRunIds;
+    }
+
+    function markConversationRunLocallyHidden(runId, hidden = true) {
+      const rid = String(runId || "").trim();
+      if (!rid) return;
+      const ids = ensureConversationLocallyHiddenRunIds();
+      if (hidden) ids.add(rid);
+      else ids.delete(rid);
+    }
+
+    function isConversationRunLocallyHidden(runId) {
+      const rid = String(runId || "").trim();
+      if (!rid) return false;
+      const ids = ensureConversationLocallyHiddenRunIds();
+      return ids.has(rid);
     }
 
     function renderConversationDetail(forceScroll = false) {
@@ -2916,6 +3530,7 @@
       titleEl.innerHTML = "";
       const titleRow = el("div", { class: "detail-title-row" });
       titleRow.appendChild(buildConversationAvatarNode(currentSession || ctx));
+      const titleStack = el("div", { class: "detail-title-stack" });
       const titleLine = el("div", { class: "detail-title-line" });
       titleLine.appendChild(el("span", { class: "detail-title-text", text: agentDisplay, title: agentDisplay }));
       titleLine.appendChild(buildConversationRoleBadge(currentSession || ctx));
@@ -2924,15 +3539,10 @@
       if (detailHeartbeatBadge) titleLine.appendChild(detailHeartbeatBadge);
       const titleStatus = buildConversationStatusBadge(currentSession || ctx);
       if (titleStatus) titleLine.appendChild(titleStatus);
-      const sessionIdText = String(ctx.sessionId || "");
-      if (sessionIdText) {
-        titleLine.appendChild(el("span", {
-          class: "detail-inline-id",
-          text: sessionIdText,
-          title: sessionIdText,
-        }));
-      }
-      titleRow.appendChild(titleLine);
+      titleStack.appendChild(titleLine);
+      const titleMeta = buildConversationDetailSessionMeta(ctx.sessionId);
+      if (titleMeta) titleStack.appendChild(titleMeta);
+      titleRow.appendChild(titleStack);
       titleEl.appendChild(titleRow);
       subEl.textContent = "";
       subEl.title = "";
@@ -3105,12 +3715,13 @@
 
       const seenCallbackEventKeys = new Set();
       const seenRestartRecoveryKeys = new Set();
-      const visibleRunIds = new Set(runs.map((item) => String((item && item.id) || "").trim()).filter(Boolean));
-      const runsById = new Map(runs.map((item) => [String((item && item.id) || "").trim(), item]));
-      const localReceiptAnchorMaps = buildConversationLocalReceiptAnchorMaps(runs, visibleRunIds, runsById, PCONV.detailMap, ctx);
+      const visibleRuns = runs.filter((item) => !isConversationRunLocallyHidden(item && item.id));
+      const visibleRunIds = new Set(visibleRuns.map((item) => String((item && item.id) || "").trim()).filter(Boolean));
+      const runsById = new Map(visibleRuns.map((item) => [String((item && item.id) || "").trim(), item]));
+      const localReceiptAnchorMaps = buildConversationLocalReceiptAnchorMaps(visibleRuns, visibleRunIds, runsById, PCONV.detailMap, ctx);
       const localReceiptProjectionByRunId = (localReceiptAnchorMaps && localReceiptAnchorMaps.anchoredByHostRunId) || Object.create(null);
       const localAnchoredCallbackRunIds = (localReceiptAnchorMaps && localReceiptAnchorMaps.anchoredCallbackRunIds) || new Set();
-      for (const r of runs) {
+      for (const r of visibleRuns) {
         const rid = String(r.id || "");
         const d = PCONV.detailMap[rid] || null;
         const st = getRunDisplayState(r, d);
@@ -3151,6 +3762,8 @@
         const runSpec = readConversationSpecFields(senderRun);
         // Get attachments from run data
         const attachments = Array.isArray(r.attachments) ? r.attachments : [];
+        const userInputAttachments = collectConversationUserInputAttachments(attachments);
+        const assistantGeneratedAttachments = collectConversationGeneratedAssistantImageAttachments(attachments);
         const callbackEventMeta = readRunCallbackEventMeta(senderRun, ctx, userText || String(r.messagePreview || ""));
         const receiptProjection = mergeConversationReceiptProjection(
           readConversationReceiptProjection(senderRun, d),
@@ -3257,7 +3870,7 @@
           detail: d,
           runId: rid,
           status: st,
-          attachments,
+          attachments: userInputAttachments,
           text: displayUserText || userText || String(r.messagePreview || ""),
           bubbleKey: rid + ":user",
           userVisualMode,
@@ -3270,7 +3883,7 @@
           opts: { forceRefresh: forceScroll },
         });
         const reusedUserRow = stableUserRowMeta
-          ? reuseConversationStableTimelineRow(stableRowReuseMap, stableUserRowMeta.key, stableUserRowMeta.signature, attachments)
+          ? reuseConversationStableTimelineRow(stableRowReuseMap, stableUserRowMeta.key, stableUserRowMeta.signature, userInputAttachments)
           : null;
         const userRow = reusedUserRow || renderConversationUserFamily({
           rid,
@@ -3283,7 +3896,7 @@
           userMessageKind,
           displayUserText,
           userText,
-          attachments,
+          attachments: userInputAttachments,
           replyContext,
           queuedCompactMode,
           callbackEventMeta,
@@ -3318,6 +3931,7 @@
           displayUserText,
           err,
           hint,
+          attachments: assistantGeneratedAttachments,
           callbackEventMeta,
           restartRecoveryMeta,
           queueReasonText,
@@ -3360,6 +3974,7 @@
           restartRecoveryMeta: null,
           queueReasonText: "",
           blockedByText: "",
+          attachments: Array.isArray(shadowRun.attachments) ? shadowRun.attachments : [],
           receiptProjection: null,
           mentionTargets: [],
         });

@@ -908,6 +908,224 @@ class ConversationTimelineUiLogicTests(unittest.TestCase):
         if proc.returncode != 0:
             self.fail(proc.stderr or proc.stdout or "node receipt projection regression script failed")
 
+    def test_assistant_generated_image_attachments_use_strict_truth_filter(self) -> None:
+        conversation_text = (REPO_ROOT / "web" / "task_parts" / "60-conversation.js").read_text(encoding="utf-8")
+        timeline_text = (REPO_ROOT / "web" / "task_parts" / "70-conversation-timeline.js").read_text(encoding="utf-8")
+        self.assertIn("const aiRow = renderConversationAssistantFamily({", conversation_text)
+        self.assertIn("const userInputAttachments = collectConversationUserInputAttachments(attachments);", conversation_text)
+        self.assertIn("attachments: userInputAttachments", conversation_text)
+        self.assertIn("attachments: assistantGeneratedAttachments", conversation_text)
+        self.assertIn("attachments: visibleGeneratedAttachments", timeline_text)
+
+        script = textwrap.dedent(
+            r"""
+            const assert = require("node:assert/strict");
+            const fs = require("node:fs");
+            const path = require("node:path");
+
+            const repoRoot = process.argv[1];
+
+            function extractFunction(file, name) {
+              const text = fs.readFileSync(path.join(repoRoot, file), "utf8");
+              const signature = new RegExp(`(?:async\\s+)?function ${name}\\(`);
+              const match = signature.exec(text);
+              if (!match) throw new Error(`missing function ${name} in ${file}`);
+              const start = match.index;
+              const headerMatch = text
+                .slice(start)
+                .match(new RegExp(`(?:async\\s+)?function ${name}\\([^\\n]*\\)\\s*\\{`));
+              if (!headerMatch) throw new Error(`missing function header for ${name} in ${file}`);
+              let i = start + headerMatch[0].length;
+              let depth = 1;
+              let inSingle = false;
+              let inDouble = false;
+              let inTemplate = false;
+              let inLineComment = false;
+              let inBlockComment = false;
+              let escape = false;
+              for (; i < text.length; i += 1) {
+                const ch = text[i];
+                const next = text[i + 1];
+                if (inLineComment) {
+                  if (ch === "\n") inLineComment = false;
+                  continue;
+                }
+                if (inBlockComment) {
+                  if (ch === "*" && next === "/") {
+                    inBlockComment = false;
+                    i += 1;
+                  }
+                  continue;
+                }
+                if (inSingle) {
+                  if (!escape && ch === "'") inSingle = false;
+                  escape = !escape && ch === "\\";
+                  continue;
+                }
+                if (inDouble) {
+                  if (!escape && ch === '"') inDouble = false;
+                  escape = !escape && ch === "\\";
+                  continue;
+                }
+                if (inTemplate) {
+                  if (!escape && ch === "`") inTemplate = false;
+                  escape = !escape && ch === "\\";
+                  continue;
+                }
+                escape = false;
+                if (ch === "/" && next === "/") {
+                  inLineComment = true;
+                  i += 1;
+                  continue;
+                }
+                if (ch === "/" && next === "*") {
+                  inBlockComment = true;
+                  i += 1;
+                  continue;
+                }
+                if (ch === "'") {
+                  inSingle = true;
+                  continue;
+                }
+                if (ch === '"') {
+                  inDouble = true;
+                  continue;
+                }
+                if (ch === "`") {
+                  inTemplate = true;
+                  continue;
+                }
+                if (ch === "{") {
+                  depth += 1;
+                  continue;
+                }
+                if (ch === "}") {
+                  depth -= 1;
+                  if (depth === 0) return text.slice(start, i + 1);
+                }
+              }
+              throw new Error(`unterminated function ${name} in ${file}`);
+            }
+
+            const file = "web/task_parts/70-conversation-timeline.js";
+            global.firstNonEmptyText = (values) => {
+              for (const value of values || []) {
+                const text = String(value || "").trim();
+                if (text) return text;
+              }
+              return "";
+            };
+            global.isImageAttachment = (att) => String((att && att.mimeType) || "").toLowerCase().startsWith("image/");
+            global.resolveAttachmentUrl = (att) => String((att && att.url) || "").trim();
+
+            eval(extractFunction(file, "conversationAttachmentRole"));
+            eval(extractFunction(file, "isConversationAssistantGeneratedMediaAttachment"));
+            eval(extractFunction(file, "isConversationAssistantGeneratedImageAttachment"));
+            eval(extractFunction(file, "isConversationUserInputAttachment"));
+            eval(extractFunction(file, "conversationAttachmentIdentityKey"));
+            eval(extractFunction(file, "mergeConversationAttachmentLists"));
+            eval(extractFunction(file, "filterConversationBubbleAttachments"));
+            eval(extractFunction(file, "firstConversationGeneratedMediaAttachmentUrl"));
+
+            const generatedImage = {
+              url: "/.runs/r/attachments/generated.png",
+              mimeType: "image/png",
+              source: "generated",
+              generatedBy: "codex_imagegen",
+              attachment_role: "assistant",
+            };
+            const generatedLegacyImage = {
+              url: "/.runs/r/attachments/generated-legacy.png",
+              mimeType: "image/png",
+              source: "generated",
+              generatedBy: "codex_imagegen",
+            };
+            const ordinaryAssistantImage = {
+              url: "/.runs/r/attachments/plain.png",
+              mimeType: "image/png",
+              attachment_role: "assistant",
+            };
+            const userUploadImage = {
+              url: "/.runs/r/attachments/user-upload.png",
+              mimeType: "image/png",
+              attachment_role: "user",
+              source: "upload",
+            };
+            const legacyUserUploadImage = {
+              url: "/.runs/r/attachments/legacy-user-upload.png",
+              mimeType: "image/png",
+              source: "upload",
+            };
+            const generatedNonImage = {
+              url: "/.runs/r/attachments/generated.txt",
+              mimeType: "text/plain",
+              source: "generated",
+              attachment_role: "assistant",
+            };
+            const foreignRoleImage = {
+              url: "/.runs/r/attachments/foreign.png",
+              mimeType: "image/png",
+              source: "generated",
+              attachment_role: "user",
+            };
+
+            assert.equal(isConversationAssistantGeneratedMediaAttachment(generatedImage), true);
+            assert.equal(isConversationAssistantGeneratedMediaAttachment(generatedLegacyImage), true);
+            assert.equal(isConversationAssistantGeneratedMediaAttachment(ordinaryAssistantImage), false);
+            assert.equal(isConversationAssistantGeneratedImageAttachment(generatedNonImage), false);
+            assert.equal(isConversationAssistantGeneratedImageAttachment(foreignRoleImage), false);
+            assert.equal(isConversationUserInputAttachment(generatedImage), false);
+            assert.equal(isConversationUserInputAttachment(generatedLegacyImage), false);
+            assert.equal(isConversationUserInputAttachment(ordinaryAssistantImage), false);
+            assert.equal(isConversationUserInputAttachment(userUploadImage), true);
+            assert.equal(isConversationUserInputAttachment(legacyUserUploadImage), true);
+
+            assert.deepEqual(
+              filterConversationBubbleAttachments("assistant", [
+                generatedImage,
+                generatedLegacyImage,
+                ordinaryAssistantImage,
+                generatedNonImage,
+                foreignRoleImage,
+              ]),
+              [generatedImage, generatedLegacyImage],
+            );
+            assert.deepEqual(
+              filterConversationBubbleAttachments("user", [
+                ordinaryAssistantImage,
+                generatedImage,
+                generatedLegacyImage,
+                userUploadImage,
+                legacyUserUploadImage,
+              ]),
+              [userUploadImage, legacyUserUploadImage],
+            );
+            assert.equal(
+              firstConversationGeneratedMediaAttachmentUrl([
+                ordinaryAssistantImage,
+                generatedNonImage,
+                generatedImage,
+              ]),
+              "/.runs/r/attachments/generated.txt",
+            );
+            assert.deepEqual(
+              mergeConversationAttachmentLists([
+                [ordinaryAssistantImage],
+                [{ ...ordinaryAssistantImage }, generatedImage],
+              ]),
+              [ordinaryAssistantImage, generatedImage],
+            );
+            """
+        )
+        proc = subprocess.run(
+            ["node", "-e", script, str(REPO_ROOT)],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+        )
+        if proc.returncode != 0:
+            self.fail(proc.stderr or proc.stdout or "node assistant generated attachment filter regression script failed")
+
 
 if __name__ == "__main__":
     unittest.main()

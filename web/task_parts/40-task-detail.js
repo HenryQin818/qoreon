@@ -141,7 +141,15 @@
         }
       }
 
-      setMarkdown(exEl, it.excerpt || "", "(empty)");
+      if (isTaskItem(it) && typeof renderUnifiedTaskDetailInline === "function") {
+        renderUnifiedTaskDetailInline(exEl, it, {
+          source: "task-detail-panel",
+          projectId: scopeProjectId,
+          channelName: it.channel || scopeChannel,
+        });
+      } else {
+        setMarkdown(exEl, it.excerpt || "", "(empty)");
+      }
       const kickoffCard = renderTaskAutoKickoffCard(it);
       if (kickoffCard) moreEl.appendChild(kickoffCard);
       const assistCard = renderAssistRequestCard(it);

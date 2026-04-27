@@ -953,7 +953,8 @@
 
     rows.forEach((row, index) => {
       const copyKey = String(row.session_id || `row-${index}`);
-      const agentMeta = `${row.is_primary ? "主会话" : "子会话"} · ${String(row.session_id || "").slice(0, 8)}...`;
+      const sessionId = String(row.session_id || "-");
+      const agentMeta = row.is_primary ? "主会话" : "子会话";
       const baseline = baselineFloor(row);
       const risk = createRiskPill(String(row.risk_level || "unsupported"), riskTitle(row));
       const copyTextLabel = COPY_LABEL[copyKey] || "复制重置消息";
@@ -971,6 +972,10 @@
         el("td", { class: "agent-cell" }, [
           el("div", { class: "agent-title", text: agentDisplayName(row) }),
           el("div", { class: "agent-meta", text: agentMeta }),
+          el("div", { class: "agent-session-id", title: sessionId }, [
+            el("span", { class: "agent-session-id-label", text: "session_id" }),
+            el("code", { class: "agent-session-id-value", text: sessionId }),
+          ]),
         ]),
         el("td", { class: "channel-cell" }, [
           el("div", { class: "channel-title", text: String(row.channel_name || "-") }),

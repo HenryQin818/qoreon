@@ -17,7 +17,17 @@ from pathlib import Path
 from task_dashboard.cli import main
 
 
+def _restore_env(previous: dict[str, str | None]) -> None:
+    for key, value in previous.items():
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
+
+
 if __name__ == "__main__":
+    build_env_keys = ("TASK_DASHBOARD_SESSION_HEALTH_SKIP_LOG_SCAN", "TASK_DASHBOARD_STATIC_BUILD_FAST")
+    previous_build_env = {key: os.environ.get(key) for key in build_env_keys}
     os.environ.setdefault("TASK_DASHBOARD_SESSION_HEALTH_SKIP_LOG_SCAN", "1")
     os.environ.setdefault("TASK_DASHBOARD_STATIC_BUILD_FAST", "1")
     script_path = Path(__file__).resolve()
@@ -67,4 +77,8 @@ if __name__ == "__main__":
         default_out_session_health,
         *sys.argv[1:],
     ]
-    raise SystemExit(main(forwarded))
+    try:
+        exit_code = main(forwarded)
+    finally:
+        _restore_env(previous_build_env)
+    raise SystemExit(exit_code)

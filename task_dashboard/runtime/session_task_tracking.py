@@ -42,13 +42,27 @@ def _normalize_task_path(value: Any) -> str:
 
 
 def _session_repo_root(session: dict[str, Any]) -> Path | None:
-    root_text = _as_text(session.get("worktree_root") or session.get("workdir"))
-    if not root_text:
-        return None
-    try:
-        return Path(root_text).expanduser().resolve()
-    except Exception:
-        return None
+    execution_context = session.get("project_execution_context") if isinstance(session.get("project_execution_context"), dict) else {}
+    target_ctx = execution_context.get("target") if isinstance(execution_context.get("target"), dict) else {}
+    source_ctx = execution_context.get("source") if isinstance(execution_context.get("source"), dict) else {}
+    seen: set[str] = set()
+    for raw in (
+        session.get("workdir"),
+        target_ctx.get("workdir"),
+        source_ctx.get("workdir"),
+        session.get("worktree_root"),
+        target_ctx.get("worktree_root"),
+        source_ctx.get("worktree_root"),
+    ):
+        root_text = _as_text(raw)
+        if not root_text or root_text in seen:
+            continue
+        seen.add(root_text)
+        try:
+            return Path(root_text).expanduser().resolve()
+        except Exception:
+            continue
+    return None
 
 
 def _resolved_task_key(task_ref: dict[str, Any]) -> str:
@@ -225,6 +239,10 @@ def _cache_put_harness(signature: tuple[str, int, int] | None, roles: dict[str, 
             "backup_owners": list(roles.get("backup_owners") or []),
             "management_slot": list(roles.get("management_slot") or []),
             "custom_roles": list(roles.get("custom_roles") or []),
+            "executors": list(roles.get("executors") or []),
+            "acceptors": list(roles.get("acceptors") or []),
+            "reviewers": list(roles.get("reviewers") or []),
+            "visual_reviewers": list(roles.get("visual_reviewers") or []),
         }
         if len(_TASK_HARNESS_FILE_CACHE) > _TASK_FILE_CACHE_MAX:
             oldest_key = next(iter(_TASK_HARNESS_FILE_CACHE))
@@ -315,6 +333,10 @@ def _empty_task_harness_roles() -> dict[str, Any]:
         "backup_owners": [],
         "management_slot": [],
         "custom_roles": [],
+        "executors": [],
+        "acceptors": [],
+        "reviewers": [],
+        "visual_reviewers": [],
     }
 
 
@@ -371,6 +393,10 @@ def _load_task_harness_roles(
         "backup_owners": list(roles.get("backup_owners") or []),
         "management_slot": list(roles.get("management_slot") or []),
         "custom_roles": list(roles.get("custom_roles") or []),
+        "executors": list(roles.get("executors") or []),
+        "acceptors": list(roles.get("acceptors") or []),
+        "reviewers": list(roles.get("reviewers") or []),
+        "visual_reviewers": list(roles.get("visual_reviewers") or []),
     }
     cache[cache_key] = dict(roles_payload)
     _cache_put_harness(signature, roles_payload)
@@ -828,6 +854,10 @@ def _build_task_row(
         "backup_owners": task_harness.get("backup_owners") or [],
         "management_slot": task_harness.get("management_slot") or [],
         "custom_roles": task_harness.get("custom_roles") or [],
+        "executors": task_harness.get("executors") or [],
+        "acceptors": task_harness.get("acceptors") or [],
+        "reviewers": task_harness.get("reviewers") or [],
+        "visual_reviewers": task_harness.get("visual_reviewers") or [],
     }
 
 

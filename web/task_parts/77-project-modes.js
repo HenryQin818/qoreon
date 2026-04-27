@@ -104,6 +104,49 @@
       render();
     }
 
+    function taskObservatoryRebuildUiState() {
+      const state = (typeof window !== "undefined" && window.PROJECT_REBUILD_UI && typeof window.PROJECT_REBUILD_UI === "object")
+        ? window.PROJECT_REBUILD_UI
+        : null;
+      return {
+        loading: !!(state && state.loading),
+        lastError: String((state && state.lastError) || "").trim(),
+      };
+    }
+
+    function buildTaskObservatoryRefreshAction(projectId) {
+      const state = taskObservatoryRebuildUiState();
+      const wrap = el("div", { class: "task-observatory-refresh-wrap" });
+      const btn = el("button", {
+        type: "button",
+        class: "task-observatory-refresh-btn" + (state.loading ? " is-loading" : ""),
+        "aria-label": state.loading ? "正在刷新任务数据" : "刷新任务数据",
+        title: "重新扫描任务规划目录，并在完成后刷新当前任务页。",
+      });
+      btn.disabled = state.loading;
+      btn.appendChild(el("span", { class: "task-observatory-refresh-icon", "aria-hidden": "true" }));
+      btn.appendChild(el("span", { text: state.loading ? "正在刷新..." : "刷新任务数据" }));
+      btn.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (state.loading) return;
+        if (typeof triggerProjectDashboardRebuild === "function") {
+          triggerProjectDashboardRebuild();
+          if (typeof render === "function") render();
+          return;
+        }
+        alert("当前页面缺少刷新能力，请重新加载后再试。");
+      });
+      wrap.appendChild(btn);
+      if (state.lastError) {
+        wrap.appendChild(el("span", {
+          class: "task-observatory-refresh-error",
+          text: "刷新失败：" + state.lastError,
+        }));
+      }
+      return wrap;
+    }
+
     function taskObservatoryTimelineDateKey(rawValue = "") {
       const text = String(rawValue || "").trim();
       if (!text) return "未标记日期";
@@ -198,8 +241,8 @@
         .task-observatory-page{
           display:flex;
           flex-direction:column;
-          gap:16px;
-          padding:12px 16px 20px;
+          gap:10px;
+          padding:8px 14px 18px;
         }
         .task-observatory-head{
           display:flex;
@@ -280,10 +323,10 @@
           white-space:nowrap;
         }
         .task-observatory-board{
-          border-radius:22px;
+          border-radius:18px;
           border:1px solid rgba(0,0,0,0.06);
-          background:linear-gradient(180deg, rgba(255,255,255,0.92), rgba(247,249,253,0.88));
-          box-shadow:0 16px 40px rgba(15,23,42,0.05);
+          background:rgba(255,255,255,0.88);
+          box-shadow:0 10px 28px rgba(15,23,42,0.04);
         }
         .task-observatory-card-actions,
         .task-observatory-card-meta,
@@ -297,23 +340,25 @@
         .task-observatory-stats{
           display:flex;
           align-items:center;
-          gap:10px;
+          gap:8px;
           flex-wrap:wrap;
           overflow:visible;
-          padding:0;
+          padding:8px 10px;
           min-width:0;
+          border-radius:16px;
+          background:rgba(255,255,255,0.26);
         }
         .task-observatory-stat{
           border-radius:999px;
           border:1px solid rgba(0,0,0,0.06);
-          background:rgba(255,255,255,0.84);
-          box-shadow:0 10px 24px rgba(15,23,42,0.04);
-          padding:0 14px;
-          min-height:42px;
-          min-width:102px;
+          background:rgba(255,255,255,0.72);
+          box-shadow:none;
+          padding:0 10px;
+          min-height:34px;
+          min-width:84px;
           display:inline-flex;
           align-items:center;
-          gap:8px;
+          gap:6px;
           justify-content:center;
           flex:0 0 auto;
           text-align:center;
@@ -325,98 +370,164 @@
           transition:border-color 150ms ease, box-shadow 150ms ease, transform 150ms ease, background 150ms ease;
         }
         .task-observatory-stat.is-button:hover{
-          transform:translateY(-1px);
           border-color:rgba(47,111,237,0.18);
-          box-shadow:0 14px 28px rgba(15,23,42,0.06);
+          box-shadow:0 8px 18px rgba(15,23,42,0.04);
         }
         .task-observatory-stat.is-active{
           border-color:rgba(47,111,237,0.24);
-          background:linear-gradient(180deg, rgba(244,248,255,0.98), rgba(237,243,252,0.92));
-          box-shadow:0 14px 28px rgba(47,111,237,0.08);
+          background:rgba(244,248,255,0.92);
+          box-shadow:0 8px 18px rgba(47,111,237,0.06);
         }
         .task-observatory-stat-label{
-          font-size:12px;
+          font-size:11px;
           font-weight:700;
           color:var(--muted2);
           line-height:1;
         }
         .task-observatory-stat-value{
-          font-size:15px;
+          font-size:14px;
           color:var(--text);
           font-weight:900;
           line-height:1;
         }
+        .task-observatory-refresh-wrap{
+          display:inline-flex;
+          align-items:center;
+          gap:8px;
+          flex:0 0 auto;
+          margin-left:auto;
+          min-height:34px;
+        }
+        .task-observatory-refresh-btn{
+          min-height:34px;
+          padding:0 12px;
+          border-radius:999px;
+          border:1px solid rgba(15,23,42,0.10);
+          background:rgba(255,255,255,0.82);
+          color:rgba(15,23,42,0.74);
+          box-shadow:none;
+          display:inline-flex;
+          align-items:center;
+          justify-content:center;
+          gap:8px;
+          font-size:12px;
+          font-weight:800;
+          white-space:nowrap;
+          cursor:pointer;
+          transition:transform 150ms ease, box-shadow 150ms ease, opacity 150ms ease;
+        }
+        .task-observatory-refresh-btn:hover:not(:disabled){
+          border-color:rgba(47,111,237,0.18);
+          color:rgba(28,59,130,0.92);
+          background:rgba(255,255,255,0.98);
+          box-shadow:0 8px 18px rgba(15,23,42,0.05);
+        }
+        .task-observatory-refresh-btn:disabled{
+          cursor:wait;
+          opacity:0.72;
+        }
+        .task-observatory-refresh-icon{
+          width:12px;
+          height:12px;
+          border-radius:999px;
+          border:2px solid rgba(47,111,237,0.18);
+          border-top-color:rgba(47,111,237,0.78);
+          box-sizing:border-box;
+        }
+        .task-observatory-refresh-btn.is-loading .task-observatory-refresh-icon{
+          animation:taskObservatoryRefreshSpin 0.9s linear infinite;
+        }
+        .task-observatory-refresh-error{
+          max-width:240px;
+          color:#b42318;
+          font-size:12px;
+          font-weight:700;
+          white-space:nowrap;
+          overflow:hidden;
+          text-overflow:ellipsis;
+        }
+        @keyframes taskObservatoryRefreshSpin{
+          from{ transform:rotate(0deg); }
+          to{ transform:rotate(360deg); }
+        }
+        @media (prefers-reduced-motion: reduce){
+          .task-observatory-refresh-btn,
+          .task-observatory-stat.is-button{
+            transition:none;
+          }
+          .task-observatory-refresh-btn.is-loading .task-observatory-refresh-icon{
+            animation:none;
+          }
+        }
         .task-observatory-board{
-          padding:16px;
+          padding:12px;
+          display:flex;
+          flex-direction:column;
+          gap:10px;
+        }
+        .task-observatory-scroll{
+          overflow:visible;
+          padding-bottom:0;
+        }
+        .task-observatory-canvas{
+          min-width:0;
+          width:100%;
           display:flex;
           flex-direction:column;
           gap:14px;
-        }
-        .task-observatory-scroll{
-          overflow-x:auto;
-          overflow-y:visible;
-          padding-bottom:6px;
-        }
-        .task-observatory-canvas{
-          min-width:1320px;
-          width:max-content;
-          display:flex;
-          flex-direction:column;
-          gap:22px;
-          padding-right:20px;
+          padding-right:0;
         }
         .task-observatory-day{
           display:flex;
           flex-direction:column;
-          gap:14px;
+          gap:8px;
           align-items:flex-start;
         }
         .task-observatory-day-head{
           display:flex;
           align-items:center;
           justify-content:flex-start;
-          gap:12px;
+          gap:8px;
           flex-wrap:wrap;
           width:fit-content;
           max-width:100%;
-          padding:0 8px 2px 2px;
+          padding:0 6px 0 0;
         }
         .task-observatory-day-title{
           display:inline-flex;
           align-items:center;
-          gap:10px;
-          font-size:16px;
+          gap:8px;
+          font-size:15px;
           font-weight:900;
           color:var(--text);
         }
         .task-observatory-day-title::before{
           content:"";
-          width:10px;
-          height:10px;
+          width:8px;
+          height:8px;
           border-radius:999px;
-          background:rgba(47,111,237,0.22);
-          box-shadow:0 0 0 5px rgba(47,111,237,0.08);
+          background:rgba(47,111,237,0.18);
+          box-shadow:0 0 0 4px rgba(47,111,237,0.06);
           flex:0 0 auto;
         }
         .task-observatory-day-meta{
           gap:6px;
         }
         .task-observatory-day-meta .chip{
-          background:rgba(255,255,255,0.82);
+          background:rgba(255,255,255,0.66);
           border-color:rgba(15,23,42,0.06);
           box-shadow:none;
         }
         .task-observatory-row{
-          display:flex;
-          gap:14px;
-          align-items:stretch;
-          width:max-content;
+          display:grid;
+          gap:6px;
+          width:100%;
         }
         .task-observatory-track{
+          display:none !important;
           position:relative;
           width:24px;
           flex:0 0 24px;
-          display:flex;
           justify-content:center;
           padding-top:20px;
         }
@@ -442,10 +553,10 @@
           box-shadow:0 0 0 4px rgba(47,111,237,0.12);
         }
         .task-observatory-cards-row{
-          display:flex;
-          gap:12px;
+          display:grid;
+          gap:10px;
           align-items:stretch;
-          width:max-content;
+          width:100%;
         }
         .task-observatory-card{
           text-align:left;
@@ -513,6 +624,51 @@
           line-height:1.65;
           color:var(--muted);
         }
+        .task-observatory-card-roles.task-role-groups{
+          display:flex;
+          align-items:center;
+          flex-wrap:wrap;
+          gap:8px 12px;
+          padding:2px 0;
+        }
+        .task-observatory-card-roles .task-role-group{
+          display:inline-flex;
+          align-items:center;
+          gap:6px;
+          min-width:0;
+        }
+        .task-observatory-card-roles .task-role-group-label{
+          display:inline-flex;
+          align-items:center;
+          justify-content:center;
+          min-width:18px;
+          height:18px;
+          padding:0 5px;
+          border-radius:999px;
+          background:rgba(15,23,42,0.06);
+          color:var(--muted2);
+          font-size:11px;
+          font-weight:800;
+          flex:0 0 auto;
+        }
+        .task-observatory-card-roles .task-role-group-avatars{
+          display:flex;
+          align-items:center;
+          gap:4px;
+          min-width:0;
+        }
+        .task-observatory-card-roles .task-role-avatar{
+          width:20px;
+          height:20px;
+          border-radius:999px;
+          font-size:10px;
+          border-width:1px;
+          box-shadow:0 6px 14px rgba(15,23,42,0.08);
+          flex:0 0 auto;
+        }
+        .task-observatory-card-roles .task-role-avatar.assigned{
+          font-size:11px;
+        }
         .task-observatory-card-note-row strong{
           color:var(--text);
         }
@@ -558,25 +714,13 @@
           overflow:visible;
         }
         body.panel-task.panel-task-single-canvas .task-observatory-page{
-          padding:0 0 20px;
+          padding:8px 12px 18px;
         }
         body.panel-task.panel-task-single-canvas #detailView{
-          display:none;
-          position:fixed;
-          top:88px;
-          right:16px;
-          bottom:16px;
-          width:min(640px, calc(100vw - 32px));
-          max-width:calc(100vw - 32px);
-          z-index:24;
-          border-radius:28px;
-          border:1px solid rgba(15,23,42,0.08);
-          background:rgba(255,255,255,0.98);
-          box-shadow:0 28px 80px rgba(15,23,42,0.18);
-          overflow:hidden;
+          display:none !important;
         }
         body.panel-task.panel-task-single-canvas.task-canvas-detail-open #detailView{
-          display:flex;
+          display:none !important;
         }
         body.panel-task.panel-task-single-canvas #detailView .back-to-list{
           display:inline-flex;
@@ -597,21 +741,24 @@
             font-size:11px;
           }
           .task-observatory-stat{
-            min-width:96px;
-            padding:0 12px;
+            min-width:82px;
+            padding:0 10px;
+          }
+          .task-observatory-refresh-wrap{
+            width:100%;
+            margin-left:0;
+          }
+          .task-observatory-refresh-btn{
+            width:100%;
           }
           body.panel-task.panel-task-single-canvas #detailView{
-            top:72px;
-            right:12px;
-            bottom:12px;
-            width:calc(100vw - 24px);
-            max-width:calc(100vw - 24px);
+            display:none !important;
           }
           .task-observatory-page{
             padding-bottom:16px;
           }
           .task-observatory-canvas{
-            min-width:1180px;
+            min-width:0;
           }
         }
       `;
@@ -654,38 +801,6 @@
       }
 
       const page = el("section", { class: "task-observatory-page" });
-      const filterLabel = specialFilter === "blocked" ? "阻塞关注" : laneFilter;
-      const head = el("section", { class: "task-observatory-head" });
-      const headMain = el("div", { class: "task-observatory-head-main" });
-      const headCopy = el("div", { class: "task-observatory-head-copy" });
-      headCopy.appendChild(el("div", { class: "task-observatory-head-kicker", text: "任务主视图" }));
-      const headTitleRow = el("div", { class: "task-observatory-head-title-row" });
-      headTitleRow.appendChild(el("div", {
-        class: "task-observatory-head-title",
-        text: "总任务 " + model.totalGroupCount + " 条",
-      }));
-      headTitleRow.appendChild(el("span", {
-        class: "task-observatory-head-pill" + (specialFilter === "blocked" ? " is-warn" : ""),
-        text: specialFilter === "blocked" ? "仅看阻塞" : ("当前筛选 " + filterLabel),
-      }));
-      headCopy.appendChild(headTitleRow);
-      const headMeta = el("div", { class: "task-observatory-head-meta" });
-      headMeta.appendChild(el("span", {
-        class: "task-observatory-head-meta-item",
-        text: "已载入 " + model.visibleGroupCount + "/" + model.filteredGroupCount,
-      }));
-      headMeta.appendChild(el("span", {
-        class: "task-observatory-head-meta-item",
-        text: "日期分组 " + model.days.length,
-      }));
-      headMeta.appendChild(el("span", {
-        class: "task-observatory-head-meta-item",
-        text: "按最近更新排序",
-      }));
-      headCopy.appendChild(headMeta);
-      headMain.appendChild(headCopy);
-      head.appendChild(headMain);
-
       const stats = el("section", { class: "task-observatory-stats" });
       const statCards = [
         {
@@ -738,8 +853,11 @@
         },
       ];
       statCards.forEach((item) => stats.appendChild(buildTaskObservatoryStatCard(item)));
-      head.appendChild(stats);
-      page.appendChild(head);
+      if (typeof buildTaskCreateEntryAction === "function") {
+        stats.appendChild(buildTaskCreateEntryAction(pid));
+      }
+      stats.appendChild(buildTaskObservatoryRefreshAction(pid));
+      page.appendChild(stats);
 
       const board = el("section", { class: "task-observatory-board" });
       if (!model.visibleGroups.length) {
@@ -778,81 +896,41 @@
             const cards = el("div", { class: "task-observatory-cards-row" });
 
             const masterFlags = taskStatusFlags(master);
-            const parentCard = el("div", {
-              class: "task-observatory-card is-parent"
-                + ((taskSelectionMatchesItem(master, selectedPath, selectedTaskId) || hasChildSelected) ? " active" : ""),
-              "data-path": masterPath,
-            });
-            const parentTop = el("div", { class: "task-observatory-card-top" });
-            parentTop.appendChild(el("div", { class: "task-observatory-card-title", text: shortTitle(master.title || "") }));
-            const parentActions = el("div", { class: "task-observatory-card-actions" });
-            parentActions.appendChild(chip("主任务", "good"));
-            parentActions.appendChild(chip(group.masterBucket || "未标记", taskPrimaryTone(group.masterBucket)));
-            if (masterFlags.supervised) parentActions.appendChild(chip("关注", "bad"));
-            if (masterFlags.blocked) parentActions.appendChild(chip("阻塞", "bad"));
-            parentTop.appendChild(parentActions);
-            parentCard.appendChild(parentTop);
-
-            const parentMeta = el("div", { class: "task-observatory-card-meta" });
-            parentMeta.appendChild(chip("子任务 " + children.length, "muted"));
-            parentMeta.appendChild(chip(resolveTaskGroupChannel(group), "muted"));
-            if (group.latestAt) parentMeta.appendChild(chip("更新 " + (compactDateTime(group.latestAt) || group.latestAt), "muted"));
-            parentCard.appendChild(parentMeta);
-
-            const parentNote = el("div", { class: "task-observatory-card-note" });
-            parentNote.appendChild(el("div", {
-              class: "task-observatory-card-note-row",
-              text: "最近进展：" + taskGroupSummaryText(group, children),
-            }));
-            parentNote.appendChild(el("div", {
-              class: "task-observatory-card-note-row",
-              text: "当前状态：" + (group.masterBucket || "未标记") + " · 当前链路总计 " + Number(group.total || (children.length + 1)) + " 项。",
-            }));
-            parentCard.appendChild(parentNote);
-
-            const parentFoot = el("div", { class: "task-observatory-card-foot" });
+            const parentMetaItems = [
+              ["子任务 " + children.length, "muted"],
+              ["链路 " + Number(group.total || (children.length + 1)) + " 项", "muted"],
+            ];
+            if (masterFlags.supervised) parentMetaItems.push(["关注", "bad"]);
+            if (masterFlags.blocked) parentMetaItems.push(["阻塞", "bad"]);
             const pushBtn = createTaskPushEntryBtn(master, true);
-            if (pushBtn) parentFoot.appendChild(pushBtn);
-            parentCard.appendChild(parentFoot);
-            bindCardSelectSemantics(parentCard, () => {
-              setSelectedTaskRef(masterPath, masterTaskId, { openCanvasDetail: true });
+            const parentCard = buildUnifiedTaskListCard({
+              ...master,
+              task_primary_status: group.masterBucket || master.task_primary_status || master.status,
+              latest_action_text: taskGroupSummaryText(group, children),
+              latest_action_at: group.latestAt || master.updated_at,
+            }, {
+              source: "task-home",
+              projectId: STATE.project,
+              channelName: resolveTaskGroupChannel(group),
+              forceTaskType: "parent",
+              active: taskSelectionMatchesItem(master, selectedPath, selectedTaskId) || hasChildSelected,
+              metaItems: parentMetaItems,
+              actions: pushBtn ? [pushBtn] : [],
+              onOpen: () => setSelectedTaskRef(masterPath, masterTaskId, { openUnifiedDetail: true, forceTaskType: "parent" }),
             });
             cards.appendChild(parentCard);
 
-            children.forEach((child) => {
-              const childCard = el("div", {
-                class: "task-observatory-card is-child" + (taskSelectionMatchesItem(child, selectedPath, selectedTaskId) ? " active" : ""),
-                "data-path": String((child && child.path) || ""),
-              });
-              const childTop = el("div", { class: "task-observatory-card-top" });
-              childTop.appendChild(el("div", { class: "task-observatory-card-title", text: shortTitle((child && child.title) || "") }));
-              const childActions = el("div", { class: "task-observatory-card-actions" });
-              childActions.appendChild(chip("子任务", "muted"));
-              childActions.appendChild(chip(bucketKeyForStatus(child && child.status), toneForBucket(bucketKeyForStatus(child && child.status))));
-              childTop.appendChild(childActions);
-              childCard.appendChild(childTop);
-
-              const childMeta = el("div", { class: "task-observatory-card-meta" });
-              if (child && child.channel) childMeta.appendChild(chip(child.channel, "muted"));
-              if (child && child.owner) childMeta.appendChild(chip("负责人:" + child.owner, "muted"));
-              if (child && child.updated_at) childMeta.appendChild(chip("更新 " + (compactDateTime(child.updated_at) || child.updated_at), "muted"));
-              childCard.appendChild(childMeta);
-
-              const childNote = el("div", { class: "task-observatory-card-note" });
-              childNote.appendChild(el("div", {
-                class: "task-observatory-card-note-row",
-                text: "任务承接：" + shortTitle((child && child.title) || ""),
-              }));
-              childNote.appendChild(el("div", {
-                class: "task-observatory-card-note-row",
-                text: "当前落点：" + bucketKeyForStatus(child && child.status),
-              }));
-              childCard.appendChild(childNote);
-              bindCardSelectSemantics(childCard, () => {
-                setSelectedTaskRef(child && child.path, taskStableIdOfItem(child), { openCanvasDetail: true });
-              });
-              cards.appendChild(childCard);
-            });
+            if (children.length) {
+              cards.appendChild(buildUnifiedTaskChildGrid(children, (child) => buildUnifiedTaskListCard(child, {
+                source: "task-home-child",
+                projectId: STATE.project,
+                channelName: child && child.channel,
+                forceTaskType: "child",
+                active: taskSelectionMatchesItem(child, selectedPath, selectedTaskId),
+                latestText: "当前状态：" + bucketKeyForStatus(child && child.status),
+                onOpen: () => setSelectedTaskRef(child && child.path, taskStableIdOfItem(child), { openUnifiedDetail: true, forceTaskType: "child" }),
+              })));
+            }
 
             row.appendChild(cards);
             dayNode.appendChild(row);

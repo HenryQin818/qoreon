@@ -26,6 +26,7 @@ from .runtime.project_execution_context import (
     build_project_execution_context,
     diff_override_fields,
 )
+from .runtime.avatar_assignments import load_avatar_assignments
 from .runtime.session_context import detect_git_branch
 from .session_health import build_session_health_page, normalize_project_session_health_config
 from .session_store import SessionStore
@@ -572,12 +573,41 @@ def _unique_existing_paths(paths: list[Path]) -> list[Path]:
     return out
 
 
-def _project_session_store_dirs(root: Path, script_dir: Path, project_root_rel: str) -> list[Path]:
+def _resolve_config_path(root: Path, raw: Any) -> Path | None:
+    text = _as_str(raw).strip()
+    if not text:
+        return None
+    path = Path(text).expanduser()
+    if not path.is_absolute():
+        path = root / path
+    try:
+        return path.resolve()
+    except Exception:
+        return path
+
+
+def _project_session_store_dirs(
+    root: Path,
+    script_dir: Path,
+    project_root_rel: str,
+    project_cfg: dict[str, Any] | None = None,
+) -> list[Path]:
     candidates: list[Path] = []
+    raw_context = (
+        project_cfg.get("execution_context")
+        if isinstance(project_cfg, dict) and isinstance(project_cfg.get("execution_context"), dict)
+        else {}
+    )
+    sessions_root = _resolve_config_path(root, raw_context.get("sessions_root"))
+    if sessions_root:
+        candidates.append(sessions_root.parent)
+    runtime_root = _resolve_config_path(root, raw_context.get("runtime_root"))
+    if runtime_root:
+        candidates.append(runtime_root)
     if project_root_rel:
         candidates.append((root / project_root_rel).resolve())
-    candidates.append(script_dir)
     candidates.append(root)
+    candidates.append(script_dir)
     return _unique_existing_paths(candidates)
 
 
@@ -587,8 +617,9 @@ def _load_project_session_rows(
     *,
     project_id: str,
     project_root_rel: str,
+    project_cfg: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    for base_dir in _project_session_store_dirs(root, script_dir, project_root_rel):
+    for base_dir in _project_session_store_dirs(root, script_dir, project_root_rel, project_cfg):
         rows = SessionStore(base_dir).list_sessions(project_id)
         if rows:
             return rows
@@ -676,79 +707,79 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument(
         "--out-task",
         type=str,
-        default="项目管理-小秘书/项目看板/task-dashboard/dist/project-task-dashboard.html",
+        default="dist/project-task-dashboard.html",
         help="task page output html path (relative to root)",
     )
     ap.add_argument(
         "--out-overview",
         type=str,
-        default="项目管理-小秘书/项目看板/task-dashboard/dist/project-overview-dashboard.html",
+        default="dist/project-overview-dashboard.html",
         help="overview page output html path (relative to root)",
     )
     ap.add_argument(
         "--out-communication",
         type=str,
-        default="项目管理-小秘书/项目看板/task-dashboard/dist/project-communication-audit.html",
+        default="dist/project-communication-audit.html",
         help="communication audit page output html path (relative to root)",
     )
     ap.add_argument(
         "--out-project-chat",
         type=str,
-        default="项目管理-小秘书/项目看板/task-dashboard/dist/project-chat.html",
+        default="dist/project-chat.html",
         help="share-mode project chat page output html path (relative to root)",
     )
     ap.add_argument(
         "--out-session-health",
         type=str,
-        default="项目管理-小秘书/项目看板/task-dashboard/dist/project-session-health-dashboard.html",
+        default="dist/project-session-health-dashboard.html",
         help="session health page output html path (relative to root)",
     )
     ap.add_argument(
         "--out-message-risk-dashboard",
         type=str,
-        default="项目管理-小秘书/项目看板/task-dashboard/dist/project-message-risk-dashboard.html",
+        default="dist/project-message-risk-dashboard.html",
         help="message risk dashboard output html path (relative to root)",
     )
     ap.add_argument(
         "--out-agent-capability-report",
         type=str,
-        default="项目管理-小秘书/项目看板/task-dashboard/dist/project-agent-capability-dashboard.html",
+        default="dist/project-agent-capability-dashboard.html",
         help="agent capability report output html path (relative to root)",
     )
     ap.add_argument(
         "--out-status-report",
         type=str,
-        default="项目管理-小秘书/项目看板/task-dashboard/dist/project-status-report.html",
+        default="dist/project-status-report.html",
         help="status report page output html path (relative to root)",
     )
     ap.add_argument(
         "--out-open-source-sync",
         type=str,
-        default="项目管理-小秘书/项目看板/task-dashboard/dist/project-open-source-sync-board.html",
+        default="dist/project-open-source-sync-board.html",
         help="open-source sync board output html path (relative to root)",
     )
     ap.add_argument(
         "--out-agent-directory",
         type=str,
-        default="项目管理-小秘书/项目看板/task-dashboard/dist/project-agent-directory.html",
+        default="dist/project-agent-directory.html",
         help="agent directory page output html path (relative to root)",
     )
     ap.add_argument(
         "--out-agent-curtain",
         type=str,
-        default="项目管理-小秘书/项目看板/task-dashboard/dist/project-agent-curtain.html",
+        default="dist/project-agent-curtain.html",
         help="agent curtain page output html path (relative to root)",
     )
     ap.add_argument(
         "--out-agent-relationship-board",
         type=str,
-        default="项目管理-小秘书/项目看板/task-dashboard/dist/project-agent-relationship-board.html",
+        default="dist/project-agent-relationship-board.html",
         help="agent relationship board page output html path (relative to root)",
     )
     ap.add_argument(
         "--out-platform-architecture-board",
         type=str,
-        default="项目管理-小秘书/项目看板/task-dashboard/dist/project-platform-architecture-board.html",
+        default="dist/project-platform-architecture-board.html",
         help="platform architecture board page output html path (relative to root)",
     )
     ap.add_argument(
@@ -861,6 +892,7 @@ def main(argv: list[str] | None = None) -> int:
             script_dir,
             project_id=pid,
             project_root_rel=project_root_rel,
+            project_cfg=pc if isinstance(pc, dict) else None,
         )
         for sess in sessions_from_store:
             ch_name = _as_str(sess.get("channel_name")).strip()
@@ -1104,6 +1136,11 @@ def main(argv: list[str] | None = None) -> int:
             registry=registry_payload,
             channel_sessions=channel_sessions,
         )
+        avatar_assignments = load_avatar_assignments(
+            project_id=pid,
+            project_cfg=pc,
+            repo_root=root,
+        )
 
         projects_meta.append(
             {
@@ -1124,6 +1161,7 @@ def main(argv: list[str] | None = None) -> int:
                 "links": links,
                 "project_execution_context": project_execution_context,
                 "registry": registry_payload,
+                "avatar_assignments": avatar_assignments,
                 "sessions": [],
                 "sessions_json": [],
                 "channels": channels_out,
@@ -1164,6 +1202,10 @@ def main(argv: list[str] | None = None) -> int:
             "backup_owners": it.backup_owners,
             "management_slot": it.management_slot,
             "custom_roles": it.custom_roles,
+            "executors": it.executors,
+            "acceptors": it.acceptors,
+            "reviewers": it.reviewers,
+            "visual_reviewers": it.visual_reviewers,
             "session": sess or None,
         }
         if _as_str(it.type).strip() == "任务":

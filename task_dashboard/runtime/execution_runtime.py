@@ -49,7 +49,10 @@ from task_dashboard.runtime.restart_recovery import (
     queued_recovery_lazy_interval_s as runtime_queued_recovery_lazy_interval_s,
     restart_recovery_lazy_interval_s as runtime_restart_recovery_lazy_interval_s,
 )
-from task_dashboard.runtime.run_detail_fields import extract_terminal_message_from_file
+from task_dashboard.runtime.run_detail_fields import (
+    extract_terminal_message_from_file,
+    reconcile_generated_media_for_run,
+)
 from task_dashboard.session_store import SessionStore
 
 __all__ = [
@@ -878,9 +881,23 @@ def run_cli_exec(
                                     logf.write(log_line)
                                     logf.flush()
                     else:
-                        meta["status"] = "done"
-                        meta["error"] = ""
-                        meta.pop("errorType", None)
+                        terminal_error = __getattr__("_detect_terminal_text_cli_incomplete_error")(
+                            cli_type,
+                            log_path=log_path,
+                        )
+                        if terminal_error:
+                            meta["status"] = "error"
+                            meta["error"] = _safe_text(terminal_error, 1200)
+                            meta["errorType"] = "permission_denied"
+                            with lock:
+                                logf.write(
+                                    "\n[system] terminal-text CLI exited without final answer after permission denial\n"
+                                )
+                                logf.flush()
+                        else:
+                            meta["status"] = "done"
+                            meta["error"] = ""
+                            meta.pop("errorType", None)
             finally:
                 registry.unregister(run_id)
     except Exception as exc:
@@ -931,6 +948,10 @@ def run_cli_exec(
         meta["business_refs"] = __getattr__("_extract_business_refs_from_texts")(business_texts, max_items=24)
     except Exception:
         meta["business_refs"] = __getattr__("_normalize_business_refs_value")(meta.get("business_refs"), max_items=24)
+    try:
+        reconcile_generated_media_for_run(store, run_id, meta, log_path=log_path)
+    except Exception:
+        pass
     current_count = int(meta.get("agentMessagesCount") or 0)
     if current_count > 0:
         meta["agentMessagesCount"] = current_count

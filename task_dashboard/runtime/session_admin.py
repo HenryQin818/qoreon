@@ -71,6 +71,8 @@ def _pick_reusable_session(
     *,
     environment: str,
     worktree_root: str,
+    workdir: str = "",
+    branch: str = "",
     cli_type: str,
 ) -> dict[str, Any] | None:
     available = [
@@ -86,6 +88,26 @@ def _pick_reusable_session(
         and str(row.get("worktree_root") or "").strip() == worktree_root
         and str(row.get("cli_type") or "codex").strip() == cli_type
     ]
+    requested_workdir = str(workdir or "").strip()
+    if requested_workdir:
+        exact_workdir = [
+            row for row in exact
+            if str(row.get("workdir") or "").strip() == requested_workdir
+        ]
+        if exact_workdir:
+            exact = exact_workdir
+        elif exact:
+            return None
+    requested_branch = str(branch or "").strip()
+    if requested_branch:
+        exact_branch = [
+            row for row in exact
+            if str(row.get("branch") or "").strip() == requested_branch
+        ]
+        if exact_branch:
+            exact = exact_branch
+        elif exact:
+            return None
     candidates = exact or available
     candidates.sort(key=session_binding_sort_key, reverse=True)
     return candidates[0] if candidates else None
@@ -122,10 +144,7 @@ def create_session_response(
     session_role = str(payload.get("session_role") or "").strip()
     purpose = str(payload.get("purpose") or "").strip()
     reuse_strategy = _normalize_reuse_strategy(payload.get("reuse_strategy"))
-    try:
-        create_timeout_s = max(30, int(payload.get("create_timeout_s") or 90))
-    except Exception:
-        create_timeout_s = 90
+    reuse_strategy_explicit = bool(payload.get("reuse_strategy_explicit"))
     set_as_primary = payload.get("set_as_primary")
     first_message = str(payload.get("first_message") or "")
     if not project_id or not channel_name:
@@ -235,11 +254,21 @@ def create_session_response(
             "imported": bool(imported),
         }
 
+    if (
+        reuse_strategy == "reuse_active"
+        and not reuse_strategy_explicit
+        and set_as_primary is True
+        and session_role == "primary"
+    ):
+        reuse_strategy = "create_new"
+
     if reuse_strategy == "reuse_active":
         reusable = _pick_reusable_session(
             session_store.list_sessions(project_id, channel_name, include_deleted=True),
             environment=effective_environment,
             worktree_root=effective_worktree_root,
+            workdir=str(project_workdir),
+            branch=branch,
             cli_type=cli_type,
         )
         if reusable:
@@ -297,30 +326,36 @@ def create_session_response(
     )
     create_result = create_cli_session(
         seed_prompt=seed,
-        timeout_s=create_timeout_s,
+        timeout_s=90,
         cli_type=cli_type,
         workdir=project_workdir,
         model=model,
         reasoning_effort=reasoning_effort,
         execution_profile=execution_profile,
     )
-    create_result_ok = bool(create_result.get("ok"))
+    timeout_recovered = False
+    create_warning: dict[str, Any] = {}
+    create_error = str(create_result.get("error") or "").strip().lower()
     recovered_session_id = str(create_result.get("sessionId") or "").strip()
-    recovered_on_timeout = (
-        not create_result_ok
-        and _looks_like_uuid_local(recovered_session_id)
-        and "timeout" in str(create_result.get("error") or "").strip().lower()
-    )
-    if not create_result_ok and not recovered_on_timeout:
-        err = RuntimeError("create session failed")
-        setattr(err, "detail", create_result)
-        raise err
+    if not create_result.get("ok"):
+        if "timeout" in create_error and _looks_like_uuid_local(recovered_session_id):
+            timeout_recovered = True
+            create_warning = {
+                "error": str(create_result.get("error") or "timeout"),
+                "cliType": create_result.get("cliType", cli_type),
+                "sessionId": recovered_session_id,
+                "sessionPath": create_result.get("sessionPath", ""),
+            }
+        else:
+            err = RuntimeError("create session failed")
+            setattr(err, "detail", create_result)
+            raise err
     session = session_store.create_session(
         project_id=project_id,
         channel_name=channel_name,
         cli_type=cli_type,
         alias=alias,
-        session_id=str(create_result.get("sessionId") or "").strip(),
+        session_id=recovered_session_id,
         model=model,
         reasoning_effort=reasoning_effort,
         environment=effective_environment,
@@ -331,7 +366,7 @@ def create_session_response(
         purpose=purpose,
         reuse_strategy=reuse_strategy,
         schema_version="session.create.v2",
-        created_via="api.create_session_v2.timeout_recovered" if recovered_on_timeout else "api.create_session_v2",
+        created_via="api.create_session_v2.timeout_recovered" if timeout_recovered else "api.create_session_v2",
         context_binding_state=effective_binding_state,
         project_execution_context=context_meta,
         is_primary=effective_primary if isinstance(effective_primary, bool) else None,
@@ -349,7 +384,9 @@ def create_session_response(
         "workdir": create_result.get("workdir", str(project_workdir)),
         "created": True,
         "reused": False,
-        "timeoutRecovered": recovered_on_timeout,
+        "timeout_recovered": timeout_recovered,
+        "timeoutRecovered": timeout_recovered,
+        "create_warning": create_warning,
     }
 
 

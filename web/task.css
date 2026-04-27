@@ -763,6 +763,11 @@
       padding: 0;
       background: transparent;
       border: 0;
+      position: relative;
+      z-index: 0;
+    }
+    .conv-channel-group.menu-open {
+      z-index: 12;
     }
     .conv-channel-group-head {
       position: relative;
@@ -876,6 +881,11 @@
     .conv-channel-group-head .channel-row-menu {
       top: calc(100% + 8px);
       right: 0;
+      z-index: 48;
+    }
+    .channel-row.menu-open,
+    .conv-channel-group-head .channel-row-tools.menu-open,
+    .conv-channel-group-head .channel-row-menu.show {
       z-index: 48;
     }
     .conv-channel-group-list {
@@ -3610,6 +3620,34 @@
       font-family: var(--mono);
       color: rgba(0,0,0,0.46);
     }
+    .detail-inline-copy-btn {
+      width: 24px;
+      height: 24px;
+      flex: 0 0 auto;
+      border-radius: 8px;
+      border: 1px solid rgba(0,0,0,0.08);
+      background: rgba(255,255,255,0.74);
+      color: rgba(0,0,0,0.52);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+      cursor: pointer;
+      transition: 140ms ease;
+    }
+    .detail-inline-copy-btn:hover,
+    .detail-inline-copy-btn:focus-visible {
+      color: var(--accent);
+      border-color: rgba(47,111,237,0.18);
+      background: rgba(244,248,255,0.96);
+      outline: none;
+      box-shadow: var(--shadow2);
+      transform: translateY(-1px);
+    }
+    .detail-inline-copy-btn svg {
+      width: 13px;
+      height: 13px;
+    }
     .detail-inline-channel { padding-left: 2px; }
     .detailh .dsub {
       margin-top: 6px;
@@ -4021,7 +4059,7 @@
     .img-preview-mask {
       position: fixed;
       inset: 0;
-      z-index: 80;
+      z-index: 1300;
       display: none;
       align-items: center;
       justify-content: center;
@@ -4185,6 +4223,101 @@
       white-space: pre-wrap;
       overflow-wrap: anywhere;
       overflow: auto;
+    }
+    .msgobj-image-stage {
+      display: grid;
+      gap: 10px;
+      border: 1px solid rgba(0,0,0,0.08);
+      border-radius: 12px;
+      background: rgba(255,255,255,0.92);
+      padding: 12px;
+    }
+    .msgobj-image-mainbtn {
+      display: block;
+      width: 100%;
+      border: none;
+      border-radius: 12px;
+      padding: 0;
+      background: rgba(244,246,241,0.92);
+      cursor: zoom-in;
+      overflow: hidden;
+    }
+    .msgobj-image-main {
+      display: block;
+      width: 100%;
+      max-height: min(62vh, 720px);
+      object-fit: contain;
+      background: rgba(241,244,239,0.96);
+    }
+    .msgobj-image-stage-meta {
+      display: grid;
+      gap: 4px;
+      min-width: 0;
+    }
+    .msgobj-image-stage-name {
+      font-size: 13px;
+      font-weight: 800;
+      color: rgba(0,0,0,0.84);
+      overflow-wrap: anywhere;
+    }
+    .msgobj-image-stage-sub {
+      font-size: 11px;
+      color: var(--muted2);
+      font-family: var(--mono);
+      overflow-wrap: anywhere;
+    }
+    .msgobj-image-grid-wrap {
+      display: grid;
+      gap: 10px;
+    }
+    .msgobj-image-grid-title {
+      font-size: 11px;
+      color: var(--muted2);
+      font-family: var(--mono);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .msgobj-image-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(168px, 1fr));
+      gap: 10px;
+    }
+    .msgobj-image-card {
+      border: 1px solid rgba(0,0,0,0.08);
+      border-radius: 12px;
+      background: rgba(255,255,255,0.92);
+      padding: 8px;
+      display: grid;
+      gap: 8px;
+      text-align: left;
+      cursor: zoom-in;
+    }
+    .msgobj-image-card:hover { box-shadow: var(--shadow2); }
+    .msgobj-image-thumb {
+      display: block;
+      width: 100%;
+      height: 148px;
+      object-fit: cover;
+      border-radius: 10px;
+      background: rgba(244,246,241,0.96);
+      border: 1px solid rgba(0,0,0,0.06);
+    }
+    .msgobj-image-card-info {
+      display: grid;
+      gap: 4px;
+      min-width: 0;
+    }
+    .msgobj-image-name {
+      font-size: 12px;
+      font-weight: 800;
+      color: rgba(0,0,0,0.82);
+      overflow-wrap: anywhere;
+    }
+    .msgobj-image-sub {
+      font-size: 11px;
+      color: var(--muted2);
+      font-family: var(--mono);
+      overflow-wrap: anywhere;
     }
     .msgobj-html-preview-wrap {
       border: 1px solid rgba(0,0,0,0.08);
@@ -5953,6 +6086,9 @@
 
       /* 隐藏PC端通道列表 */
       aside { display: none !important; }
+      .memo-drawer-mask.show > aside.memo-drawer.conv-task-drawer {
+        display: grid !important;
+      }
 
       /* 列表视图：移动端默认显示 */
       .list-view {
@@ -5990,6 +6126,12 @@
       }
       .msgobj-meta-grid {
         grid-template-columns: 1fr;
+      }
+      .msgobj-image-grid {
+        grid-template-columns: 1fr;
+      }
+      .msgobj-image-thumb {
+        height: 180px;
       }
 
       /* 对话模式：移动端根据选中状态切换列表/详情 */

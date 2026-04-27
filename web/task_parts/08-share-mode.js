@@ -615,10 +615,18 @@
             { source: "share-announce-ack" }
           );
         }
+        const shareRunId = body && body.run ? String(body.run.id || body.run.run_id || "") : "";
+        if (typeof triggerConversationEasterEggForText === "function") {
+          triggerConversationEasterEggForText(message, {
+            sessionId: sid,
+            runId: shareRunId,
+            source: "share-send-ack",
+          });
+        }
         PCONV.optimistic = null;
         PCONV.sending = false;
         await refreshTaskShareModeConversationPanel();
-        const runId = body && body.run ? String(body.run.id || "") : "";
+        const runId = shareRunId;
         if (typeof setHintText === "function") {
           setHintText("conv", "已发送，等待执行回溯刷新…");
         }

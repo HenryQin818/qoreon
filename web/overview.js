@@ -257,13 +257,20 @@
       return n;
     }
 
-    function toTaskUrl(projectId, channelName) {
+    function toTaskUrl(projectId, channelName, opts = {}) {
       const params = new URLSearchParams();
       params.set("p", String(projectId || ""));
       const channel = String(channelName || "").trim();
       if (channel) params.set("c", channel);
       else params.set("pm", "c");
       params.set("vm", "w");
+      const panelMode = String((opts && opts.panelMode) || "").trim();
+      if (panelMode) params.set("pm", panelMode);
+      const taskPath = String((opts && opts.taskPath) || "").trim();
+      if (taskPath) params.set("sp", taskPath);
+      const taskId = String((opts && opts.taskId) || "").trim();
+      if (taskId) params.set("tid", taskId);
+      if (opts && opts.unifiedDetail) params.set("ud", "1");
       return taskBase + "#" + params.toString();
     }
     function buildGlobalCurtainUrl() {
@@ -7241,8 +7248,18 @@
       if (node.project_id) {
          const btn = document.createElement("a");
          btn.className = "btn btn-primary";
-         btn.textContent = "前往任务看板";
-         btn.href = toTaskUrl(node.project_id, node.channel_name);
+         if (node.type === "task") {
+           btn.textContent = "打开统一任务详情";
+           btn.href = toTaskUrl(node.project_id, node.channel_name, {
+             panelMode: "t",
+             taskPath: node.path || node.task_path || "",
+             taskId: node.task_id || node.taskId || node.id || "",
+             unifiedDetail: true,
+           });
+         } else {
+           btn.textContent = "前往任务看板";
+           btn.href = toTaskUrl(node.project_id, node.channel_name);
+         }
          actions.appendChild(btn);
       }
     }

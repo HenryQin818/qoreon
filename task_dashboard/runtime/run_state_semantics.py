@@ -46,7 +46,10 @@ def _latest_process_row_preview(process_rows: Any, max_len: int = 300) -> str:
 
 def _run_preview_parts(meta: dict[str, Any]) -> dict[str, str]:
     process_rows = meta.get("processRows") or meta.get("process_rows") or []
-    ai_preview = _normalize_text(meta.get("lastPreview") or meta.get("partialPreview"), max_len=300)
+    ai_preview = _normalize_text(
+        meta.get("generated_media_summary") or meta.get("lastPreview") or meta.get("partialPreview"),
+        max_len=300,
+    )
     if not ai_preview:
         ai_preview = _latest_process_row_preview(process_rows, max_len=300)
     user_preview = _normalize_text(meta.get("messagePreview"), max_len=260)

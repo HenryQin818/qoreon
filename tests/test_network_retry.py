@@ -34,7 +34,7 @@ class TestNetworkRetryHelpers(unittest.TestCase):
         self.assertIn("自动重试", hint)
 
     def test_error_hint_missing_cli_bin_guides_to_system_settings(self) -> None:
-        msg = "[Errno 2] No such file or directory: '/Users/demo/.npm-global/bin/codex'"
+        msg = "[Errno 2] No such file or directory: '/tmp/qoreon-demo/.npm-global/bin/codex'"
         hint = server._error_hint(msg)
         self.assertIn("codex 启动路径无效", hint)
         self.assertIn("系统设置", hint)

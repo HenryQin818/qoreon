@@ -28,3 +28,7 @@ class Item:
     backup_owners: list[dict[str, str]] = field(default_factory=list)
     management_slot: list[dict[str, str]] = field(default_factory=list)
     custom_roles: list[dict[str, str]] = field(default_factory=list)
+    executors: list[dict[str, str]] = field(default_factory=list)
+    acceptors: list[dict[str, str]] = field(default_factory=list)
+    reviewers: list[dict[str, str]] = field(default_factory=list)
+    visual_reviewers: list[dict[str, str]] = field(default_factory=list)
