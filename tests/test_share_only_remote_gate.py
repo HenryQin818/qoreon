@@ -67,6 +67,43 @@ class ShareOnlyRemoteGateTests(unittest.TestCase):
                     )
                 )
 
+    def test_platform_lan_access_allows_full_platform_for_same_lan_client(self) -> None:
+        remote = ("192.168.0.103", 54321)
+        local_addresses = {"127.0.0.1", "::1", "192.168.0.102"}
+
+        self.assertFalse(
+            _is_remote_share_only_request_blocked(
+                remote,
+                "GET",
+                "/api/sessions?project_id=task_dashboard",
+                local_addresses=local_addresses,
+                platform_lan_access_enabled=True,
+            )
+        )
+        self.assertFalse(
+            _is_remote_share_only_request_blocked(
+                remote,
+                "POST",
+                "/api/codex/announce",
+                local_addresses=local_addresses,
+                platform_lan_access_enabled=True,
+            )
+        )
+
+    def test_platform_lan_access_does_not_allow_non_lan_client(self) -> None:
+        remote = ("8.8.8.8", 54321)
+        local_addresses = {"127.0.0.1", "::1", "192.168.0.102"}
+
+        self.assertTrue(
+            _is_remote_share_only_request_blocked(
+                remote,
+                "GET",
+                "/api/sessions?project_id=task_dashboard",
+                local_addresses=local_addresses,
+                platform_lan_access_enabled=True,
+            )
+        )
+
     def test_same_machine_lan_request_keeps_ops_surface(self) -> None:
         same_machine_lan = ("192.168.0.102", 54321)
         local_addresses = {"127.0.0.1", "::1", "192.168.0.102"}

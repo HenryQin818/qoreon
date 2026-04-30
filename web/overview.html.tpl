@@ -29,6 +29,36 @@
           <span>组织战略</span>
           <span class="btn-tag-new">NEW</span>
         </button>
+        <div class="lan-access-wrap" id="lanAccessWrap">
+          <button class="btn btn-ghost lan-access-trigger" id="lanAccessBtn" type="button" aria-expanded="false" aria-controls="lanAccessPop">
+            <span>局域网访问</span>
+            <span class="lan-access-badge" id="lanAccessBadge">读取中</span>
+          </button>
+          <div class="lan-access-pop" id="lanAccessPop" hidden>
+            <div class="lan-access-head">
+              <div>
+                <div class="lan-access-title">局域网访问</div>
+                <div class="lan-access-sub" id="lanAccessSummary">读取当前运行状态...</div>
+              </div>
+              <span class="lan-access-pill" id="lanAccessStatusPill">读取中</span>
+            </div>
+            <label class="lan-access-switch">
+              <input id="lanAccessSwitch" type="checkbox" />
+              <span class="lan-access-switch-track" aria-hidden="true"></span>
+              <span id="lanAccessSwitchText">允许局域网访问完整平台</span>
+            </label>
+            <div class="lan-access-url-row" id="lanAccessUrlRow" hidden>
+              <code class="lan-access-url" id="lanAccessUrl">-</code>
+              <button class="btn btn-ghost lan-access-copy" id="lanAccessCopyBtn" type="button">复制</button>
+            </div>
+            <div class="lan-access-hint" id="lanAccessHint">关闭状态下不展示局域网地址。</div>
+            <div class="lan-access-restart" id="lanAccessRestart" hidden></div>
+            <div class="lan-access-actions">
+              <button class="btn btn-ghost" id="lanAccessRefreshBtn" type="button">刷新状态</button>
+            </div>
+            <div class="lan-access-message" id="lanAccessMessage"></div>
+          </div>
+        </div>
         <button class="btn btn-ghost" id="worklogBtn" type="button">平台文章</button>
         <button class="btn btn-ghost" id="configBtn" type="button">配置</button>
       </div>

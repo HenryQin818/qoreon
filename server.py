@@ -198,6 +198,10 @@ from task_dashboard.runtime.share_space import (
     LEGACY_SHARE_SPACE_PAGE_PATH as RUNTIME_LEGACY_SHARE_SPACE_PAGE_PATH,
     SHARE_MODE_PAGE_PATH as RUNTIME_SHARE_MODE_PAGE_PATH,
 )
+from task_dashboard.runtime.platform_lan_access import (
+    is_trusted_lan_client_address as runtime_is_trusted_lan_client_address,
+    load_config as runtime_load_platform_lan_access_config,
+)
 
 # Import route dispatcher (extracted from server.py)
 from task_dashboard.routes import (
@@ -1113,8 +1117,14 @@ def _is_remote_share_only_request_blocked(
     request_path: str,
     *,
     local_addresses: Optional[set[str]] = None,
+    platform_lan_access_enabled: bool = False,
 ) -> bool:
     if _is_local_client_address(client_address, local_addresses=local_addresses):
+        return False
+    if platform_lan_access_enabled and runtime_is_trusted_lan_client_address(
+        client_address,
+        local_addresses=local_addresses if local_addresses is not None else _local_client_addresses(),
+    ):
         return False
     return not _is_remote_share_only_allowed_request(method, request_path)
 
@@ -3609,6 +3619,7 @@ def _find_new_session_id(
     start_ts: float,
     cli_type: str = "codex",
     exclude_session_ids: Optional[set[str]] = None,
+    adapter_cls: Optional[type] = None,
 ) -> tuple[str, str]:
     """
     Find the most recently created session after start_ts for the given CLI type.
@@ -3622,8 +3633,8 @@ def _find_new_session_id(
     Returns:
         Tuple of (session_id, session_path) or ("", "") if not found.
     """
-    adapter_cls = get_adapter(cli_type) or CodexAdapter
-    sessions = adapter_cls.scan_sessions(after_ts=start_ts)
+    resolved_adapter_cls = adapter_cls or get_adapter(cli_type) or CodexAdapter
+    sessions = resolved_adapter_cls.scan_sessions(after_ts=start_ts)
     if not sessions:
         return "", ""
     blocked = {
@@ -3727,6 +3738,7 @@ def create_cli_session(
             start_ts,
             cli_type,
             exclude_session_ids=existing_session_ids,
+            adapter_cls=adapter_cls,
         )
         combined_output = "\n".join(
             str(part or "")
@@ -3776,6 +3788,7 @@ def create_cli_session(
         start_ts,
         cli_type,
         exclude_session_ids=existing_session_ids,
+        adapter_cls=adapter_cls,
     )
     if not sid and proc.returncode == 0:
         combined_output = "\n".join(part for part in [proc.stdout, proc.stderr] if part)
@@ -4864,10 +4877,23 @@ class Handler(BaseHTTPRequestHandler):
     server_version = "task-dashboard-ccb/1.0"
 
     def _deny_remote_share_only_request(self, method: str) -> bool:
+        platform_lan_access_enabled = False
+        local_addresses = _local_client_addresses()
+        try:
+            store = getattr(self.server, "store", None)
+            runtime_base_dir = Path(getattr(store, "runs_dir")).parent if store is not None else None
+            if runtime_base_dir is not None:
+                platform_lan_access_enabled = bool(
+                    runtime_load_platform_lan_access_config(runtime_base_dir).get("enabled")
+                )
+        except Exception:
+            platform_lan_access_enabled = False
         if not _is_remote_share_only_request_blocked(
             getattr(self, "client_address", None),
             method,
             getattr(self, "path", ""),
+            local_addresses=local_addresses,
+            platform_lan_access_enabled=platform_lan_access_enabled,
         ):
             return False
         path = urlparse(str(getattr(self, "path", "") or "")).path
@@ -5157,6 +5183,7 @@ class Handler(BaseHTTPRequestHandler):
             extract_run_extra_fields=_extract_run_extra_fields,
             build_local_server_origin=_build_local_server_origin,
             build_public_server_origin=_build_public_server_origin,
+            local_client_addresses=_local_client_addresses,
             resolve_attachment_local_path=_resolve_attachment_local_path,
         )
         try:

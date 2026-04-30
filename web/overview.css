@@ -145,6 +145,188 @@
       justify-content: flex-end;
       gap: 8px;
     }
+    .lan-access-wrap {
+      position: relative;
+      display: inline-flex;
+    }
+    .lan-access-trigger {
+      position: relative;
+    }
+    .lan-access-trigger.is-on {
+      background: var(--success-light);
+      color: var(--success-dark);
+    }
+    .lan-access-trigger.is-pending {
+      background: var(--warning-light);
+      color: var(--warning-dark);
+    }
+    .lan-access-badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 18px;
+      padding: 0 7px;
+      border-radius: var(--radius-full);
+      border: 1px solid var(--border-default);
+      background: rgba(255,255,255,0.72);
+      color: currentColor;
+      font-size: 10px;
+      font-weight: 800;
+      line-height: 1;
+      white-space: nowrap;
+    }
+    .lan-access-pop {
+      position: absolute;
+      top: calc(100% + 10px);
+      right: 0;
+      width: min(360px, calc(100vw - 32px));
+      padding: 14px;
+      border-radius: var(--radius-lg);
+      border: 1px solid var(--border-default);
+      background: rgba(255,255,255,0.98);
+      box-shadow: var(--shadow-lg);
+      z-index: 95;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .lan-access-head,
+    .lan-access-actions {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    .lan-access-title {
+      color: var(--text-primary);
+      font-size: 14px;
+      font-weight: 700;
+      line-height: 1.2;
+    }
+    .lan-access-sub,
+    .lan-access-hint,
+    .lan-access-message {
+      color: var(--text-muted);
+      font-size: 12px;
+      line-height: 1.55;
+      overflow-wrap: anywhere;
+    }
+    .lan-access-pill {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex: 0 0 auto;
+      min-height: 22px;
+      padding: 0 9px;
+      border-radius: var(--radius-full);
+      border: 1px solid var(--border-default);
+      background: var(--bg-subtle);
+      color: var(--text-muted);
+      font-size: 11px;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+    .lan-access-pill.is-on {
+      border-color: rgba(16,185,129,0.22);
+      background: var(--success-light);
+      color: var(--success-dark);
+    }
+    .lan-access-pill.is-pending {
+      border-color: rgba(245,158,11,0.28);
+      background: var(--warning-light);
+      color: var(--warning-dark);
+    }
+    .lan-access-pill.is-error {
+      border-color: rgba(239,68,68,0.20);
+      background: var(--danger-light);
+      color: var(--danger-dark);
+    }
+    .lan-access-switch {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px;
+      border-radius: var(--radius-md);
+      background: var(--bg-subtle);
+      color: var(--text-secondary);
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .lan-access-switch input {
+      position: absolute;
+      opacity: 0;
+      pointer-events: none;
+    }
+    .lan-access-switch-track {
+      width: 40px;
+      height: 22px;
+      border-radius: var(--radius-full);
+      background: var(--border-strong);
+      position: relative;
+      flex: 0 0 auto;
+      transition: background 160ms ease;
+    }
+    .lan-access-switch-track::after {
+      content: "";
+      position: absolute;
+      top: 3px;
+      left: 3px;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: #fff;
+      box-shadow: var(--shadow-xs);
+      transition: transform 160ms ease;
+    }
+    .lan-access-switch input:checked + .lan-access-switch-track {
+      background: var(--success);
+    }
+    .lan-access-switch input:checked + .lan-access-switch-track::after {
+      transform: translateX(18px);
+    }
+    .lan-access-switch input:disabled + .lan-access-switch-track {
+      opacity: 0.5;
+    }
+    .lan-access-url-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 8px;
+    }
+    .lan-access-url {
+      min-width: 0;
+      padding: 8px 10px;
+      border-radius: var(--radius-md);
+      border: 1px solid var(--border-default);
+      background: var(--bg-subtle);
+      color: var(--text-primary);
+      font: 12px/1.4 var(--font-mono);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .lan-access-copy {
+      padding: 8px 10px;
+      background: var(--bg-canvas);
+      border: 1px solid var(--border-default);
+    }
+    .lan-access-restart {
+      padding: 9px 10px;
+      border-radius: var(--radius-md);
+      border: 1px solid rgba(245,158,11,0.26);
+      background: var(--warning-light);
+      color: var(--warning-dark);
+      font-size: 12px;
+      line-height: 1.55;
+      font-weight: 600;
+    }
+    .lan-access-message.ok { color: var(--success-dark); }
+    .lan-access-message.err { color: var(--danger-dark); }
+    .lan-access-pop .btn:disabled,
+    .lan-access-switch input:disabled ~ span {
+      cursor: not-allowed;
+    }
     .env-chip {
       display: inline-flex;
       align-items: center;
@@ -2408,6 +2590,20 @@
       .project-bootstrap-channel-actions,
       .project-bootstrap-action-buttons {
         width: 100%;
+      }
+      .lan-access-wrap,
+      .lan-access-trigger {
+        width: 100%;
+      }
+      .lan-access-trigger {
+        justify-content: space-between;
+      }
+      .lan-access-pop {
+        position: fixed;
+        left: 12px;
+        right: 12px;
+        top: 72px;
+        width: auto;
       }
       .project-bootstrap-action-buttons .btn {
         flex: 1;

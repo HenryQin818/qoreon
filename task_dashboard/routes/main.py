@@ -104,6 +104,10 @@ from task_dashboard.runtime.share_space import (
     load_project_share_space_config as runtime_load_project_share_space_config,
     update_project_share_space_config_response as runtime_update_project_share_space_config_response,
 )
+from task_dashboard.runtime.platform_lan_access import (
+    build_state as runtime_build_platform_lan_access_state,
+    update_response as runtime_update_platform_lan_access_response,
+)
 from task_dashboard.runtime.project_id_aliases import (
     canonicalize_runtime_project_id,
     rewrite_payload_project_id_fields,
@@ -302,6 +306,7 @@ class RouteContext:
     extract_run_extra_fields: Callable[[dict[str, Any]], dict[str, Any]] = field(repr=False)
     build_local_server_origin: Callable[[str, int], str] = field(repr=False)
     build_public_server_origin: Callable[[str, int], str] = field(repr=False)
+    local_client_addresses: Callable[..., set[str]] = field(repr=False)
     resolve_attachment_local_path: Callable[[Path, Any], Optional[Path]] = field(repr=False)
 
 
@@ -601,6 +606,10 @@ class RouteDispatcher:
             self._handle_cli_types_get(handler)
             return True
 
+        if path == "/api/runtime/lan-access":
+            self._handle_platform_lan_access_get(handler)
+            return True
+
         if path == "/api/runtime/perf-snapshot":
             self._handle_runtime_perf_snapshot_get(handler)
             return True
@@ -713,6 +722,10 @@ class RouteDispatcher:
 
         if path == "/api/config/global":
             self._handle_config_global_post(handler)
+            return True
+
+        if path == "/api/runtime/lan-access":
+            self._handle_platform_lan_access_post(handler)
             return True
 
         if path == "/api/tasks/status":
@@ -863,6 +876,7 @@ class RouteDispatcher:
             "/api/codex/runs",
             "/api/communication/audit",
             "/api/cli/types",
+            "/api/runtime/lan-access",
             "/api/runtime/perf-snapshot",
             "/api/board/global-resource-graph",
             "/api/conversation-memos",
@@ -928,6 +942,49 @@ class RouteDispatcher:
                 ),
             },
         )
+
+    def _current_bind_host(self, handler: "BaseHTTPRequestHandler") -> str:
+        try:
+            return str(handler.server.server_address[0] or "").strip()
+        except Exception:
+            return ""
+
+    def _platform_lan_access_state(self, handler: "BaseHTTPRequestHandler") -> dict[str, Any]:
+        bind_host = self._current_bind_host(handler)
+        return runtime_build_platform_lan_access_state(
+            runtime_base_dir=self.ctx.runs_dir.parent,
+            current_bind=bind_host,
+            port=self.ctx.server_port,
+            local_origin=self.ctx.build_local_server_origin(bind_host, self.ctx.server_port),
+            public_origin=self.ctx.build_public_server_origin(bind_host, self.ctx.server_port),
+            local_addresses=self.ctx.local_client_addresses(),
+        )
+
+    def _handle_platform_lan_access_get(self, handler: "BaseHTTPRequestHandler") -> None:
+        """Handle GET /api/runtime/lan-access."""
+        self.ctx.json_response(handler, 200, self._platform_lan_access_state(handler))
+
+    def _handle_platform_lan_access_post(self, handler: "BaseHTTPRequestHandler") -> None:
+        """Handle POST /api/runtime/lan-access."""
+        if not self.ctx.require_token():
+            return
+        try:
+            body = self.ctx.read_body_json(handler, max_bytes=10_000)
+        except Exception as e:
+            self.ctx.json_response(handler, 400, {"ok": False, "error": f"bad json: {e}"})
+            return
+        bind_host = self._current_bind_host(handler)
+        code, payload = runtime_update_platform_lan_access_response(
+            runtime_base_dir=self.ctx.runs_dir.parent,
+            payload=body,
+            current_bind=bind_host,
+            port=self.ctx.server_port,
+            local_origin=self.ctx.build_local_server_origin(bind_host, self.ctx.server_port),
+            public_origin=self.ctx.build_public_server_origin(bind_host, self.ctx.server_port),
+            local_addresses=self.ctx.local_client_addresses(),
+            updated_by="api:/api/runtime/lan-access",
+        )
+        self.ctx.json_response(handler, code, payload)
 
     def _handle_communication_audit_get(
         self, handler: "BaseHTTPRequestHandler", qs: dict[str, list[str]]
