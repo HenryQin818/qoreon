@@ -51,6 +51,7 @@ def _sessions_payload_cache_key(
     include_deleted: bool,
     environment_name: str,
     worktree_root: Any,
+    payload_mode: str = "full",
 ) -> str:
     return "|".join(
         [
@@ -58,6 +59,7 @@ def _sessions_payload_cache_key(
             str(project_id or "").strip(),
             str(channel_name or "").strip(),
             "1" if include_deleted else "0",
+            str(payload_mode or "full").strip().lower(),
             str(environment_name or "").strip(),
             str(worktree_root or "").strip(),
         ]
@@ -380,6 +382,136 @@ def _coerce_bool(value: str, default: bool) -> bool:
     return value.lower() in ("1", "true", "yes", "on")
 
 
+_SESSION_SUMMARY_FIELDS = (
+    "id",
+    "sessionId",
+    "session_id",
+    "project_id",
+    "projectId",
+    "channel_name",
+    "channelName",
+    "cli_type",
+    "cliType",
+    "role",
+    "alias",
+    "display_name",
+    "display_name_source",
+    "agent_display_name",
+    "agent_display_name_source",
+    "agent_name_state",
+    "agent_display_issue",
+    "codex_title",
+    "environment",
+    "worktree_root",
+    "workdir",
+    "branch",
+    "project_execution_context",
+    "team_expansion_hint_state",
+    "team_expansion_hint_summary",
+    "team_expansion_hint_blocked_summary",
+    "team_expansion_hint_prompt",
+    "team_expansion_hint",
+    "runtime_state",
+    "session_health_state",
+    "session_display_state",
+    "session_display_reason",
+    "latest_run_summary",
+    "latest_effective_run_summary",
+    "heartbeat_summary",
+    "memo_summary",
+    "conversation_list_metrics",
+    "status",
+    "created_at",
+    "last_used_at",
+    "is_primary",
+    "is_deleted",
+    "deleted_at",
+    "deleted_reason",
+    "source",
+)
+
+
+def _normalize_sessions_payload_mode(qs: dict[str, list[str]]) -> str:
+    raw = str(
+        (
+            qs.get("payloadMode")
+            or qs.get("payload_mode")
+            or qs.get("queryMode")
+            or qs.get("query_mode")
+            or [""]
+        )[0]
+        or ""
+    ).strip().lower()
+    if raw in {"summary", "light", "full"}:
+        return raw
+    return "full"
+
+
+def _session_summary_row(row: dict[str, Any]) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for key in _SESSION_SUMMARY_FIELDS:
+        if key in row:
+            value = row.get(key)
+            out[key] = copy.deepcopy(value) if isinstance(value, (dict, list)) else value
+    return out
+
+
+def _sessions_read_model_meta(*, payload_mode: str) -> dict[str, Any]:
+    return {
+        "version": "p0a.v1",
+        "scope": "sessions",
+        "payload_mode": payload_mode,
+        "compat_mode": "additive_only",
+        "cache_strategy": "ttl_single_flight",
+        "cache_ttl_ms": int(_sessions_payload_cache_ttl_s() * 1000),
+        "inflight_wait_ms": int(_sessions_payload_cache_inflight_wait_s() * 1000),
+        "summary_fields": list(_SESSION_SUMMARY_FIELDS) if payload_mode in {"summary", "light"} else [],
+    }
+
+
+def build_sessions_summary_payload(
+    *,
+    session_store: Any,
+    store: Any,
+    project_id: str,
+    channel_name: str = "",
+    include_deleted: bool = False,
+    environment_name: str,
+    worktree_root: Any,
+    apply_effective_primary_flags: Callable[[Any, str, list[dict[str, Any]]], list[dict[str, Any]]],
+    decorate_sessions_display_fields: Callable[[list[dict[str, Any]]], list[dict[str, Any]]],
+    apply_session_context_rows: Callable[..., list[dict[str, Any]]],
+    apply_session_work_context: Callable[..., dict[str, Any]],
+    attach_runtime_state_to_sessions: Callable[[Any, list[dict[str, Any]]], list[dict[str, Any]]],
+) -> dict[str, Any]:
+    sessions = session_store.list_sessions(
+        project_id,
+        channel_name if channel_name else None,
+        include_deleted=include_deleted,
+    )
+    sessions = apply_effective_primary_flags(session_store, project_id, sessions)
+    sessions = decorate_sessions_display_fields(sessions)
+    sessions = apply_session_context_rows(
+        sessions,
+        project_id=project_id,
+        environment_name=environment_name,
+        worktree_root=worktree_root,
+        apply_session_work_context=apply_session_work_context,
+    )
+    sessions = attach_runtime_state_to_sessions(store, sessions, project_id=project_id)
+    sessions = apply_agent_display_fields(sessions)
+    summary_rows = [_session_summary_row(row if isinstance(row, dict) else {}) for row in sessions]
+    return {
+        "project_id": project_id,
+        "channel_name": channel_name,
+        "count": len(summary_rows),
+        "payloadMode": "summary",
+        "sessions": summary_rows,
+        "agent_identity_audit": build_agent_identity_audit(summary_rows, project_id=project_id),
+        "sessions_read_model": _sessions_read_model_meta(payload_mode="summary"),
+    }
+
+
 def list_sessions_response(
     *,
     query_string: str,
@@ -401,6 +533,7 @@ def list_sessions_response(
     project_id = (qs.get("project_id") or [""])[0]
     channel_name = (qs.get("channel_name") or [""])[0]
     include_deleted = _coerce_bool((qs.get("include_deleted") or qs.get("includeDeleted") or [""])[0], False)
+    payload_mode = _normalize_sessions_payload_mode(qs)
 
     if not project_id:
         return 400, {"error": "missing project_id"}
@@ -412,7 +545,31 @@ def list_sessions_response(
         include_deleted=include_deleted,
         environment_name=environment_name,
         worktree_root=worktree_root,
+        payload_mode=payload_mode,
     )
+    if payload_mode in {"summary", "light"}:
+        payload = _build_or_load_sessions_payload(
+            cache_key=cache_key,
+            project_id=project_id,
+            builder=lambda: build_sessions_summary_payload(
+                session_store=session_store,
+                store=store,
+                project_id=project_id,
+                channel_name=channel_name,
+                include_deleted=include_deleted,
+                environment_name=environment_name,
+                worktree_root=worktree_root,
+                apply_effective_primary_flags=apply_effective_primary_flags,
+                decorate_sessions_display_fields=decorate_sessions_display_fields,
+                apply_session_context_rows=apply_session_context_rows,
+                apply_session_work_context=apply_session_work_context,
+                attach_runtime_state_to_sessions=attach_runtime_state_to_sessions,
+            ),
+        )
+        payload["payloadMode"] = payload_mode
+        payload["sessions_read_model"] = _sessions_read_model_meta(payload_mode=payload_mode)
+        return 200, payload
+
     payload = _build_or_load_sessions_payload(
         cache_key=cache_key,
         project_id=project_id,
@@ -434,6 +591,8 @@ def list_sessions_response(
             heartbeat_summary_payload=heartbeat_summary_payload,
         ),
     )
+    payload["payloadMode"] = "full"
+    payload["sessions_read_model"] = _sessions_read_model_meta(payload_mode="full")
     return 200, payload
 
 

@@ -34,6 +34,7 @@ _HOT_ENDPOINT_PREFIXES = (
     "/api/codex/run/:id",
     "/api/sessions",
     "/api/sessions/:id",
+    "/api/projects/:project_id/automation-status",
     "/api/projects/:project_id/auto-scheduler",
     "/api/projects/:project_id/auto-scheduler/inspection-tasks",
     "/api/projects/:project_id/heartbeat-tasks",

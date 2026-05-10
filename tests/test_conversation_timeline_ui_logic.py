@@ -1026,6 +1026,9 @@ class ConversationTimelineUiLogicTests(unittest.TestCase):
             eval(extractFunction(file, "mergeConversationAttachmentLists"));
             eval(extractFunction(file, "filterConversationBubbleAttachments"));
             eval(extractFunction(file, "firstConversationGeneratedMediaAttachmentUrl"));
+            eval(extractFunction(file, "firstConversationGeneratedMediaCount"));
+            eval(extractFunction(file, "conversationGeneratedMediaTextHasSignal"));
+            eval(extractFunction(file, "resolveConversationGeneratedMediaUiMeta"));
 
             const generatedImage = {
               url: "/.runs/r/attachments/generated.png",
@@ -1115,6 +1118,85 @@ class ConversationTimelineUiLogicTests(unittest.TestCase):
               ]),
               [ordinaryAssistantImage, generatedImage],
             );
+            assert.deepEqual(
+              resolveConversationGeneratedMediaUiMeta({
+                status: "running",
+                processInfo: { latest: "Codex Image Gen 正在生成图片", count: 1, items: [] },
+                attachments: [],
+              }),
+              {
+                isGeneratedMediaRun: true,
+                phase: "generating",
+                stateSubText: "图片生成中，结果通常以附件返回",
+                interruptText: "打断生成",
+              },
+            );
+            assert.deepEqual(
+              resolveConversationGeneratedMediaUiMeta({
+                status: "done",
+                generatedMediaCount: 1,
+                generatedMediaSummary: "已生成1张图片",
+                attachments: [],
+              }),
+              {
+                isGeneratedMediaRun: true,
+                phase: "generated",
+                stateSubText: "图片结果已生成，可查看图片结果",
+                interruptText: "打断生成",
+              },
+            );
+            assert.deepEqual(
+              resolveConversationGeneratedMediaUiMeta({
+                status: "done",
+                generatedMediaStatus: "failed",
+                generatedMediaSummary: "图片生成未完成",
+                attachments: [],
+              }),
+              {
+                isGeneratedMediaRun: true,
+                phase: "failed",
+                stateSubText: "图片生成未完成，可查看过程并重试",
+                interruptText: "打断生成",
+              },
+            );
+            assert.deepEqual(
+              resolveConversationGeneratedMediaUiMeta({
+                status: "done",
+                attachments: [generatedImage],
+              }),
+              {
+                isGeneratedMediaRun: true,
+                phase: "generated",
+                stateSubText: "图片结果已生成，可查看图片结果",
+                interruptText: "打断生成",
+              },
+            );
+            assert.deepEqual(
+              resolveConversationGeneratedMediaUiMeta({
+                status: "interrupted",
+                processInfo: { latest: "output/imagegen 本轮生成被中断", count: 1, items: [] },
+                attachments: [],
+              }),
+              {
+                isGeneratedMediaRun: true,
+                phase: "interrupted",
+                stateSubText: "图片生成已中断，可查看过程并重试",
+                interruptText: "打断生成",
+              },
+            );
+            assert.deepEqual(
+              resolveConversationGeneratedMediaUiMeta({
+                status: "running",
+                processInfo: { latest: "正在执行普通 shell 命令", count: 1, items: [] },
+                attachments: [userUploadImage],
+              }),
+              {
+                isGeneratedMediaRun: false,
+                phase: "",
+                stateSubText: "",
+                interruptText: "打断执行",
+              },
+            );
             """
         )
         proc = subprocess.run(
@@ -1125,6 +1207,108 @@ class ConversationTimelineUiLogicTests(unittest.TestCase):
         )
         if proc.returncode != 0:
             self.fail(proc.stderr or proc.stdout or "node assistant generated attachment filter regression script failed")
+
+    def test_run_process_rows_group_actions_under_steps(self) -> None:
+        script = textwrap.dedent(
+            r"""
+            const assert = require("node:assert/strict");
+            const fs = require("node:fs");
+            const path = require("node:path");
+            const repoRoot = process.argv[1];
+            const file = "web/task_parts/76-runs-and-drawer.js";
+            const source = fs.readFileSync(path.join(repoRoot, file), "utf8");
+
+            function extractFunction(name) {
+              const signature = new RegExp(`function ${name}\\(`);
+              const match = signature.exec(source);
+              if (!match) throw new Error(`missing function ${name}`);
+              const start = match.index;
+              const braceStart = source.indexOf("{", start);
+              let depth = 0;
+              for (let i = braceStart; i < source.length; i += 1) {
+                const ch = source[i];
+                if (ch === "{") depth += 1;
+                else if (ch === "}") {
+                  depth -= 1;
+                  if (depth === 0) return source.slice(start, i + 1);
+                }
+              }
+              throw new Error(`unterminated function ${name}`);
+            }
+
+            function firstNonEmptyText(values) {
+              for (const value of values || []) {
+                const text = String(value == null ? "" : value).trim();
+                if (text) return text;
+              }
+              return "";
+            }
+            function normalizeProcessTimestamp(value) {
+              return String(value == null ? "" : value).trim();
+            }
+            eval(extractFunction("normalizeProcessMessageText"));
+            eval(extractFunction("extractStructuredProcessRowTime"));
+            eval(extractFunction("firstProcessMetaText"));
+            eval(extractFunction("normalizeRunProcessTimelineRow"));
+            eval(extractFunction("isRunProcessActionRow"));
+            eval(extractFunction("runProcessActionLabel"));
+            eval(extractFunction("buildRunProcessStepGroups"));
+
+            const mixed = buildRunProcessStepGroups([
+              { text: "读取任务规格", at: "2026-05-09T10:00:00+08:00" },
+              { text: "执行命令: rg processRows", event_type: "command_execution", item_type: "command_execution" },
+              { text: "更新文件", event_type: "file_change", item_type: "file_change" },
+              { text: "完成抽屉渲染调整" },
+              { text: "调用工具: apply_patch", event_type: "collab_tool_call", item_type: "tool_call" },
+            ]);
+            assert.equal(mixed.stepCount, 2);
+            assert.equal(mixed.actionCount, 3);
+            assert.equal(mixed.groups[0].actions.length, 2);
+            assert.equal(mixed.groups[0].actions[0].label, "命令");
+            assert.equal(mixed.groups[0].actions[1].label, "文件");
+            assert.equal(mixed.groups[1].actions[0].label, "协作");
+
+            const actionOnly = buildRunProcessStepGroups([
+              { text: "执行命令: build", event_type: "command_execution", item_type: "command_execution" },
+              { text: "工具完成: node --check", event_type: "tool_completed", item_type: "tool_call" },
+            ]);
+            assert.equal(actionOnly.stepCount, 1);
+            assert.equal(actionOnly.groups[0].synthetic, true);
+            assert.equal(actionOnly.groups[0].text, "启动与准备动作");
+            assert.equal(actionOnly.groups[0].actions.length, 2);
+
+            const plain = buildRunProcessStepGroups([
+              { text: "普通过程消息一" },
+              { text: "普通过程消息二", kind: "agent_message" },
+              "普通字符串过程消息三",
+            ]);
+            assert.equal(plain.actionCount, 0);
+            assert.equal(plain.stepCount, 3);
+            assert.equal(plain.groups.some((group) => group.actions.length > 0), false);
+            """
+        )
+        proc = subprocess.run(
+            ["node", "-e", script, str(REPO_ROOT)],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+        )
+        if proc.returncode != 0:
+            self.fail(proc.stderr or proc.stdout or "node process grouping regression script failed")
+
+    def test_process_step_meta_keeps_action_with_time_on_right(self) -> None:
+        timeline_js = (REPO_ROOT / "web/task_parts/70-conversation-timeline.js").read_text()
+        timeline_css = (REPO_ROOT / "web/task_parts/70-conversation-timeline.css").read_text()
+
+        self.assertIn('class: "process-step-meta"', timeline_js)
+        self.assertIn('meta.appendChild(el("span", {', timeline_js)
+        self.assertIn("meta.appendChild(toggle);", timeline_js)
+        self.assertNotIn("head.appendChild(toggle);", timeline_js)
+        self.assertIn('grid-template-areas: "idx text meta";', timeline_css)
+        self.assertIn(".process-step-meta", timeline_css)
+        self.assertIn("border: 0;", timeline_css)
+        self.assertIn("background: transparent;", timeline_css)
+        self.assertNotIn('". action time"', timeline_css)
 
 
 if __name__ == "__main__":

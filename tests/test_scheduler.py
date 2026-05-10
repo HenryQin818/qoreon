@@ -177,8 +177,6 @@ class TestScheduler(unittest.TestCase):
     def test_multiple_retry_waiting_same_session_activate_in_order(self) -> None:
         calls: list[str] = []
         lock = threading.Lock()
-        rw1_done = threading.Event()
-        rw2_started = threading.Event()
 
         def fake_run(
             _store: object,
@@ -190,10 +188,6 @@ class TestScheduler(unittest.TestCase):
             with lock:
                 calls.append(run_id)
             time.sleep(0.02)
-            if run_id == "rw1":
-                rw1_done.set()
-            if run_id == "rw2":
-                rw2_started.set()
 
         class _Store:
             def __init__(self) -> None:
@@ -223,25 +217,15 @@ class TestScheduler(unittest.TestCase):
             if timer1:
                 timer1.cancel()
             sched._activate_retry_waiting("s1", "rw1", "codex")
-            if not rw1_done.wait(timeout=1.0):
-                self.fail(f"rw1 did not complete, calls={calls}")
+            time.sleep(0.12)
             self.assertEqual([x for x in calls if x.startswith("rw")], ["rw1"])
-            t0 = time.time()
-            while True:
-                with sched._lock:  # type: ignore[attr-defined]
-                    waiting = str((sched._retry_waiting.get("s1") or ("",))[0] or "")  # type: ignore[attr-defined]
-                if waiting == "rw2":
-                    break
-                if time.time() - t0 > 1:
-                    self.fail(f"rw2 was not moved to retry_waiting, calls={calls}")
-                time.sleep(0.01)
+            self.assertEqual(str(sched._retry_waiting["s1"][0]), "rw2")
 
             timer2 = sched._retry_timers.pop("rw2", None)
             if timer2:
                 timer2.cancel()
             sched._activate_retry_waiting("s1", "rw2", "codex")
-            if not rw2_started.wait(timeout=1.0):
-                self.fail(f"rw2 did not start, calls={calls}")
+            time.sleep(0.12)
             self.assertEqual([x for x in calls if x.startswith("rw")], ["rw1", "rw2"])
         finally:
             server.run_cli_exec = old  # type: ignore[assignment]
@@ -348,6 +332,198 @@ class TestScheduler(unittest.TestCase):
         finally:
             server.run_cli_exec = old  # type: ignore[assignment]
 
+    def test_heal_stale_running_meta_without_future_or_process(self) -> None:
+        calls: list[str] = []
+        lock = threading.Lock()
+
+        class _Store:
+            def __init__(self) -> None:
+                self.metas = {
+                    "stale-running": {
+                        "id": "stale-running",
+                        "sessionId": "s-stale-running",
+                        "status": "running",
+                        "cliType": "codex",
+                    },
+                    "next-run": {
+                        "id": "next-run",
+                        "sessionId": "s-stale-running",
+                        "status": "queued",
+                        "cliType": "codex",
+                    },
+                }
+
+            def load_meta(self, rid: str) -> dict:
+                return dict(self.metas.get(rid) or {})
+
+            def save_meta(self, rid: str, meta: dict) -> None:
+                self.metas[rid] = dict(meta)
+
+        def fake_run(
+            _store: object,
+            run_id: str,
+            timeout_s: object = None,
+            cli_type: str = "codex",
+            scheduler: object = None,
+        ) -> None:
+            with lock:
+                calls.append(run_id)
+            time.sleep(0.02)
+
+        old = server.run_cli_exec
+        server.run_cli_exec = fake_run  # type: ignore[assignment]
+        try:
+            store = _Store()
+            sched = server.RunScheduler(store=store, max_concurrency=1)
+            with sched._lock:  # type: ignore[attr-defined]
+                sched._running["s-stale-running"] = "stale-running"  # type: ignore[attr-defined]
+                sched._running_cli_types["s-stale-running"] = "codex"  # type: ignore[attr-defined]
+
+            with mock.patch("server._scan_process_table_rows", return_value=[]):
+                sched.enqueue("next-run", "s-stale-running")
+                t0 = time.time()
+                while True:
+                    with lock:
+                        if calls == ["next-run"]:
+                            break
+                    if time.time() - t0 > 2:
+                        self.fail(f"stale running meta slot not healed, calls={calls}")
+                    time.sleep(0.01)
+        finally:
+            server.run_cli_exec = old  # type: ignore[assignment]
+
+    def test_finalizing_terminal_meta_does_not_release_session_slot(self) -> None:
+        calls: list[str] = []
+        lock = threading.Lock()
+        terminal_written = threading.Event()
+        allow_callback_return = threading.Event()
+
+        class _Store:
+            def __init__(self) -> None:
+                self.metas = {
+                    "fin1": {"id": "fin1", "status": "queued"},
+                    "fin2": {"id": "fin2", "status": "queued"},
+                }
+
+            def load_meta(self, rid: str) -> dict:
+                return dict(self.metas.get(rid) or {})
+
+            def save_meta(self, rid: str, meta: dict) -> None:
+                self.metas[rid] = dict(meta)
+
+        def fake_run(
+            store: object,
+            run_id: str,
+            timeout_s: object = None,
+            cli_type: str = "codex",
+            scheduler: object = None,
+        ) -> None:
+            with lock:
+                calls.append(run_id)
+            if run_id == "fin1":
+                meta = store.load_meta(run_id)  # type: ignore[attr-defined]
+                meta["status"] = "done"
+                store.save_meta(run_id, meta)  # type: ignore[attr-defined]
+                terminal_written.set()
+                self.assertTrue(allow_callback_return.wait(timeout=2.0))
+            else:
+                time.sleep(0.02)
+
+        old = server.run_cli_exec
+        server.run_cli_exec = fake_run  # type: ignore[assignment]
+        try:
+            store = _Store()
+            sched = server.RunScheduler(store=store, max_concurrency=2)
+            sched.enqueue("fin1", "s-finalizing")
+            self.assertTrue(terminal_written.wait(timeout=1.0))
+
+            sched.enqueue("fin2", "s-finalizing")
+            time.sleep(0.12)
+            with lock:
+                self.assertEqual([x for x in calls if x.startswith("fin")], ["fin1"])
+
+            allow_callback_return.set()
+            t0 = time.time()
+            while True:
+                with lock:
+                    ordered = [x for x in calls if x.startswith("fin")]
+                    if ordered == ["fin1", "fin2"]:
+                        break
+                if time.time() - t0 > 2:
+                    self.fail(f"finalizing slot not released after runner finally, calls={calls}")
+                time.sleep(0.01)
+        finally:
+            allow_callback_return.set()
+            server.run_cli_exec = old  # type: ignore[assignment]
+
+    def test_terminal_meta_with_active_run_process_does_not_release_slot(self) -> None:
+        calls: list[str] = []
+        lock = threading.Lock()
+
+        class _Store:
+            def __init__(self) -> None:
+                self.metas = {
+                    "active1": {
+                        "id": "active1",
+                        "sessionId": "s-active",
+                        "status": "done",
+                        "cliType": "codex",
+                    },
+                    "active2": {"id": "active2", "sessionId": "s-active", "status": "queued"},
+                }
+
+            def load_meta(self, rid: str) -> dict:
+                return dict(self.metas.get(rid) or {})
+
+            def save_meta(self, rid: str, meta: dict) -> None:
+                self.metas[rid] = dict(meta)
+
+        def fake_run(
+            _store: object,
+            run_id: str,
+            timeout_s: object = None,
+            cli_type: str = "codex",
+            scheduler: object = None,
+        ) -> None:
+            with lock:
+                calls.append(run_id)
+            time.sleep(0.02)
+
+        process_rows = [
+            (
+                44364,
+                "/usr/local/bin/codex exec --json -o /tmp/task-dashboard/.runs/hot/active1.last.txt resume s-active hello",
+            )
+        ]
+
+        old = server.run_cli_exec
+        server.run_cli_exec = fake_run  # type: ignore[assignment]
+        try:
+            store = _Store()
+            sched = server.RunScheduler(store=store, max_concurrency=1, busy_probe_delay_s=0.1)
+            with sched._lock:  # type: ignore[attr-defined]
+                sched._running["s-active"] = "active1"  # type: ignore[attr-defined]
+                sched._running_cli_types["s-active"] = "codex"  # type: ignore[attr-defined]
+
+            with mock.patch("server._scan_process_table_rows", side_effect=lambda: list(process_rows)):
+                sched.enqueue("active2", "s-active")
+                time.sleep(0.12)
+                with lock:
+                    self.assertEqual(calls, [])
+
+                process_rows.clear()
+                sched.kick_session("s-active")
+                t0 = time.time()
+                while True:
+                    with lock:
+                        if calls == ["active2"]:
+                            break
+                    if time.time() - t0 > 2:
+                        self.fail(f"active process slot not released after process exit, calls={calls}")
+                    time.sleep(0.01)
+        finally:
+            server.run_cli_exec = old  # type: ignore[assignment]
+
     def test_urgent_priority_runs_before_normal_queue_items(self) -> None:
         calls: list[str] = []
         lock = threading.Lock()
@@ -365,9 +541,9 @@ class TestScheduler(unittest.TestCase):
                 calls.append(run_id)
             if run_id == "n1":
                 n1_started.set()
-                release_n1.wait(timeout=1.0)
-                return
-            time.sleep(0.02)
+                self.assertTrue(release_n1.wait(timeout=2.0))
+            else:
+                time.sleep(0.02)
 
         old = server.run_cli_exec
         server.run_cli_exec = fake_run  # type: ignore[assignment]
@@ -377,8 +553,7 @@ class TestScheduler(unittest.TestCase):
             sched.enqueue("n1", sid, priority="normal")
             sched.enqueue("n2", sid, priority="normal")
             # n1 running期间，urgent入队应插到队首，保证下一个执行。
-            if not n1_started.wait(timeout=1.0):
-                self.fail(f"n1 did not start, calls={calls}")
+            self.assertTrue(n1_started.wait(timeout=1.0))
             sched.enqueue("u1", sid, priority="urgent")
             release_n1.set()
             t0 = time.time()
@@ -391,6 +566,7 @@ class TestScheduler(unittest.TestCase):
                     self.fail(f"unexpected priority order: {calls}")
                 time.sleep(0.01)
         finally:
+            release_n1.set()
             server.run_cli_exec = old  # type: ignore[assignment]
 
     def test_external_busy_session_keeps_queued_then_dispatches(self) -> None:

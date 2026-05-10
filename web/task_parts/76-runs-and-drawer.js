@@ -237,8 +237,30 @@
           : String(row.status || row.session_status || row.sessionStatus || "").trim().toLowerCase() === "inactive";
         return !deleted && !inactive;
       };
+      const isPrimaryCandidate = (row) => {
+        if (!row || typeof row !== "object" || !isVisible(row)) return false;
+        if (boolLike(row.is_primary || row.isPrimary)) return true;
+        const role = String(row.session_role || row.sessionRole || "").trim().toLowerCase();
+        return role === "main" || role === "primary" || role === "主会话";
+      };
+      const registryChannels = Array.isArray(project.registry && project.registry.channels)
+        ? project.registry.channels
+        : [];
+      const registryHit = registryChannels.find((x) => String((x && (x.channel_name || x.name)) || "").trim() === ch);
+      const registrySid = String((registryHit && registryHit.primary_session_id) || "").trim();
+      if (looksLikeSessionId(registrySid)) {
+        return {
+          name: ch,
+          session_id: registrySid,
+          alias: String((registryHit && registryHit.primary_session_alias) || ""),
+          cli_type: String((registryHit && registryHit.primary_cli_type) || "codex"),
+          source: "registry_primary",
+          is_primary: true,
+          session_role: "primary",
+        };
+      }
       const fromChannelSessions = (Array.isArray(project.channel_sessions) ? project.channel_sessions : [])
-        .find((x) => isVisible(x) && String((x && x.name) || "").trim() === ch);
+        .find((x) => isPrimaryCandidate(x) && String((x && x.name) || "").trim() === ch);
       if (fromChannelSessions) return fromChannelSessions;
       return (Array.isArray(project.channels) ? project.channels : [])
         .find((x) => String((x && x.name) || "").trim() === ch) || null;
@@ -1881,6 +1903,130 @@
       ]));
     }
 
+    function firstProcessMetaText(values) {
+      const list = Array.isArray(values) ? values : [];
+      for (let i = 0; i < list.length; i += 1) {
+        const txt = String(list[i] == null ? "" : list[i]).trim();
+        if (txt) return txt;
+      }
+      return "";
+    }
+
+    function normalizeRunProcessTimelineRow(raw, index = 0) {
+      const row = (raw && typeof raw === "object" && !Array.isArray(raw)) ? raw : null;
+      const text = normalizeProcessMessageText(raw);
+      const at = row ? extractStructuredProcessRowTime(row) : "";
+      const eventType = row ? firstProcessMetaText([row.event_type, row.eventType]) : "";
+      const itemType = row ? firstProcessMetaText([row.item_type, row.itemType, row.type]) : "";
+      const title = row ? firstProcessMetaText([row.title, row.name, row.label]) : "";
+      const out = {
+        text,
+        at,
+        timeSource: at ? "structured" : "",
+        eventType,
+        itemType,
+        title,
+        rowIndex: Math.max(0, Number(index || 0) || 0),
+      };
+      if (row) {
+        ["path", "source", "status", "phase"].forEach((key) => {
+          const value = firstProcessMetaText([row[key]]);
+          if (value) out[key] = value;
+        });
+      }
+      return out;
+    }
+
+    function copyRunProcessTimelineMeta(row) {
+      const src = (row && typeof row === "object") ? row : {};
+      const out = {};
+      [
+        "eventType",
+        "itemType",
+        "title",
+        "path",
+        "source",
+        "status",
+        "phase",
+        "rowIndex",
+      ].forEach((key) => {
+        if (src[key] !== undefined && src[key] !== null && String(src[key]).trim() !== "") {
+          out[key] = src[key];
+        }
+      });
+      return out;
+    }
+
+    function isRunProcessActionRow(row) {
+      if (!row || typeof row !== "object") return false;
+      return !!firstProcessMetaText([row.eventType, row.event_type, row.eventTypeRaw]);
+    }
+
+    function runProcessActionLabel(row) {
+      const eventType = String((row && (row.eventType || row.event_type)) || "").trim().toLowerCase();
+      const itemType = String((row && (row.itemType || row.item_type)) || "").trim().toLowerCase();
+      if (eventType.includes("command") || itemType === "command_execution" || itemType.includes("command")) return "命令";
+      if (eventType.includes("todo") || itemType.includes("todo")) return "待办";
+      if (eventType.includes("file") || itemType.includes("file")) return "文件";
+      if (eventType.includes("collab") || itemType.includes("collab")) return "协作";
+      if (eventType.includes("tool") || itemType.includes("tool") || itemType.includes("mcp")) return "工具";
+      if (eventType.includes("runtime")) return "运行";
+      return "动作";
+    }
+
+    function buildRunProcessStepGroups(rows) {
+      const normalizedRows = (Array.isArray(rows) ? rows : [])
+        .map((row, idx) => normalizeRunProcessTimelineRow(row, idx))
+        .filter((row) => String((row && row.text) || "").trim());
+      const groups = [];
+      let current = null;
+      let actionCount = 0;
+      const ensureSyntheticStep = () => {
+        if (current) return current;
+        current = {
+          id: "synthetic-start",
+          synthetic: true,
+          text: "启动与准备动作",
+          at: "",
+          row: { text: "启动与准备动作", at: "", synthetic: true },
+          actions: [],
+        };
+        groups.push(current);
+        return current;
+      };
+      normalizedRows.forEach((row, idx) => {
+        if (isRunProcessActionRow(row)) {
+          const group = ensureSyntheticStep();
+          actionCount += 1;
+          group.actions.push({
+            id: "action-" + idx,
+            text: row.text,
+            at: row.at,
+            eventType: row.eventType,
+            itemType: row.itemType,
+            title: row.title,
+            label: runProcessActionLabel(row),
+            row,
+          });
+          return;
+        }
+        current = {
+          id: "step-" + idx,
+          synthetic: false,
+          text: row.text,
+          at: row.at,
+          row,
+          actions: [],
+        };
+        groups.push(current);
+      });
+      return {
+        groups,
+        stepCount: groups.length,
+        actionCount,
+      };
+    }
+
     function reusableProcessRowTime(raw) {
       if (!raw || typeof raw !== "object") return "";
       const at = String(raw.at || "").trim();
@@ -1899,16 +2045,12 @@
       const out = [];
       const rows = [];
       const push = (raw) => {
-        const txt = normalizeProcessMessageText(raw);
+        const row = normalizeRunProcessTimelineRow(raw, rows.length);
+        const txt = String(row.text || "").trim();
         if (!txt) return;
         if (out.length && out[out.length - 1] === txt) return;
         out.push(txt);
-        const at = extractStructuredProcessRowTime(raw);
-        rows.push({
-          text: txt,
-          at,
-          timeSource: at ? "structured" : "",
-        });
+        rows.push(row);
       };
       const rowLists = [full.processRows, full.process_rows];
       rowLists.forEach((list) => {
@@ -1998,6 +2140,7 @@
           if (prevByIndex) usedPrevIdx.add(idx);
           const prevByText = prevByIndex ? null : findPrevRowByText(text);
           const reusedPrevAt = reusableProcessRowTime(prevByIndex) || reusableProcessRowTime(prevByText) || "";
+          const metaSource = detailRow || prevByIndex || prevByText || null;
           let timeSource = explicitTs
             ? String((detailRow && detailRow.timeSource) || "").trim().toLowerCase() || "explicit"
             : "";
@@ -2008,7 +2151,7 @@
             timeSource = prevSource || "explicit";
           }
           const at = explicitTs || reusedPrevAt || "";
-          nextRows.push({ text, at, timeSource });
+          nextRows.push(Object.assign(copyRunProcessTimelineMeta(metaSource), { text, at, timeSource }));
         });
         PCONV.processTrailByRun[rid] = {
           items: items.slice(),
@@ -2025,6 +2168,7 @@
       const rows = (rid && PCONV.processTrailByRun[rid] && Array.isArray(PCONV.processTrailByRun[rid].rows))
         ? PCONV.processTrailByRun[rid].rows
         : items.map((txt) => ({ text: String(txt || ""), at: "" }));
+      const processStepModel = buildRunProcessStepGroups(rows);
       const detailRun = detailFull && detailFull.run && typeof detailFull.run === "object" ? detailFull.run : null;
       let latestProgressAt = firstNonEmptyText([
         detailRun && detailRun.updatedAt,
@@ -2055,7 +2199,17 @@
         latestProgressNum = fallbackRowNum;
       }
       if (latestProgressNum < 0) latestProgressAt = "";
-      return { items, rows, latest, count, reportedCount: countFromRun, latestProgressAt };
+      return {
+        items,
+        rows,
+        latest,
+        count,
+        reportedCount: countFromRun,
+        latestProgressAt,
+        processStepGroups: processStepModel.groups,
+        processStepCount: processStepModel.stepCount,
+        processActionCount: processStepModel.actionCount,
+      };
     }
 
     function resolveAssistantText(run, detail) {

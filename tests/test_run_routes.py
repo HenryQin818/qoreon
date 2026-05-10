@@ -4,10 +4,17 @@ from pathlib import Path
 from unittest import mock
 
 import server
+from task_dashboard.runtime import run_routes
 from task_dashboard.runtime.run_routes import get_run_detail_response, list_runs_response
 
 
 class TestRunRoutes(unittest.TestCase):
+    def setUp(self) -> None:
+        run_routes._RUNS_LIST_CACHE.clear()
+        run_routes._RUNS_LIST_CACHE_INFLIGHT.clear()
+        run_routes._RUNS_LIST_CACHE_INVALIDATED_AT.clear()
+        run_routes._RUN_DETAIL_CACHE.clear()
+
     def test_run_store_list_runs_light_reuses_live_index_without_rescan(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             store = server.RunStore(Path(td))
@@ -111,6 +118,144 @@ class TestRunRoutes(unittest.TestCase):
             row = (payload.get("runs") or [])[0]
             self.assertEqual("interrupted_infra", row.get("outcome_state"))
             self.assertEqual("", row.get("superseded_by_run_id"))
+
+    def test_list_runs_response_light_reuses_response_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            store = server.RunStore(Path(td))
+            store.create_run(
+                project_id="task_dashboard",
+                channel_name="子级02-CCB运行时（server-并发-安全-启动）",
+                session_id="session-1",
+                message="ping",
+            )
+            calls = {"observability": 0}
+
+            def _fake_build(*_args, **_kwargs):
+                calls["observability"] += 1
+                return {"display_state": "queued"}
+
+            query = "projectId=task_dashboard&sessionId=session-1&limit=10&payloadMode=light"
+            code1, payload1 = list_runs_response(
+                query_string=query,
+                store=store,
+                scheduler=None,
+                maybe_trigger_restart_recovery_lazy=lambda *_args, **_kwargs: 0,
+                maybe_trigger_queued_recovery_lazy=lambda *_args, **_kwargs: 0,
+                build_run_observability_fields=_fake_build,
+            )
+            code2, payload2 = list_runs_response(
+                query_string=query,
+                store=store,
+                scheduler=None,
+                maybe_trigger_restart_recovery_lazy=lambda *_args, **_kwargs: 0,
+                maybe_trigger_queued_recovery_lazy=lambda *_args, **_kwargs: 0,
+                build_run_observability_fields=_fake_build,
+            )
+
+            self.assertEqual(code1, 200)
+            self.assertEqual(code2, 200)
+            self.assertEqual(calls["observability"], 1)
+            self.assertEqual(payload1.get("payloadMode"), "light")
+            self.assertEqual(payload2.get("payloadMode"), "light")
+            self.assertEqual((payload2.get("runs_read_model") or {}).get("delivery_mode"), "fresh_cache")
+
+    def test_list_runs_response_summary_is_independent_lightweight_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            store = server.RunStore(Path(td))
+            created = store.create_run(
+                project_id="task_dashboard",
+                channel_name="子级02-CCB运行时（server-并发-安全-启动）",
+                session_id="session-1",
+                message="ping",
+            )
+            run_id = str(created.get("id") or "").strip()
+            meta = store.load_meta(run_id) or {}
+            meta["messagePreview"] = "stored message"
+            meta["lastPreview"] = "stored last"
+            meta["partialPreview"] = "stored partial"
+            meta["logPreview"] = "stored log"
+            meta["skills_used"] = ["skill-a"]
+            meta["business_refs"] = [{"type": "任务", "title": "x"}]
+            meta["processRows"] = [{"text": "row"}]
+            store.save_meta(run_id, meta)
+
+            calls = {"observability": 0}
+
+            def _fake_build(_store, row, **kwargs):
+                calls["observability"] += 1
+                self.assertFalse(bool(kwargs.get("include_session_semantics")))
+                return {"display_state": str(row.get("status") or "").strip().lower()}
+
+            query = "projectId=task_dashboard&sessionId=session-1&limit=10&payloadMode=summary"
+            code1, payload1 = list_runs_response(
+                query_string=query,
+                store=store,
+                scheduler=None,
+                maybe_trigger_restart_recovery_lazy=lambda *_args, **_kwargs: 0,
+                maybe_trigger_queued_recovery_lazy=lambda *_args, **_kwargs: 0,
+                build_run_observability_fields=_fake_build,
+            )
+            code2, payload2 = list_runs_response(
+                query_string=query,
+                store=store,
+                scheduler=None,
+                maybe_trigger_restart_recovery_lazy=lambda *_args, **_kwargs: 0,
+                maybe_trigger_queued_recovery_lazy=lambda *_args, **_kwargs: 0,
+                build_run_observability_fields=_fake_build,
+            )
+
+            self.assertEqual(code1, 200)
+            self.assertEqual(code2, 200)
+            self.assertEqual(calls["observability"], 1)
+            self.assertEqual(payload1.get("payloadMode"), "summary")
+            self.assertEqual(payload2.get("payloadMode"), "summary")
+            self.assertEqual((payload2.get("runs_read_model") or {}).get("delivery_mode"), "fresh_cache")
+            self.assertEqual((payload2.get("runs_read_model") or {}).get("cache_strategy"), "ttl_inflight_stale_fallback")
+            row = (payload1.get("runs") or [{}])[0]
+            self.assertNotIn("messagePreview", row)
+            self.assertNotIn("lastPreview", row)
+            self.assertNotIn("partialPreview", row)
+            self.assertNotIn("logPreview", row)
+            self.assertNotIn("skills_used", row)
+            self.assertNotIn("business_refs", row)
+            self.assertNotIn("processRows", row)
+
+    def test_list_runs_response_light_cache_invalidated_after_meta_write(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            store = server.RunStore(Path(td))
+            created = store.create_run(
+                project_id="task_dashboard",
+                channel_name="子级02-CCB运行时（server-并发-安全-启动）",
+                session_id="session-1",
+                message="ping",
+            )
+            run_id = str(created.get("id") or "").strip()
+            query = "projectId=task_dashboard&sessionId=session-1&limit=10&payloadMode=light"
+            _code1, payload1 = list_runs_response(
+                query_string=query,
+                store=store,
+                scheduler=None,
+                maybe_trigger_restart_recovery_lazy=lambda *_args, **_kwargs: 0,
+                maybe_trigger_queued_recovery_lazy=lambda *_args, **_kwargs: 0,
+                build_run_observability_fields=lambda *_args, **_kwargs: {},
+            )
+            self.assertEqual(str((payload1.get("runs") or [{}])[0].get("status") or ""), "queued")
+
+            meta = store.load_meta(run_id) or {}
+            meta["status"] = "done"
+            meta["finishedAt"] = "2026-04-30T12:00:00+0800"
+            store.save_meta(run_id, meta)
+
+            _code2, payload2 = list_runs_response(
+                query_string=query,
+                store=store,
+                scheduler=None,
+                maybe_trigger_restart_recovery_lazy=lambda *_args, **_kwargs: 0,
+                maybe_trigger_queued_recovery_lazy=lambda *_args, **_kwargs: 0,
+                build_run_observability_fields=lambda *_args, **_kwargs: {},
+            )
+            self.assertEqual(str((payload2.get("runs") or [{}])[0].get("status") or ""), "done")
+            self.assertEqual((payload2.get("runs_read_model") or {}).get("delivery_mode"), "fresh_build")
 
     def test_list_runs_response_includes_first_batch_multicli_semantics(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -477,6 +622,54 @@ class TestRunRoutes(unittest.TestCase):
                 "1. 已完成恢复: 是\n2. 当前主线: 等待用户指示当前任务\n3. 唯一阻塞: 无",
             )
 
+    def test_get_run_detail_response_caches_terminal_payload_when_files_unchanged(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            store = server.RunStore(Path(td))
+            created = store.create_run(
+                project_id="task_dashboard",
+                channel_name="子级02-CCB运行时（server-并发-安全-启动）",
+                session_id="session-1",
+                message="ping",
+            )
+            run_id = str(created.get("id") or "").strip()
+            meta = store.load_meta(run_id) or {}
+            meta["status"] = "done"
+            meta["finishedAt"] = "2026-05-03T11:20:00+0800"
+            store.save_meta(run_id, meta)
+            store._paths(run_id)["last"].write_text("已完成", encoding="utf-8")
+            store._paths(run_id)["log"].write_text("[assistant] 已完成\n", encoding="utf-8")
+
+            code, first = get_run_detail_response(
+                run_id=run_id,
+                store=store,
+                scheduler=None,
+                maybe_trigger_restart_recovery_lazy=lambda *_args, **_kwargs: 0,
+                maybe_trigger_queued_recovery_lazy=lambda *_args, **_kwargs: 0,
+                build_run_observability_fields=lambda *_args, **_kwargs: {},
+                error_hint=lambda _err: "",
+            )
+
+            self.assertEqual(code, 200)
+            self.assertEqual(first.get("lastMessage"), "已完成")
+
+            with (
+                mock.patch.object(store, "read_msg", side_effect=AssertionError("terminal detail should be cached")),
+                mock.patch.object(store, "read_last", side_effect=AssertionError("terminal detail should be cached")),
+                mock.patch.object(store, "read_log", side_effect=AssertionError("terminal detail should be cached")),
+            ):
+                code, second = get_run_detail_response(
+                    run_id=run_id,
+                    store=store,
+                    scheduler=None,
+                    maybe_trigger_restart_recovery_lazy=lambda *_args, **_kwargs: 0,
+                    maybe_trigger_queued_recovery_lazy=lambda *_args, **_kwargs: 0,
+                    build_run_observability_fields=lambda *_args, **_kwargs: {},
+                    error_hint=lambda _err: "",
+                )
+
+            self.assertEqual(code, 200)
+            self.assertEqual(second.get("lastMessage"), "已完成")
+
     def test_list_runs_response_for_claude_clears_legacy_process_preview(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             store = server.RunStore(Path(td))
@@ -639,6 +832,67 @@ class TestRunRoutes(unittest.TestCase):
             self.assertEqual(persisted.get("partialPreview"), "")
             self.assertEqual(persisted.get("processRows"), [])
             self.assertEqual(persisted.get("lastPreview"), "OpenCode 正文第一行\nOpenCode 正文第二行")
+
+    def test_list_runs_response_includes_codex_generated_image_monitoring_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            store = server.RunStore(root / ".runtime" / "stable" / ".runs")
+            project_id = "task_dashboard"
+            channel_name = "主体03-视觉主题与展示规范"
+            session_id = "019d86a8-d013-73b0-934a-a792cea97041"
+
+            run = store.create_run(
+                project_id=project_id,
+                channel_name=channel_name,
+                session_id=session_id,
+                message="请生成一张首页视觉图",
+                cli_type="codex",
+            )
+            meta = store.load_meta(run["id"]) or {}
+            meta["status"] = "done"
+            meta["createdAt"] = "2026-04-23T23:32:26+08:00"
+            meta["startedAt"] = "2026-04-23T23:32:27+08:00"
+            meta["finishedAt"] = "2026-04-23T23:32:45+08:00"
+            meta["lastPreview"] = "使用 `imagegen` 技能，直接生成首页第一屏视觉稿。"
+            meta["skills_used"] = ["imagegen"]
+            meta["generated_media_summary"] = "已生成1张图片"
+            meta["generated_media_kind"] = "image"
+            meta["generated_media_count"] = 1
+            meta["attachments"] = [
+                {
+                    "filename": "ig_demo.png",
+                    "originalName": "ig_demo.png",
+                    "url": f"/.runs/{run['id']}/attachments/ig_demo.png",
+                    "generatedBy": "codex_imagegen",
+                    "attachment_role": "assistant",
+                }
+            ]
+            store.save_meta(run["id"], meta)
+
+            code, payload = list_runs_response(
+                query_string=f"projectId={project_id}&limit=10&payloadMode=light",
+                store=store,
+                scheduler=None,
+                maybe_trigger_restart_recovery_lazy=lambda *_args, **_kwargs: 0,
+                maybe_trigger_queued_recovery_lazy=lambda *_args, **_kwargs: 0,
+                build_run_observability_fields=server._build_run_observability_fields,
+            )
+
+            self.assertEqual(code, 200)
+            rows = payload.get("runs") or []
+            self.assertEqual(len(rows), 1)
+            row = rows[0]
+            self.assertEqual(row.get("generated_media_summary"), "已生成1张图片")
+            self.assertEqual(row.get("generated_media_kind"), "image")
+            self.assertEqual(row.get("generated_media_count"), 1)
+            self.assertTrue(row.get("media_run_candidate"))
+            self.assertFalse(row.get("media_result_pending"))
+            self.assertEqual(row.get("media_monitor_status"), "generated_media_ready")
+            self.assertEqual(row.get("media_false_stop_exempt_reason"), "generated_media_result_present")
+            attachments = row.get("attachments") or []
+            self.assertEqual(len(attachments), 1)
+            self.assertEqual(attachments[0].get("generatedBy"), "codex_imagegen")
+            self.assertEqual(attachments[0].get("attachment_role"), "assistant")
 
 
 if __name__ == "__main__":

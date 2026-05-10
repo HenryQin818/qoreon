@@ -18,7 +18,7 @@
     // 会话消息加载分页口径（首屏优先，历史按需加载）
     // 2026-03-05：下调首屏/增量拉取上限，降低初次渲染与轮询压力。
     const CONV_PAGE = {
-      timelineInitial: 24,      // 首次进入会话时间线
+      timelineInitial: 8,       // 首次进入会话时间线
       timelineIncremental: 20,  // 增量刷新
       timelineBefore: 24,       // 向上加载历史
       projectRunsInitial: 40,   // 项目级 run 首次拉取

@@ -24,6 +24,7 @@ from task_dashboard.runtime.execution_retry import (
     apply_profile_fallback_retry_result as runtime_apply_profile_fallback_retry_result,
 )
 from task_dashboard.runtime.execution_streams import (
+    append_process_event as runtime_append_process_event,
     capture_agent_text as runtime_capture_agent_text,
     capture_auth_error as runtime_capture_auth_error,
     pump_process_stream as runtime_pump_process_stream,
@@ -50,8 +51,11 @@ from task_dashboard.runtime.restart_recovery import (
     restart_recovery_lazy_interval_s as runtime_restart_recovery_lazy_interval_s,
 )
 from task_dashboard.runtime.run_detail_fields import (
+    candidate_local_imagegen_files,
     extract_terminal_message_from_file,
+    latest_local_imagegen_mtime,
     reconcile_generated_media_for_run,
+    refresh_generated_media_status,
 )
 from task_dashboard.session_store import SessionStore
 
@@ -440,6 +444,10 @@ def run_cli_exec(
     meta["startedAt"] = _now_iso()
     meta["cliType"] = cli_type
     meta["lastProgressAt"] = _now_iso()
+    try:
+        refresh_generated_media_status(meta, extra_texts=[message])
+    except Exception:
+        pass
     prepared = runtime_prepare_run_execution_context(
         meta,
         cli_type=cli_type,
@@ -467,6 +475,10 @@ def run_cli_exec(
     run_cwd = Path(prepared.get("run_cwd") or __getattr__("_resolve_project_workdir")(project_id))
     resolved_model = str(prepared.get("resolved_model") or "")
     resolved_reasoning = str(prepared.get("resolved_reasoning") or "")
+    try:
+        refresh_generated_media_status(meta, extra_texts=[message])
+    except Exception:
+        pass
     store.save_meta(run_id, meta)
 
     supports_model = bool(adapter_cls.supports_model())
@@ -547,16 +559,40 @@ def run_cli_exec(
                                 "at": str(item.get("at") or item.get("timestamp") or item.get("time") or "").strip(),
                             }
                         )
+                existing_events_raw = meta.get("process_events") or []
+                existing_events: list[dict[str, str]] = []
+                if isinstance(existing_events_raw, list) and not is_terminal_text_cli:
+                    for item in existing_events_raw[-240:]:
+                        if not isinstance(item, dict):
+                            continue
+                        text = _safe_text(item.get("text"), 3000).strip()
+                        if not text:
+                            continue
+                        existing_events.append(
+                            {
+                                "event_type": str(item.get("event_type") or "").strip(),
+                                "item_type": str(item.get("item_type") or "").strip(),
+                                "title": str(item.get("title") or "").strip(),
+                                "text": text,
+                                "at": str(item.get("at") or item.get("timestamp") or item.get("time") or "").strip(),
+                                "path": str(item.get("path") or "").strip(),
+                                "source": str(item.get("source") or "").strip(),
+                            }
+                        )
                 if is_terminal_text_cli:
                     meta["agentMessagesCount"] = 0
                     meta["partialPreview"] = ""
                     meta["processRows"] = []
                     meta["process_rows"] = []
+                    meta["process_events"] = []
                 process_state: dict[str, Any] = {
                     "count": 0 if is_terminal_text_cli else int(meta.get("agentMessagesCount") or 0),
                     "latest": "" if is_terminal_text_cli else str(meta.get("partialPreview") or ""),
                     "last_text": str((existing_rows[-1] or {}).get("text") or "") if existing_rows else "",
                     "rows": existing_rows,
+                    "events": existing_events,
+                    "event_count": len(existing_events),
+                    "event_latest": str((existing_events[-1] or {}).get("text") or "") if existing_events else "",
                 }
 
                 def _capture_auth_error(raw: str) -> None:
@@ -602,7 +638,10 @@ def run_cli_exec(
                 last_last_mtime = 0.0
                 last_log_mtime = 0.0
                 last_agent_count = int(meta.get("agentMessagesCount") or 0)
+                last_event_count = int(process_state.get("event_count") or 0)
                 last_partial_preview = str(meta.get("partialPreview") or "")
+                seen_local_imagegen_paths: set[str] = set()
+                last_local_imagegen_mtime = 0.0
                 try:
                     if last_path.exists():
                         last_last_mtime = float(last_path.stat().st_mtime)
@@ -613,6 +652,13 @@ def run_cli_exec(
                         last_log_mtime = float(log_path.stat().st_mtime)
                 except Exception:
                     last_log_mtime = 0.0
+                try:
+                    for path in candidate_local_imagegen_files(meta, now_ts=start_ts, max_items=32):
+                        seen_local_imagegen_paths.add(str(path))
+                    last_local_imagegen_mtime = latest_local_imagegen_mtime(meta, now_ts=start_ts)
+                except Exception:
+                    seen_local_imagegen_paths = set()
+                    last_local_imagegen_mtime = 0.0
                 while True:
                     rc = proc.poll()
                     now_ts = time.time()
@@ -626,17 +672,31 @@ def run_cli_exec(
                     with lock:
                         cur_count = int(process_state.get("count") or 0)
                         cur_latest = str(process_state.get("latest") or "").strip()
+                        cur_event_count = int(process_state.get("event_count") or 0)
+                        cur_event_latest = str(process_state.get("event_latest") or "").strip()
                     if cur_count > 0:
                         prev_count = int(meta.get("agentMessagesCount") or 0)
                         meta["agentMessagesCount"] = max(prev_count, cur_count)
                     if cur_count > last_agent_count:
                         progress_made = True
                         last_agent_count = cur_count
+                    if cur_event_count > last_event_count:
+                        progress_made = True
+                        last_event_count = cur_event_count
                     if cur_latest and not str(meta.get("lastPreview") or "").strip():
                         meta["partialPreview"] = _safe_text(cur_latest, 300)
                     if cur_latest and cur_latest != last_partial_preview:
                         progress_made = True
                         last_partial_preview = cur_latest
+                    if (
+                        cur_event_latest
+                        and not cur_latest
+                        and not str(meta.get("lastPreview") or "").strip()
+                        and cur_event_latest != last_partial_preview
+                    ):
+                        progress_made = True
+                        meta["partialPreview"] = _safe_text(cur_event_latest, 300)
+                        last_partial_preview = cur_event_latest
                     try:
                         if last_path.exists():
                             cur_last_mtime = float(last_path.stat().st_mtime)
@@ -651,6 +711,46 @@ def run_cli_exec(
                             if cur_log_mtime > last_log_mtime:
                                 progress_made = True
                                 last_log_mtime = cur_log_mtime
+                    except Exception:
+                        pass
+                    try:
+                        for media_path in candidate_local_imagegen_files(meta, now_ts=now_ts, max_items=32):
+                            path_key = str(media_path)
+                            try:
+                                media_mtime = float(media_path.stat().st_mtime)
+                            except Exception:
+                                media_mtime = 0.0
+                            is_new_path = path_key not in seen_local_imagegen_paths
+                            if media_mtime > last_local_imagegen_mtime:
+                                progress_made = True
+                                last_local_imagegen_mtime = media_mtime
+                            if is_new_path:
+                                seen_local_imagegen_paths.add(path_key)
+                                try:
+                                    display_path = str(media_path.relative_to(run_cwd))
+                                except Exception:
+                                    display_path = media_path.name
+                                with lock:
+                                    runtime_append_process_event(
+                                        process_state,
+                                        meta,
+                                        {
+                                            "event_type": "generated_media_file",
+                                            "item_type": "local_imagegen_fallback",
+                                            "title": display_path,
+                                            "text": f"生成媒体文件: {display_path}",
+                                            "path": str(media_path),
+                                            "source": "local_imagegen_fallback",
+                                        },
+                                        safe_text=_safe_text,
+                                        now_iso=_now_iso,
+                                    )
+                                progress_made = True
+                    except Exception:
+                        pass
+                    try:
+                        if refresh_generated_media_status(meta, extra_texts=[message, last, cur_latest, cur_event_latest]):
+                            progress_made = True
                     except Exception:
                         pass
                     if progress_made:

@@ -59,9 +59,10 @@ def build_callback_run_extra_meta(
     callback_anchor_key: str,
     anchor_created_at: str,
     callback_anchor_action: str,
+    display_host_run_id: str = "",
 ) -> dict[str, Any]:
     rid = str(source_run_id or "").strip()
-    return {
+    out = {
         "trigger_type": "callback_auto",
         "event_type": str(event_type or "").strip(),
         "event_reason": str(event_reason or "").strip(),
@@ -85,6 +86,10 @@ def build_callback_run_extra_meta(
         "callback_merge_mode": "queue_anchor_v2",
         "callback_anchor_action": str(callback_anchor_action or "").strip(),
     }
+    display_host = str(display_host_run_id or "").strip()
+    if display_host:
+        out["display_host_run_id"] = display_host
+    return out
 
 
 def apply_callback_dispatch_views(

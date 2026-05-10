@@ -1,0 +1,294 @@
+    .seq-diagram-card {
+      border: 1px solid rgba(16, 24, 40, 0.10);
+      border-radius: 16px;
+      background: linear-gradient(180deg, rgba(255,255,255,0.96), rgba(248,250,252,0.92));
+      box-shadow: 0 18px 48px rgba(15, 23, 42, 0.08);
+      overflow: hidden;
+      min-width: 0;
+    }
+    .seq-diagram-toolbar {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 12px 14px;
+      border-bottom: 1px solid rgba(15, 23, 42, 0.08);
+      background:
+        radial-gradient(circle at 0 0, rgba(34, 197, 94, 0.13), transparent 30%),
+        rgba(255,255,255,0.82);
+    }
+    .seq-diagram-heading {
+      min-width: 0;
+      display: grid;
+      gap: 3px;
+    }
+    .seq-diagram-title {
+      font-size: 14px;
+      font-weight: 900;
+      color: rgba(15, 23, 42, 0.88);
+    }
+    .seq-diagram-meta {
+      font-size: 11px;
+      color: rgba(71, 85, 105, 0.82);
+      font-family: var(--mono);
+    }
+    .seq-diagram-actions {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 7px;
+      flex-wrap: wrap;
+      flex: 0 0 auto;
+    }
+    .seq-diagram-action {
+      border: 1px solid rgba(15, 23, 42, 0.12);
+      border-radius: 999px;
+      background: rgba(255,255,255,0.86);
+      color: rgba(15, 23, 42, 0.72);
+      font-size: 12px;
+      font-weight: 800;
+      line-height: 1;
+      padding: 8px 10px;
+      cursor: pointer;
+    }
+    .seq-diagram-action:hover,
+    .seq-diagram-action.active {
+      border-color: rgba(37, 99, 235, 0.32);
+      background: rgba(219, 234, 254, 0.86);
+      color: rgba(30, 64, 175, 0.96);
+    }
+    .seq-diagram-scroll {
+      overflow-x: auto;
+      overflow-y: hidden;
+      position: relative;
+      padding: 14px;
+      background:
+        linear-gradient(90deg, rgba(148, 163, 184, 0.10) 1px, transparent 1px),
+        linear-gradient(180deg, rgba(148, 163, 184, 0.10) 1px, transparent 1px),
+        rgba(248, 250, 252, 0.72);
+      background-size: 26px 26px;
+    }
+    .seq-diagram-stage {
+      --seq-participant-count: 2;
+      min-width: max(100%, calc(var(--seq-participant-count) * 176px));
+      display: block;
+      position: relative;
+    }
+    .seq-diagram-participants {
+      display: grid;
+      gap: 0;
+      position: sticky;
+      top: 0;
+      z-index: 8;
+      isolation: isolate;
+    }
+    .seq-diagram-participant {
+      margin: 0 8px 10px;
+      border: 1px solid rgba(15, 23, 42, 0.12);
+      border-radius: 14px;
+      background: rgba(255,255,255,0.96);
+      box-shadow: 0 8px 18px rgba(15, 23, 42, 0.06);
+      padding: 9px 10px;
+      min-width: 0;
+      text-align: center;
+      position: relative;
+      z-index: 8;
+    }
+    .seq-diagram-participant.is-actor {
+      border-color: rgba(14, 165, 233, 0.28);
+      background: rgba(240, 249, 255, 0.96);
+    }
+    .seq-diagram-participant-label {
+      font-size: 12px;
+      font-weight: 900;
+      color: rgba(15, 23, 42, 0.90);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .seq-diagram-participant-id {
+      margin-top: 3px;
+      font-family: var(--mono);
+      font-size: 10px;
+      color: rgba(100, 116, 139, 0.86);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .seq-diagram-rows {
+      display: grid;
+      gap: 0;
+      position: relative;
+      z-index: 1;
+    }
+    .seq-diagram-row {
+      display: grid;
+      grid-auto-rows: minmax(64px, auto);
+      min-height: 64px;
+      position: relative;
+      align-items: stretch;
+      isolation: isolate;
+    }
+    .seq-diagram-lane {
+      grid-row: 1;
+      min-height: 64px;
+      height: 100%;
+      border-left: 1px solid rgba(100, 116, 139, 0.22);
+      position: relative;
+      z-index: 0;
+      pointer-events: none;
+    }
+    .seq-diagram-lane:last-of-type {
+      border-right: 1px solid rgba(100, 116, 139, 0.22);
+    }
+    .seq-diagram-message {
+      position: relative;
+      z-index: 4;
+      grid-row: 1;
+      align-self: center;
+      min-height: 42px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 24px;
+      pointer-events: none;
+    }
+    .seq-diagram-message::before {
+      content: "";
+      position: absolute;
+      left: 6px;
+      right: 6px;
+      top: 50%;
+      border-top: 2px solid rgba(37, 99, 235, 0.72);
+      transform: translateY(-50%);
+    }
+    .seq-diagram-message.is-dashed::before {
+      border-top-style: dashed;
+    }
+    .seq-diagram-message::after {
+      content: "";
+      position: absolute;
+      right: 2px;
+      top: calc(50% - 5px);
+      width: 9px;
+      height: 9px;
+      border-top: 2px solid rgba(37, 99, 235, 0.72);
+      border-right: 2px solid rgba(37, 99, 235, 0.72);
+      transform: rotate(45deg);
+      background: transparent;
+    }
+    .seq-diagram-message.is-reverse::after {
+      right: auto;
+      left: 2px;
+      transform: rotate(-135deg);
+    }
+    .seq-diagram-message.is-self {
+      margin: 0 14px;
+    }
+    .seq-diagram-message.is-self::before {
+      left: 18%;
+      right: 18%;
+      border-top-color: rgba(15, 118, 110, 0.72);
+    }
+    .seq-diagram-message.is-self::after {
+      right: 17%;
+      border-color: rgba(15, 118, 110, 0.72);
+    }
+    .seq-diagram-message-label {
+      position: relative;
+      z-index: 1;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      max-width: min(420px, 82%);
+      border: 1px solid rgba(37, 99, 235, 0.18);
+      border-radius: 999px;
+      background: rgba(255,255,255,0.99);
+      color: rgba(15, 23, 42, 0.82);
+      box-shadow: 0 8px 18px rgba(37, 99, 235, 0.10), 0 0 0 3px rgba(255,255,255,0.76);
+      padding: 7px 11px;
+      font-size: 12px;
+      line-height: 1.35;
+    }
+    .seq-diagram-message-index {
+      flex: 0 0 auto;
+      min-width: 18px;
+      height: 18px;
+      border-radius: 999px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(37, 99, 235, 0.12);
+      color: rgba(30, 64, 175, 0.96);
+      font-family: var(--mono);
+      font-size: 10px;
+      font-weight: 900;
+    }
+    .seq-diagram-message-text {
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+    .seq-diagram-note {
+      position: relative;
+      z-index: 4;
+      grid-row: 1;
+      align-self: center;
+      margin: 7px 18px;
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      border: 1px solid rgba(217, 119, 6, 0.26);
+      border-radius: 13px;
+      background: rgba(255, 251, 235, 0.96);
+      box-shadow: 0 8px 18px rgba(217, 119, 6, 0.07);
+      padding: 9px 10px;
+      color: rgba(120, 53, 15, 0.92);
+      font-size: 12px;
+      line-height: 1.45;
+      overflow-wrap: anywhere;
+    }
+    .seq-diagram-note-kicker {
+      flex: 0 0 auto;
+      font-family: var(--mono);
+      font-size: 10px;
+      font-weight: 900;
+      color: rgba(146, 64, 14, 0.82);
+      text-transform: uppercase;
+    }
+    .seq-diagram-source {
+      margin: 0;
+      padding: 14px 16px;
+      max-height: 62vh;
+      overflow: auto;
+      background: #0f172a;
+      color: #dbeafe;
+      font-family: var(--mono);
+      font-size: 12px;
+      line-height: 1.65;
+      white-space: pre;
+    }
+    .seq-diagram-source code {
+      font-family: inherit;
+      color: inherit;
+    }
+    @media (max-width: 720px) {
+      .seq-diagram-toolbar {
+        display: grid;
+      }
+      .seq-diagram-actions {
+        justify-content: flex-start;
+      }
+      .seq-diagram-scroll {
+        padding: 10px;
+      }
+      .seq-diagram-stage {
+        min-width: max(100%, calc(var(--seq-participant-count) * 148px));
+      }
+      .seq-diagram-message {
+        margin: 0 16px;
+      }
+      .seq-diagram-message-label {
+        max-width: 88%;
+        font-size: 11px;
+      }
+    }

@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import copy
+import os
+import threading
+import time
 from typing import Any, Callable, Optional
 from urllib.parse import parse_qs
 
@@ -21,12 +25,425 @@ from task_dashboard.runtime.run_detail_fields import (
     normalize_skills_used_value,
 )
 
+_RUNS_LIST_CACHE_LOCK = threading.Lock()
+_RUNS_LIST_CACHE: dict[str, dict[str, Any]] = {}
+_RUNS_LIST_CACHE_INFLIGHT: dict[str, dict[str, Any]] = {}
+_RUNS_LIST_CACHE_INVALIDATED_AT: dict[str, float] = {}
+_RUN_DETAIL_CACHE_LOCK = threading.Lock()
+_RUN_DETAIL_CACHE: dict[str, dict[str, Any]] = {}
+
 
 def _safe_text(value: Any, max_len: int) -> str:
     text = "" if value is None else str(value)
     if len(text) > max_len:
         return text[: max_len - 1] + "…"
     return text
+
+
+def _runs_list_cache_ttl_s() -> float:
+    raw = str(os.environ.get("CCB_RUNS_LIST_CACHE_TTL_MS") or "").strip()
+    if raw:
+        try:
+            return max(0.0, min(float(raw) / 1000.0, 15.0))
+        except Exception:
+            pass
+    return 2.0
+
+
+def _runs_list_cache_stale_s() -> float:
+    raw = str(os.environ.get("CCB_RUNS_LIST_CACHE_STALE_MS") or "").strip()
+    if raw:
+        try:
+            return max(0.0, min(float(raw) / 1000.0, 30.0))
+        except Exception:
+            pass
+    return 3.0
+
+
+def _runs_list_cache_inflight_wait_s() -> float:
+    raw = str(os.environ.get("CCB_RUNS_LIST_CACHE_INFLIGHT_WAIT_MS") or "").strip()
+    if raw:
+        try:
+            return max(0.2, min(float(raw) / 1000.0, 30.0))
+        except Exception:
+            pass
+    return 8.0
+
+
+def _run_detail_cache_ttl_s() -> float:
+    raw = str(os.environ.get("CCB_RUN_DETAIL_CACHE_TTL_MS") or "").strip()
+    if raw:
+        try:
+            return max(0.0, min(float(raw) / 1000.0, 300.0))
+        except Exception:
+            pass
+    return 60.0
+
+
+def _is_terminal_run_meta(meta: dict[str, Any]) -> bool:
+    status = str(meta.get("status") or meta.get("display_state") or "").strip().lower()
+    outcome = str(meta.get("outcome_state") or meta.get("outcomeState") or "").strip().lower()
+    if outcome in {"interrupted_infra", "interrupted_user", "failed_config", "failed_business", "success"}:
+        return True
+    return status in {"done", "error", "interrupted", "cancelled", "canceled"}
+
+
+def _run_detail_cache_key(store: Any, run_id: str) -> str:
+    root = str(getattr(store, "runs_dir", "") or "").strip()
+    return f"{root}|{str(run_id or '').strip()}"
+
+
+def _run_detail_file_token(store: Any, run_id: str) -> tuple[tuple[str, int, int], ...]:
+    try:
+        paths = store._paths(run_id)
+    except Exception:
+        paths = {}
+    token: list[tuple[str, int, int]] = []
+    for key in ("meta", "msg", "last", "log"):
+        path = paths.get(key) if isinstance(paths, dict) else None
+        try:
+            st = path.stat()
+            token.append((key, int(st.st_mtime_ns), int(st.st_size)))
+        except Exception:
+            token.append((key, 0, 0))
+    return tuple(token)
+
+
+def _prune_run_detail_cache_locked(now_mono: float, ttl_s: float) -> None:
+    stale_after = max(ttl_s, 1.0)
+    for key, entry in list(_RUN_DETAIL_CACHE.items()):
+        stored_at = float(entry.get("stored_at") or 0.0)
+        if stored_at <= 0.0 or (now_mono - stored_at) > stale_after:
+            _RUN_DETAIL_CACHE.pop(key, None)
+    if len(_RUN_DETAIL_CACHE) <= 128:
+        return
+    overflow = len(_RUN_DETAIL_CACHE) - 128
+    ordered = sorted(_RUN_DETAIL_CACHE.items(), key=lambda item: float(item[1].get("stored_at") or 0.0))
+    for key, _entry in ordered[:overflow]:
+        _RUN_DETAIL_CACHE.pop(key, None)
+
+
+def _load_run_detail_cache(cache_key: str, token: tuple[tuple[str, int, int], ...]) -> Optional[dict[str, Any]]:
+    ttl_s = _run_detail_cache_ttl_s()
+    if ttl_s <= 0.0:
+        return None
+    now_mono = time.monotonic()
+    with _RUN_DETAIL_CACHE_LOCK:
+        _prune_run_detail_cache_locked(now_mono, ttl_s)
+        entry = _RUN_DETAIL_CACHE.get(cache_key)
+        if not entry:
+            return None
+        if entry.get("token") != token:
+            _RUN_DETAIL_CACHE.pop(cache_key, None)
+            return None
+        stored_at = float(entry.get("stored_at") or 0.0)
+        if stored_at <= 0.0 or (now_mono - stored_at) > ttl_s:
+            _RUN_DETAIL_CACHE.pop(cache_key, None)
+            return None
+        payload = entry.get("payload")
+        if not isinstance(payload, dict):
+            _RUN_DETAIL_CACHE.pop(cache_key, None)
+            return None
+        return copy.deepcopy(payload)
+
+
+def _store_run_detail_cache(
+    cache_key: str,
+    token: tuple[tuple[str, int, int], ...],
+    payload: dict[str, Any],
+) -> None:
+    ttl_s = _run_detail_cache_ttl_s()
+    if ttl_s <= 0.0:
+        return
+    now_mono = time.monotonic()
+    with _RUN_DETAIL_CACHE_LOCK:
+        _prune_run_detail_cache_locked(now_mono, ttl_s)
+        _RUN_DETAIL_CACHE[cache_key] = {
+            "stored_at": now_mono,
+            "token": token,
+            "payload": copy.deepcopy(payload),
+        }
+
+
+def _runs_list_cache_key(
+    *,
+    store_root: str,
+    channel_id: str,
+    project_id: str,
+    session_id: str,
+    after_created_at: str,
+    before_created_at: str,
+    limit: int,
+    payload_mode: str,
+    environment_name: str,
+    local_server_origin: str,
+    worktree_root: str,
+) -> str:
+    return "|".join(
+        [
+            str(store_root or "").strip(),
+            str(project_id or "").strip(),
+            str(channel_id or "").strip(),
+            str(session_id or "").strip(),
+            str(after_created_at or "").strip(),
+            str(before_created_at or "").strip(),
+            str(int(limit or 0)),
+            str(payload_mode or "").strip().lower(),
+            str(environment_name or "").strip(),
+            str(local_server_origin or "").strip(),
+            str(worktree_root or "").strip(),
+        ]
+    )
+
+
+def _prune_runs_list_cache_locked(now_mono: float, ttl_s: float, stale_s: float) -> None:
+    max_age_s = max(ttl_s + stale_s, ttl_s)
+    expired: list[str] = []
+    for key, entry in list(_RUNS_LIST_CACHE.items()):
+        checked = float((entry or {}).get("checked_at_mono") or 0.0)
+        if max_age_s <= 0 or (now_mono - checked) > max_age_s:
+            expired.append(key)
+    for key in expired:
+        _RUNS_LIST_CACHE.pop(key, None)
+
+    inflight_expired: list[str] = []
+    inflight_ttl_s = max(_runs_list_cache_inflight_wait_s() * 2.0, 5.0)
+    for key, entry in list(_RUNS_LIST_CACHE_INFLIGHT.items()):
+        started = float((entry or {}).get("started_at_mono") or 0.0)
+        event = (entry or {}).get("event")
+        if isinstance(event, threading.Event) and event.is_set():
+            inflight_expired.append(key)
+            continue
+        if started > 0 and (now_mono - started) > inflight_ttl_s:
+            inflight_expired.append(key)
+    for key in inflight_expired:
+        _RUNS_LIST_CACHE_INFLIGHT.pop(key, None)
+
+    invalidated_expired: list[str] = []
+    invalidated_ttl_s = max(max_age_s * 4.0, 30.0)
+    for key, invalidated_at in list(_RUNS_LIST_CACHE_INVALIDATED_AT.items()):
+        if invalidated_at <= 0 or (now_mono - float(invalidated_at)) > invalidated_ttl_s:
+            invalidated_expired.append(key)
+    for key in invalidated_expired:
+        _RUNS_LIST_CACHE_INVALIDATED_AT.pop(key, None)
+
+    if len(_RUNS_LIST_CACHE) <= 64:
+        return
+    ordered = sorted(
+        _RUNS_LIST_CACHE.items(),
+        key=lambda item: float((item[1] or {}).get("checked_at_mono") or 0.0),
+        reverse=True,
+    )
+    for key, _entry in ordered[64:]:
+        _RUNS_LIST_CACHE.pop(key, None)
+
+
+def _load_runs_list_cache(
+    cache_key: str,
+    *,
+    project_id: str,
+    session_id: str,
+    now_mono: float,
+    ttl_s: float,
+    stale_s: float,
+    allow_stale: bool = False,
+) -> tuple[Optional[dict[str, Any]], dict[str, Any]]:
+    entry = _RUNS_LIST_CACHE.get(cache_key)
+    if not isinstance(entry, dict):
+        return None, {}
+    payload = entry.get("payload")
+    if not isinstance(payload, dict):
+        return None, {}
+    checked = float(entry.get("checked_at_mono") or 0.0)
+    age_s = max(0.0, now_mono - checked)
+    build_started = float(entry.get("build_started_at_mono") or checked)
+    pid = str(project_id or "").strip()
+    sid = str(session_id or "").strip()
+    invalidated_at = max(
+        float(_RUNS_LIST_CACHE_INVALIDATED_AT.get(pid) or 0.0) if pid else 0.0,
+        float(_RUNS_LIST_CACHE_INVALIDATED_AT.get(f"session:{sid}") or 0.0) if sid else 0.0,
+    )
+    if build_started < invalidated_at:
+        return None, {}
+    if age_s <= ttl_s:
+        return copy.deepcopy(payload), {
+            "delivery_mode": "fresh_cache",
+            "cache_age_ms": int(age_s * 1000),
+            "served_from_stale_cache": False,
+        }
+    if allow_stale and stale_s > 0 and age_s <= ttl_s + stale_s:
+        return copy.deepcopy(payload), {
+            "delivery_mode": "stale_cache_budget",
+            "cache_age_ms": int(age_s * 1000),
+            "served_from_stale_cache": True,
+        }
+    return None, {}
+
+
+def _store_runs_list_cache(
+    cache_key: str,
+    payload: dict[str, Any],
+    *,
+    project_id: str,
+    session_id: str,
+    build_started_at_mono: float,
+) -> None:
+    ttl_s = _runs_list_cache_ttl_s()
+    if ttl_s <= 0 or not isinstance(payload, dict):
+        return
+    now_mono = time.monotonic()
+    with _RUNS_LIST_CACHE_LOCK:
+        _prune_runs_list_cache_locked(now_mono, ttl_s, _runs_list_cache_stale_s())
+        _RUNS_LIST_CACHE[cache_key] = {
+            "checked_at_mono": now_mono,
+            "build_started_at_mono": max(float(build_started_at_mono or 0.0), now_mono),
+            "project_id": str(project_id or "").strip(),
+            "session_id": str(session_id or "").strip(),
+            "payload": copy.deepcopy(payload),
+        }
+
+
+def invalidate_runs_list_cache(
+    project_id: str = "",
+    *,
+    session_id: str = "",
+    channel_id: str = "",
+) -> None:
+    pid = str(project_id or "").strip()
+    sid = str(session_id or "").strip()
+    cid = str(channel_id or "").strip()
+    now_mono = time.monotonic()
+    with _RUNS_LIST_CACHE_LOCK:
+        if not pid and not sid and not cid:
+            _RUNS_LIST_CACHE.clear()
+            _RUNS_LIST_CACHE_INFLIGHT.clear()
+            _RUNS_LIST_CACHE_INVALIDATED_AT.clear()
+            return
+        if pid:
+            _RUNS_LIST_CACHE_INVALIDATED_AT[pid] = now_mono
+        if sid:
+            _RUNS_LIST_CACHE_INVALIDATED_AT[f"session:{sid}"] = now_mono
+        for key, entry in list(_RUNS_LIST_CACHE.items()):
+            if pid and str((entry or {}).get("project_id") or "").strip() != pid:
+                continue
+            if sid and str((entry or {}).get("session_id") or "").strip() != sid:
+                continue
+            if cid and f"|{cid}|" not in key:
+                continue
+            _RUNS_LIST_CACHE.pop(key, None)
+
+
+def _with_runs_read_model_meta(
+    payload: dict[str, Any],
+    *,
+    payload_mode: str,
+    runtime_info: dict[str, Any],
+) -> dict[str, Any]:
+    out = copy.deepcopy(payload)
+    out["payloadMode"] = payload_mode
+    out["runs_read_model"] = {
+        "version": "p0a.v1",
+        "scope": "codex_runs",
+        "payload_mode": payload_mode,
+        "cache_strategy": "ttl_inflight_stale_fallback" if payload_mode in {"summary", "light", "none"} else "uncached_full_compat",
+        "cache_ttl_ms": int(_runs_list_cache_ttl_s() * 1000),
+        "inflight_wait_ms": int(_runs_list_cache_inflight_wait_s() * 1000),
+        "stale_fallback_window_ms": int(_runs_list_cache_stale_s() * 1000),
+        "delivery_mode": str(runtime_info.get("delivery_mode") or "fresh_build"),
+        "cache_age_ms": int(runtime_info.get("cache_age_ms") or 0),
+        "queue_wait_ms": int(runtime_info.get("queue_wait_ms") or 0),
+        "served_from_stale_cache": bool(runtime_info.get("served_from_stale_cache")),
+    }
+    return out
+
+
+def _build_or_load_runs_list_payload(
+    *,
+    cache_key: str,
+    project_id: str,
+    session_id: str,
+    payload_mode: str,
+    builder: Callable[[], dict[str, Any]],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    if payload_mode not in {"summary", "light", "none"}:
+        return builder(), {"delivery_mode": "fresh_build"}
+    ttl_s = _runs_list_cache_ttl_s()
+    if ttl_s <= 0:
+        return builder(), {"delivery_mode": "fresh_build"}
+
+    wait_s = _runs_list_cache_inflight_wait_s()
+    stale_s = _runs_list_cache_stale_s()
+    build_started_at_mono = time.monotonic()
+    owns_build = False
+    inflight_event: Optional[threading.Event] = None
+    first_wait_started = 0.0
+    while True:
+        now_mono = time.monotonic()
+        with _RUNS_LIST_CACHE_LOCK:
+            _prune_runs_list_cache_locked(now_mono, ttl_s, stale_s)
+            cached, runtime_info = _load_runs_list_cache(
+                cache_key,
+                project_id=project_id,
+                session_id=session_id,
+                now_mono=now_mono,
+                ttl_s=ttl_s,
+                stale_s=stale_s,
+            )
+            if cached is not None:
+                if first_wait_started > 0:
+                    runtime_info["queue_wait_ms"] = int((now_mono - first_wait_started) * 1000)
+                return cached, runtime_info
+            inflight = _RUNS_LIST_CACHE_INFLIGHT.get(cache_key)
+            inflight_event = None
+            if isinstance(inflight, dict):
+                candidate = inflight.get("event")
+                if isinstance(candidate, threading.Event):
+                    inflight_event = candidate
+            if inflight_event is not None:
+                stale_payload, stale_info = _load_runs_list_cache(
+                    cache_key,
+                    project_id=project_id,
+                    session_id=session_id,
+                    now_mono=now_mono,
+                    ttl_s=ttl_s,
+                    stale_s=stale_s,
+                    allow_stale=True,
+                )
+                if stale_payload is not None:
+                    return stale_payload, stale_info
+            if inflight_event is None:
+                inflight_event = threading.Event()
+                _RUNS_LIST_CACHE_INFLIGHT[cache_key] = {
+                    "event": inflight_event,
+                    "started_at_mono": now_mono,
+                    "project_id": str(project_id or "").strip(),
+                    "session_id": str(session_id or "").strip(),
+                }
+                build_started_at_mono = now_mono
+                owns_build = True
+                break
+        if inflight_event is not None:
+            if first_wait_started <= 0:
+                first_wait_started = time.monotonic()
+            inflight_event.wait(wait_s)
+
+    try:
+        payload = builder()
+        _store_runs_list_cache(
+            cache_key,
+            payload,
+            project_id=project_id,
+            session_id=session_id,
+            build_started_at_mono=build_started_at_mono,
+        )
+        return payload, {"delivery_mode": "fresh_build"}
+    finally:
+        if owns_build and inflight_event is not None:
+            with _RUNS_LIST_CACHE_LOCK:
+                current = _RUNS_LIST_CACHE_INFLIGHT.get(cache_key)
+                if isinstance(current, dict) and current.get("event") is inflight_event:
+                    _RUNS_LIST_CACHE_INFLIGHT.pop(cache_key, None)
+            inflight_event.set()
 
 
 def _latest_process_row_preview(process_rows: Any, max_len: int) -> str:
@@ -72,6 +489,22 @@ def _normalize_terminal_text_row_fields(store: Any, run_id: str, row: dict[str, 
         row["process_rows"] = []
         changed = True
     return changed
+
+
+def _strip_runs_summary_fields(row: dict[str, Any]) -> None:
+    """Keep summary mode lightweight even when older meta already has previews."""
+    for key in (
+        "messagePreview",
+        "lastPreview",
+        "partialPreview",
+        "logPreview",
+        "skills_used",
+        "business_refs",
+        "processRows",
+        "process_rows",
+        "process_events",
+    ):
+        row.pop(key, None)
 
 
 def _align_run_runtime_identity(
@@ -154,7 +587,7 @@ def list_runs_response(
     session_id = (qs.get("sessionId") or [""])[0]
     payload_mode = str((qs.get("payloadMode") or qs.get("payload_mode") or [""])[0] or "").strip().lower()
     include_payload_raw = str((qs.get("includePayload") or qs.get("include_payload") or [""])[0] or "").strip().lower()
-    if payload_mode not in {"", "full", "light", "none"}:
+    if payload_mode not in {"", "full", "summary", "light", "none"}:
         payload_mode = ""
     if not payload_mode and include_payload_raw:
         payload_mode = "full" if include_payload_raw in {"1", "true", "yes", "on"} else "none"
@@ -167,26 +600,8 @@ def list_runs_response(
         limit = max(1, min(200, int(limit_s)))
     except Exception:
         limit = 30
-    runs = store.list_runs(
-        channel_id=channel_id,
-        project_id=project_id,
-        session_id=session_id,
-        limit=limit,
-        after_created_at=after_created_at,
-        before_created_at=before_created_at,
-        payload_mode=payload_mode,
-    )
-    # Restart recovery remains handled by bootstrap/background paths.
-    # Do not let read APIs mutate runtime state or enqueue recovery summaries,
-    # otherwise an in-flight run can be misclassified during UI refresh.
-    lazy_resumed = 0
-    lazy_requeued = maybe_trigger_queued_recovery_lazy(
-        store,
-        scheduler,
-        runs,
-        project_id_hint=str(project_id or "").strip(),
-    )
-    if lazy_resumed > 0 or lazy_requeued > 0:
+
+    def _build_payload() -> dict[str, Any]:
         runs = store.list_runs(
             channel_id=channel_id,
             project_id=project_id,
@@ -196,39 +611,87 @@ def list_runs_response(
             before_created_at=before_created_at,
             payload_mode=payload_mode,
         )
-    for row in runs:
-        if not isinstance(row, dict):
-            continue
-        row.update(
-            build_run_observability_fields(
-                store,
-                row,
-                infer_blocked=False,
-                include_session_semantics=(payload_mode == "full"),
+        # Restart recovery remains handled by bootstrap/background paths.
+        # Do not let read APIs mutate runtime state or enqueue recovery summaries,
+        # otherwise an in-flight run can be misclassified during UI refresh.
+        lazy_resumed = 0
+        lazy_requeued = maybe_trigger_queued_recovery_lazy(
+            store,
+            scheduler,
+            runs,
+            project_id_hint=str(project_id or "").strip(),
+        )
+        if lazy_resumed > 0 or lazy_requeued > 0:
+            runs = store.list_runs(
+                channel_id=channel_id,
+                project_id=project_id,
+                session_id=session_id,
+                limit=limit,
+                after_created_at=after_created_at,
+                before_created_at=before_created_at,
+                payload_mode=payload_mode,
             )
-        )
-        run_id = str(row.get("id") or "").strip()
-        changed = False
-        if run_id:
-            changed = _normalize_terminal_text_row_fields(store, run_id, row) or changed
-        changed = _align_run_runtime_identity(
-            row,
-            environment_name=environment_name,
-            local_server_origin=local_server_origin,
-            worktree_root=worktree_root,
-        ) or changed
-        _attach_run_project_execution_context(
-            row,
-            project_id=str(project_id or row.get("projectId") or "").strip(),
-            channel_name=str(row.get("channelName") or "").strip(),
-            session_id=str(row.get("sessionId") or "").strip(),
-        )
-        if changed and run_id:
-            try:
-                store.save_meta(run_id, row)
-            except Exception:
-                pass
-    return 200, {"runs": runs, "payloadMode": payload_mode}
+        for row in runs:
+            if not isinstance(row, dict):
+                continue
+            row.update(
+                build_run_observability_fields(
+                    store,
+                    row,
+                    infer_blocked=False,
+                    include_session_semantics=(payload_mode == "full"),
+                )
+            )
+            run_id = str(row.get("id") or "").strip()
+            changed = False
+            if run_id:
+                changed = _normalize_terminal_text_row_fields(store, run_id, row) or changed
+            changed = _align_run_runtime_identity(
+                row,
+                environment_name=environment_name,
+                local_server_origin=local_server_origin,
+                worktree_root=worktree_root,
+            ) or changed
+            _attach_run_project_execution_context(
+                row,
+                project_id=str(project_id or row.get("projectId") or "").strip(),
+                channel_name=str(row.get("channelName") or "").strip(),
+                session_id=str(row.get("sessionId") or "").strip(),
+            )
+            if changed and run_id:
+                try:
+                    store.save_meta(run_id, row)
+                except Exception:
+                    pass
+            if payload_mode == "summary":
+                _strip_runs_summary_fields(row)
+        return {"runs": runs, "payloadMode": payload_mode}
+
+    cache_key = _runs_list_cache_key(
+        store_root=str(getattr(store, "runs_dir", "") or ""),
+        channel_id=channel_id,
+        project_id=project_id,
+        session_id=session_id,
+        after_created_at=after_created_at,
+        before_created_at=before_created_at,
+        limit=limit,
+        payload_mode=payload_mode,
+        environment_name=environment_name,
+        local_server_origin=local_server_origin,
+        worktree_root=worktree_root,
+    )
+    payload, runtime_info = _build_or_load_runs_list_payload(
+        cache_key=cache_key,
+        project_id=project_id,
+        session_id=session_id,
+        payload_mode=payload_mode,
+        builder=_build_payload,
+    )
+    return 200, _with_runs_read_model_meta(
+        payload,
+        payload_mode=payload_mode,
+        runtime_info=runtime_info,
+    )
 
 
 def get_run_detail_response(
@@ -263,6 +726,14 @@ def get_run_detail_response(
     )
     if lazy_requeued > 0:
         meta = store.load_meta(run_id) or meta
+    detail_cache_key = _run_detail_cache_key(store, run_id)
+    if _is_terminal_run_meta(meta):
+        cached_payload = _load_run_detail_cache(
+            detail_cache_key,
+            _run_detail_file_token(store, run_id),
+        )
+        if cached_payload is not None:
+            return 200, cached_payload
     message = store.read_msg(run_id, limit_chars=300_000)
     last = store.read_last(run_id, limit_chars=500_000)
     log_tail = store.read_log(run_id, limit_chars=160_000)
@@ -300,6 +771,10 @@ def get_run_detail_response(
         process_rows_alt = meta.get("process_rows")
         if isinstance(process_rows_alt, list) and process_rows_alt:
             meta["process_rows"] = []
+            meta_changed = True
+        process_events = meta.get("process_events")
+        if isinstance(process_events, list) and process_events:
+            meta["process_events"] = []
             meta_changed = True
         agent_msgs = []
         partial = ""
@@ -355,6 +830,9 @@ def get_run_detail_response(
     process_rows = meta.get("processRows") or meta.get("process_rows") or []
     if not isinstance(process_rows, list):
         process_rows = []
+    process_events = meta.get("process_events") or []
+    if not isinstance(process_events, list):
+        process_events = []
     message_preview = _safe_text(message.replace("\r\n", "\n").strip(), 260) if message else ""
     if message_preview and message_preview != str(meta.get("messagePreview") or ""):
         meta["messagePreview"] = message_preview
@@ -379,7 +857,7 @@ def get_run_detail_response(
             store.save_meta(run_id, meta)
         except Exception:
             pass
-    return 200, {
+    payload = {
         "run": meta,
         "message": message,
         "lastMessage": last,
@@ -389,8 +867,16 @@ def get_run_detail_response(
         "partialMessage": partial,
         "agentMessages": agent_msgs,
         "processRows": process_rows,
+        "processEvents": process_events,
         "errorHint": hint,
     }
+    if _is_terminal_run_meta(meta):
+        _store_run_detail_cache(
+            detail_cache_key,
+            _run_detail_file_token(store, run_id),
+            payload,
+        )
+    return 200, payload
 
 
 def perform_run_action_response(

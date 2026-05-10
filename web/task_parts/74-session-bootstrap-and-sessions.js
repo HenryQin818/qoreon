@@ -517,18 +517,55 @@
       return Math.max(0, Math.round(num));
     }
 
+    const CONVERSATION_SESSIONS_VISIBLE_POLL_TARGET_MS = 12000;
+    const CONVERSATION_SESSIONS_FRESHNESS_FLOOR_MS = 18000;
+
+    function hasConversationOwnOption(opts, key) {
+      return !!(opts && Object.prototype.hasOwnProperty.call(opts, key));
+    }
+
+    function normalizeConversationVisiblePollIntervalMs(raw, fallback = 12000) {
+      const visibleTargetMs = 12000;
+      return Math.min(
+        normalizeConversationPollingNumber(raw, fallback),
+        visibleTargetMs
+      );
+    }
+
+    function defaultConversationSessionsPollingHints() {
+      return {
+        enabled: true,
+        cache_ttl_ms: 4000,
+        inflight_wait_ms: 8000,
+        poll_interval_ms: 12000,
+        hidden_poll_interval_ms: 0,
+        backoff_step_ms: 2000,
+        backoff_max_ms: 15000,
+        pause_when_hidden: true,
+        cross_tab_dedupe_enabled: true,
+      };
+    }
+
     function normalizeConversationSessionsPollingHints(raw) {
       const src = (raw && typeof raw === "object") ? raw : {};
+      const fallback = defaultConversationSessionsPollingHints();
+      const normalizeVisiblePollMs = (typeof normalizeConversationVisiblePollIntervalMs === "function")
+        ? normalizeConversationVisiblePollIntervalMs
+        : ((value, defaultValue = 12000) => Math.min(normalizeConversationPollingNumber(value, defaultValue), 12000));
       return {
-        enabled: Object.prototype.hasOwnProperty.call(src, "enabled") ? !!src.enabled : true,
-        cache_ttl_ms: normalizeConversationPollingNumber(src.cache_ttl_ms ?? src.cacheTtlMs, 2500),
-        inflight_wait_ms: normalizeConversationPollingNumber(src.inflight_wait_ms ?? src.inflightWaitMs, 7000),
-        poll_interval_ms: normalizeConversationPollingNumber(src.poll_interval_ms ?? src.pollIntervalMs, 45000),
-        hidden_poll_interval_ms: normalizeConversationPollingNumber(src.hidden_poll_interval_ms ?? src.hiddenPollIntervalMs, 90000),
-        backoff_step_ms: normalizeConversationPollingNumber(src.backoff_step_ms ?? src.backoffStepMs, 2000),
-        backoff_max_ms: normalizeConversationPollingNumber(src.backoff_max_ms ?? src.backoffMaxMs, 15000),
-        pause_when_hidden: !!(src.pause_when_hidden ?? src.pauseWhenHidden),
-        cross_tab_dedupe_enabled: !!(src.cross_tab_dedupe_enabled ?? src.crossTabDedupeEnabled),
+        enabled: Object.prototype.hasOwnProperty.call(src, "enabled") ? !!src.enabled : fallback.enabled,
+        cache_ttl_ms: normalizeConversationPollingNumber(src.cache_ttl_ms ?? src.cacheTtlMs, fallback.cache_ttl_ms),
+        inflight_wait_ms: normalizeConversationPollingNumber(src.inflight_wait_ms ?? src.inflightWaitMs, fallback.inflight_wait_ms),
+        poll_interval_ms: normalizeVisiblePollMs(src.poll_interval_ms ?? src.pollIntervalMs, fallback.poll_interval_ms),
+        hidden_poll_interval_ms: normalizeConversationPollingNumber(src.hidden_poll_interval_ms ?? src.hiddenPollIntervalMs, fallback.hidden_poll_interval_ms),
+        backoff_step_ms: normalizeConversationPollingNumber(src.backoff_step_ms ?? src.backoffStepMs, fallback.backoff_step_ms),
+        backoff_max_ms: normalizeConversationPollingNumber(src.backoff_max_ms ?? src.backoffMaxMs, fallback.backoff_max_ms),
+        pause_when_hidden: Object.prototype.hasOwnProperty.call(src, "pause_when_hidden") || Object.prototype.hasOwnProperty.call(src, "pauseWhenHidden")
+          ? !!(src.pause_when_hidden ?? src.pauseWhenHidden)
+          : fallback.pause_when_hidden,
+        cross_tab_dedupe_enabled: Object.prototype.hasOwnProperty.call(src, "cross_tab_dedupe_enabled") || Object.prototype.hasOwnProperty.call(src, "crossTabDedupeEnabled")
+          ? !!(src.cross_tab_dedupe_enabled ?? src.crossTabDedupeEnabled)
+          : fallback.cross_tab_dedupe_enabled,
       };
     }
 
@@ -548,8 +585,20 @@
         : ((pollingHints.session_directory && typeof pollingHints.session_directory === "object")
           ? pollingHints.session_directory
           : null);
+      const readModel = (src.sessions_read_model && typeof src.sessions_read_model === "object")
+        ? src.sessions_read_model
+        : ((src.sessionsReadModel && typeof src.sessionsReadModel === "object") ? src.sessionsReadModel : null);
+      const readModelSessionsRaw = readModel ? {
+        enabled: true,
+        cache_ttl_ms: readModel.cache_ttl_ms ?? readModel.cacheTtlMs,
+        inflight_wait_ms: readModel.inflight_wait_ms ?? readModel.inflightWaitMs,
+        pause_when_hidden: true,
+        cross_tab_dedupe_enabled: true,
+      } : null;
       const current = (PCONV.pollingMetaByProject && PCONV.pollingMetaByProject[pid]) || {};
-      const nextSessions = sessionsRaw ? normalizeConversationSessionsPollingHints(sessionsRaw) : (current.sessions || null);
+      const nextSessions = sessionsRaw
+        ? normalizeConversationSessionsPollingHints(sessionsRaw)
+        : (readModelSessionsRaw ? normalizeConversationSessionsPollingHints(readModelSessionsRaw) : (current.sessions || null));
       if (nextSessions && Object.prototype.hasOwnProperty.call(perfGovernance, "enabled") && !perfGovernance.enabled) {
         nextSessions.enabled = false;
       }
@@ -572,7 +621,13 @@
       if (!pid) return null;
       ensureConversationSessionDirectoryStateMaps();
       const meta = PCONV.pollingMetaByProject && PCONV.pollingMetaByProject[pid];
-      return meta && meta.sessions ? meta.sessions : null;
+      return meta && meta.sessions ? meta.sessions : defaultConversationSessionsPollingHints();
+    }
+
+    function normalizeConversationSessionsPayloadMode(raw) {
+      const text = String(raw || "").trim().toLowerCase();
+      if (text === "full" || text === "summary" || text === "light") return text;
+      return "summary";
     }
 
     function shouldForceConversationSessionDirectoryLiveFetch(projectId, channelName = "", opts = {}) {
@@ -581,8 +636,6 @@
       if (opts && opts.force) return true;
       const channel = String(channelName || "").trim();
       if (channel) return false;
-      const source = String((opts && opts.source) || "").trim().toLowerCase();
-      if (source === "poll") return true;
       return false;
     }
 
@@ -594,21 +647,32 @@
         : null;
       const source = String((opts && opts.source) || "").trim().toLowerCase();
       if (policy && policy.enabled) {
-        if (source === "poll" || !String(channelName || "").trim()) {
-          return normalizeConversationPollingNumber(policy.poll_interval_ms, 3000);
+        if (source === "poll" || source === "resume" || !String(channelName || "").trim()) {
+          return Math.min(normalizeConversationPollingNumber(policy.poll_interval_ms, 12000), 12000);
         }
       }
       return normalizeConversationPollingNumber((opts && opts.freshnessMs) || 0, 0);
     }
 
     function resolveConversationSessionsFreshnessMs(projectId, channelName = "", opts = {}) {
-      const freshnessMs = normalizeConversationPollingNumber((opts && opts.freshnessMs) || 0, 0);
+      if (shouldForceConversationSessionDirectoryLiveFetch(projectId, channelName, opts)) return 0;
+      const freshnessFloorMs = 18000;
+      const rawFreshnessMs = Number(opts && opts.freshnessMs);
+      const hasOwnOption = (typeof hasConversationOwnOption === "function")
+        ? hasConversationOwnOption
+        : ((source, key) => !!(source && Object.prototype.hasOwnProperty.call(source, key)));
+      const hasFreshnessOverride = hasOwnOption(opts, "freshnessMs")
+        && Number.isFinite(rawFreshnessMs)
+        && rawFreshnessMs >= 0;
+      const freshnessMs = hasFreshnessOverride
+        ? normalizeConversationPollingNumber(rawFreshnessMs, 0)
+        : freshnessFloorMs;
       const source = String((opts && opts.source) || "").trim().toLowerCase();
-      if (source === "poll" && !String(channelName || "").trim()) {
+      if ((source === "poll" || source === "resume") && !String(channelName || "").trim()) {
         return Math.max(freshnessMs, 18000);
       }
       const cadenceMs = conversationProjectPollingCadenceMs(projectId, channelName, opts);
-      return Math.max(freshnessMs, cadenceMs);
+      return hasFreshnessOverride ? freshnessMs : Math.max(freshnessMs, Math.min(cadenceMs, 12000));
     }
 
     function shouldDeferConversationSessionDirectoryLiveLoad(opts = {}) {
@@ -863,6 +927,7 @@
           latest_effective_run_summary: latestEffectiveRunSummary,
           runtime_state: runtimeState,
           heartbeat_summary: heartbeatSummary,
+          conversation_list_metrics: normalizeConversationListMetricsClient(s.conversation_list_metrics || s.conversationListMetrics || null),
           task_tracking: normalizeTaskTrackingClient(s.task_tracking || s.taskTracking || null),
         };
         baseSession.lastStatus = getSessionDisplayState(baseSession);
@@ -880,9 +945,12 @@
       const pid = String(projectId || "").trim();
       if (!pid || pid === "overview") return [];
       ensureConversationSessionDirectoryStateMaps();
+      const source = String((opts && opts.source) || "").trim().toLowerCase();
       const force = !!(opts && opts.force);
-      const freshnessMsRaw = Number((opts && opts.freshnessMs) || 0);
-      const freshnessMs = Number.isFinite(freshnessMsRaw) && freshnessMsRaw > 0 ? freshnessMsRaw : 0;
+      const freshnessMs = resolveConversationSessionsFreshnessMs(pid, channelName, {
+        ...(opts || {}),
+        source,
+      });
       const key = conversationSessionFetchKey(pid, channelName);
       const cached = !force ? PCONV.sessionFetchCacheByKey[key] : null;
       if (
@@ -897,9 +965,53 @@
       if (!force && PCONV.sessionFetchPromiseByKey[key]) {
         return PCONV.sessionFetchPromiseByKey[key];
       }
+      const policy = typeof conversationProjectPollingHints === "function"
+        ? conversationProjectPollingHints(pid)
+        : null;
+      const snapshotMaxAgeMs = Math.max(
+        normalizeConversationPollingNumber(policy && policy.cache_ttl_ms, 0),
+        normalizeConversationPollingNumber(freshnessMs, 0),
+        4000
+      );
+      const useLeader = typeof shouldUseSessionDirectoryLeader === "function"
+        ? shouldUseSessionDirectoryLeader(pid, channelName, opts)
+        : false;
+      if (!force && useLeader && typeof readSessionDirectorySnapshot === "function") {
+        const freshSnapshot = readSessionDirectorySnapshot(pid, channelName, { maxAgeMs: snapshotMaxAgeMs });
+        if (freshSnapshot && Array.isArray(freshSnapshot.sessions)) {
+          if (freshSnapshot.pollingHints || freshSnapshot.perfGovernance) {
+            updateConversationProjectPollingMeta(pid, {
+              polling_hints: freshSnapshot.pollingHints,
+              perf_governance: freshSnapshot.perfGovernance,
+            });
+          }
+          PCONV.sessionFetchCacheByKey[key] = {
+            loadedAt: Number(freshSnapshot.loadedAtMs || Date.now()) || Date.now(),
+            sessions: freshSnapshot.sessions.slice(),
+            source: "storage-snapshot",
+          };
+          return freshSnapshot.sessions.slice();
+        }
+        const leader = (typeof tryAcquireSessionDirectoryPollLeader === "function")
+          ? tryAcquireSessionDirectoryPollLeader(pid)
+          : { isLeader: true };
+        if (!leader || !leader.isLeader) {
+          if (cached && Array.isArray(cached.sessions)) return cached.sessions.slice();
+          const waitMs = Math.min(Math.max(normalizeConversationPollingNumber(policy && policy.inflight_wait_ms, 250), 250), 1200);
+          await new Promise((resolve) => setTimeout(resolve, waitMs));
+          const lateSnapshot = readSessionDirectorySnapshot(pid, channelName, { maxAgeMs: snapshotMaxAgeMs });
+          if (lateSnapshot && Array.isArray(lateSnapshot.sessions)) return lateSnapshot.sessions.slice();
+          const staleSnapshot = readSessionDirectorySnapshot(pid, channelName, {
+            maxAgeMs: Math.max(snapshotMaxAgeMs, normalizeConversationPollingNumber(policy && policy.poll_interval_ms, 45000) * 2),
+          });
+          if (staleSnapshot && Array.isArray(staleSnapshot.sessions)) return staleSnapshot.sessions.slice();
+        }
+      }
       const qs = new URLSearchParams();
       qs.set("project_id", pid);
       if (channelName) qs.set("channel_name", String(channelName));
+      const payloadMode = normalizeConversationSessionsPayloadMode(opts && (opts.payloadMode || opts.payload_mode || opts.queryMode || opts.query_mode));
+      qs.set("payloadMode", payloadMode);
       const task = (async () => {
         const r = await fetch("/api/sessions?" + qs.toString(), { cache: "no-store" });
         if (!r.ok) {
@@ -915,6 +1027,13 @@
           loadedAt: Date.now(),
           sessions: sessions.slice(),
         };
+        if (useLeader && typeof publishSessionDirectorySnapshot === "function") {
+          publishSessionDirectorySnapshot(pid, channelName, sessions, {
+            loadedAtMs: Date.now(),
+            pollingHints: (j && (j.polling_hints || j.pollingHints)) || null,
+            perfGovernance: (j && (j.perf_governance || j.perfGovernance)) || null,
+          });
+        }
         return sessions.slice();
       })().finally(() => {
         delete PCONV.sessionFetchPromiseByKey[key];
@@ -1281,12 +1400,18 @@
           if (!normalized) return;
           existingById.set(normalized.sessionId, normalized);
         });
-        const formatted = (await fetchConversationSessionsFromApi(projectId, channelName, {
+        const fetchOpts = {
           force: !!(opts && opts.force),
-          freshnessMs: Number.isFinite(Number((opts && opts.freshnessMs) || 0))
-            ? Number((opts && opts.freshnessMs) || 0)
-            : (channelName ? 800 : 1200),
-        }))
+          source: String((opts && opts.source) || "").trim(),
+          payloadMode: (opts && (opts.payloadMode || opts.payload_mode || opts.queryMode || opts.query_mode)) || "summary",
+        };
+        if (hasConversationOwnOption(opts, "freshnessMs")) {
+          const explicitFreshnessMs = Number(opts && opts.freshnessMs);
+          if (Number.isFinite(explicitFreshnessMs) && explicitFreshnessMs >= 0) {
+            fetchOpts.freshnessMs = explicitFreshnessMs;
+          }
+        }
+        const formatted = (await fetchConversationSessionsFromApi(projectId, channelName, fetchOpts))
           .map((row) => preserveConversationSessionDetailFields(
             row,
             existingById.get(String((row && (row.sessionId || row.id || row.session_id)) || "").trim()) || null
@@ -1336,17 +1461,26 @@
         raw.heartbeat_summary || raw.heartbeatSummary || rawHeartbeat.summary || {},
         heartbeatItems
       );
-      const normalizeConversationListMetricsClientResult = typeof normalizeConversationListMetricsClient === "function"
-        ? normalizeConversationListMetricsClient(raw.conversation_list_metrics || raw.conversationListMetrics || null)
-        : (((raw.conversation_list_metrics || raw.conversationListMetrics) && typeof (raw.conversation_list_metrics || raw.conversationListMetrics) === "object")
-          ? { ...(raw.conversation_list_metrics || raw.conversationListMetrics) }
-          : null);
+      const normalizeListMetrics = (typeof normalizeConversationListMetricsClient === "function")
+        ? normalizeConversationListMetricsClient
+        : ((value) => {
+          const src = (value && typeof value === "object") ? value : null;
+          if (!src) return null;
+          return {
+            task_counts: (src.task_counts && typeof src.task_counts === "object") ? { ...src.task_counts } : {},
+            current_task_summary: (src.current_task_summary && typeof src.current_task_summary === "object") ? { ...src.current_task_summary } : null,
+            memo_summary: (src.memo_summary && typeof src.memo_summary === "object") ? { ...src.memo_summary } : null,
+            status_badges: Array.isArray(src.status_badges) ? src.status_badges.map((item) => ({ ...(item || {}) })) : [],
+            detail_hydration: (src.detail_hydration && typeof src.detail_hydration === "object") ? { ...src.detail_hydration } : {},
+          };
+        });
+      const normalizedConversationListMetrics = normalizeListMetrics(raw.conversation_list_metrics || raw.conversationListMetrics || null);
       const memoSummary = (raw.memo_summary && typeof raw.memo_summary === "object")
         ? { ...raw.memo_summary }
         : ((raw.memoSummary && typeof raw.memoSummary === "object")
           ? { ...raw.memoSummary }
-          : ((normalizeConversationListMetricsClientResult && normalizeConversationListMetricsClientResult.memo_summary && typeof normalizeConversationListMetricsClientResult.memo_summary === "object")
-            ? { ...normalizeConversationListMetricsClientResult.memo_summary }
+          : ((normalizedConversationListMetrics && normalizedConversationListMetrics.memo_summary && typeof normalizedConversationListMetrics.memo_summary === "object")
+            ? { ...normalizedConversationListMetrics.memo_summary }
             : null));
 
       return {
@@ -1416,7 +1550,7 @@
           raw.project_execution_context || raw.projectExecutionContext || null
         ),
         task_tracking: normalizeTaskTrackingClient(raw.task_tracking || raw.taskTracking || null),
-        conversation_list_metrics: normalizeConversationListMetricsClientResult,
+        conversation_list_metrics: normalizedConversationListMetrics,
         memo_summary: memoSummary,
         memoSummary: memoSummary,
       };
@@ -1449,24 +1583,22 @@
       const map = new Map();
       const serverChannelSessions = new Map();
       const hiddenServerSessionIds = new Set();
-      const isVisibleSessionRow = (row) => {
-        const item = (row && typeof row === "object") ? row : {};
-        if (typeof isVisibleConversationSession === "function") {
-          return isVisibleConversationSession(item);
-        }
+      const isVisibleSession = (session) => {
+        if (typeof isVisibleConversationSession === "function") return !!isVisibleConversationSession(session);
         const deleted = typeof isDeletedSession === "function"
-          ? isDeletedSession(item)
-          : boolLike(item.is_deleted || item.isDeleted);
+          ? isDeletedSession(session)
+          : ["1", "true", "yes", "y"].includes(String((session && (session.is_deleted || session.isDeleted)) || "").trim().toLowerCase());
+        if (deleted) return false;
         const inactive = typeof isInactiveSession === "function"
-          ? isInactiveSession(item)
-          : String(item.status || item.session_status || item.sessionStatus || "").trim().toLowerCase() === "inactive";
-        return !deleted && !inactive;
+          ? isInactiveSession(session)
+          : String((session && (session.status || session.session_status || session.sessionStatus)) || "").trim().toLowerCase() === "inactive";
+        return !inactive;
       };
 
       for (const raw of (Array.isArray(serverSessions) ? serverSessions : [])) {
         const n = normalizeConversationSession(raw);
         if (!n) continue;
-        if (!isVisibleSessionRow(n)) {
+        if (!isVisibleSession(n)) {
           hiddenServerSessionIds.add(n.sessionId);
           continue;
         }
@@ -1484,7 +1616,7 @@
       for (const raw of (Array.isArray(localSessions) ? localSessions : [])) {
         const n = normalizeConversationSession(raw);
         if (!n) continue;
-        if (hiddenServerSessionIds.has(n.sessionId) || !isVisibleSessionRow(n)) continue;
+        if (hiddenServerSessionIds.has(n.sessionId) || !isVisibleSession(n)) continue;
         const channelKey = String(n.channel_name || n.primaryChannel || "").trim();
         const channelBucket = channelKey ? serverChannelSessions.get(channelKey) : null;
         if (channelBucket && channelBucket.size && !channelBucket.has(n.sessionId)) continue;
@@ -1493,7 +1625,7 @@
       for (const raw of (Array.isArray(serverSessions) ? serverSessions : [])) {
         const n = normalizeConversationSession(raw);
         if (!n) continue;
-        if (hiddenServerSessionIds.has(n.sessionId) || !isVisibleSessionRow(n)) {
+        if (!isVisibleSession(n)) {
           map.delete(n.sessionId);
           continue;
         }

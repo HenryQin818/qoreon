@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import os
 import shutil
+import socket
 import tempfile
 from pathlib import Path
 from typing import Any, Callable
@@ -13,6 +14,12 @@ from task_dashboard.runtime.execution_profiles import (
     normalize_execution_profile,
     resolve_execution_profile_permissions,
 )
+
+_CODEX_VPS_HTTP_PROXY = "http://127.0.0.1:10809"
+_CODEX_VPS_ALL_PROXY = "socks5h://127.0.0.1:10808"
+_CODEX_VPS_NO_PROXY = "localhost,127.0.0.1,::1,*.local,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+_CODEX_ROUTE_MODE_FILE = Path.home() / "network-tools" / "xray-vless-vps" / "console" / "data" / "codex-route-mode"
+_PROXY_ENV_KEYS = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy", "NO_PROXY", "no_proxy")
 
 
 def _path_has_non_ascii(path: Path) -> bool:
@@ -125,10 +132,79 @@ def _prepend_path_entries(path_value: str, entries: list[str]) -> str:
     return os.pathsep.join(merged)
 
 
+def _normalize_codex_route_policy(value: str) -> str:
+    normalized = str(value or "").strip().lower().replace("-", "_")
+    if normalized in {"strict", "force", "force_vps", "codex_only"}:
+        return "strict_vps"
+    if normalized in {"preferred", "vps_first", "vps_preferred"}:
+        return "vps_preferred"
+    if normalized in {"direct", "off", "no_proxy", "bypass"}:
+        return "direct"
+    return "strict_vps"
+
+
+def _read_codex_route_policy(env: dict[str, str]) -> str:
+    override = str(env.get("TASK_DASHBOARD_CODEX_ROUTE_MODE") or "").strip()
+    if override:
+        return _normalize_codex_route_policy(override)
+    try:
+        return _normalize_codex_route_policy(_CODEX_ROUTE_MODE_FILE.read_text(encoding="utf-8"))
+    except OSError:
+        return "strict_vps"
+
+
+def _local_proxy_open(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(0.25)
+        return sock.connect_ex(("127.0.0.1", port)) == 0
+
+
+def _clear_proxy_env(env: dict[str, str]) -> None:
+    for key in _PROXY_ENV_KEYS:
+        env.pop(key, None)
+
+
+def _apply_codex_vps_proxy_env(env: dict[str, str]) -> None:
+    flag = str(env.get("TASK_DASHBOARD_CODEX_VPS_PROXY", "1") or "").strip().lower()
+    if flag in {"0", "false", "no", "off", "disabled"}:
+        _clear_proxy_env(env)
+        env["CODEX_VPS_PROXY_MODE"] = "direct"
+        return
+
+    route_policy = _read_codex_route_policy(env)
+    if route_policy == "direct":
+        _clear_proxy_env(env)
+        env["CODEX_VPS_PROXY_MODE"] = "direct"
+        return
+    if route_policy == "vps_preferred" and not _local_proxy_open(10809):
+        _clear_proxy_env(env)
+        env["CODEX_VPS_PROXY_MODE"] = "direct-fallback"
+        return
+
+    http_proxy = str(env.get("TASK_DASHBOARD_CODEX_VPS_HTTP_PROXY") or _CODEX_VPS_HTTP_PROXY)
+    all_proxy = str(env.get("TASK_DASHBOARD_CODEX_VPS_ALL_PROXY") or _CODEX_VPS_ALL_PROXY)
+    no_proxy = str(env.get("TASK_DASHBOARD_CODEX_VPS_NO_PROXY") or _CODEX_VPS_NO_PROXY)
+    env.update(
+        {
+            "HTTP_PROXY": http_proxy,
+            "HTTPS_PROXY": http_proxy,
+            "ALL_PROXY": all_proxy,
+            "http_proxy": http_proxy,
+            "https_proxy": http_proxy,
+            "all_proxy": all_proxy,
+            "NO_PROXY": no_proxy,
+            "no_proxy": no_proxy,
+            "CODEX_VPS_PROXY_MODE": "vps-preferred" if route_policy == "vps_preferred" else "strict-vps",
+        }
+    )
+
+
 def _build_spawn_env(*, cli_type: str, cmd: list[str]) -> dict[str, str]:
     env = dict(os.environ)
     if str(cli_type or "").strip() != "codex":
         return env
+    # Scope the VPS route to CCB-spawned Codex child processes only.
+    _apply_codex_vps_proxy_env(env)
     preferred_bins: list[str] = []
     if cmd:
         exe = Path(str(cmd[0] or "")).expanduser()
@@ -169,6 +245,12 @@ def _insert_after_exec(cmd: list[str], extra_args: list[str]) -> list[str]:
         exec_index = 0
     insert_at = exec_index + 1
     return out[:insert_at] + list(extra_args) + out[insert_at:]
+
+
+def _upsert_codex_cd_arg(cmd: list[str], cwd: Path) -> list[str]:
+    updated = _remove_flag(list(cmd), "--cd", takes_value=True)
+    updated = _remove_flag(updated, "-C", takes_value=True)
+    return _insert_after_exec(updated, ["-C", str(cwd)])
 
 
 def _augment_codex_command_for_execution_profile(
@@ -224,11 +306,7 @@ def prepare_process_spawn(
             execution_profile=normalized_profile,
         )
     spawn_env = _build_spawn_env(cli_type=cli_type, cmd=spawn_cmd)
-    if (
-        str(cli_type or "").strip() == "codex"
-        and normalized_profile == "sandboxed"
-        and _path_has_non_ascii(spawn_cwd)
-    ):
+    if str(cli_type or "").strip() == "codex" and _path_has_non_ascii(spawn_cwd):
         source_root, relative_subpath = _resolve_workspace_root(spawn_cwd)
         digest = hashlib.sha1(str(source_root).encode("utf-8")).hexdigest()[:12]
         mirror_root = Path(tempfile.gettempdir()) / "task-dashboard-codex-runner" / digest
@@ -240,6 +318,7 @@ def prepare_process_spawn(
         candidate_cwd = mirror_root / relative_subpath
         if candidate_cwd.exists() and candidate_cwd.is_dir():
             spawn_cwd = candidate_cwd
+            spawn_cmd = _upsert_codex_cd_arg(spawn_cmd, spawn_cwd)
             mode = "codex_ascii_workspace_mirror"
             mirrored_from = str(source_root)
     return {

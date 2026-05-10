@@ -127,11 +127,13 @@ from task_dashboard.runtime.session_routes import (
 )
 from task_dashboard.runtime.run_routes import (
     get_run_detail_response as runtime_get_run_detail_response,
+    invalidate_runs_list_cache as runtime_invalidate_runs_list_cache,
     list_runs_response as runtime_list_runs_response,
     perform_run_action_response as runtime_perform_run_action_response,
 )
 from task_dashboard.runtime.run_detail_fields import (
     extract_terminal_message_from_file as runtime_extract_terminal_message_from_file,
+    reconcile_generated_media_for_run as runtime_reconcile_generated_media_for_run,
 )
 from task_dashboard.sender_contract import normalize_sender_fields
 
@@ -1869,8 +1871,8 @@ def _default_network_retry_max() -> int:
             return min(v, 5)
         except Exception:
             pass
-    # 默认重试 1 次：覆盖短时抖动，避免无边界重试。
-    return 1
+    # 默认重试 2 次：覆盖连续短时抖动，仍保留有限边界避免长时间隐藏重试。
+    return 2
 
 
 def _default_network_retry_base_s() -> float:
@@ -3148,6 +3150,9 @@ class RunScheduler:
         self._lock = threading.Lock()
         self._q: dict[str, deque[tuple[str, str]]] = {}
         self._running: dict[str, str] = {}
+        self._running_futures: dict[str, Any] = {}
+        self._running_cli_types: dict[str, str] = {}
+        self._running_started_at: dict[str, float] = {}
         self._retry_waiting: dict[str, tuple[str, float, str]] = {}
         self._retry_timers: dict[str, threading.Timer] = {}
         self._busy_probe_delay_s = max(0.2, float(busy_probe_delay_s or 0.2))
@@ -3257,6 +3262,7 @@ class RunScheduler:
             return False
         timer: Optional[threading.Timer] = None
         with self._lock:
+            self._heal_stale_running_locked(sid)
             cur = self._retry_waiting.get(sid)
             if (cur and str(cur[0] or "").strip() != rid) or sid in self._running or bool(self._q.get(sid)):
                 self._enqueue_pending_retry_locked(sid, rid, cli_t)
@@ -3401,6 +3407,64 @@ class RunScheduler:
             q.appendleft((rid, cli_t))
             self._try_dispatch_locked(sid)
 
+    def _clear_running_slot_locked(self, session_id: str, run_id: str = "") -> bool:
+        sid = str(session_id or "").strip()
+        rid = str(run_id or "").strip()
+        if not sid:
+            return False
+        cur = str(self._running.get(sid) or "").strip()
+        if rid and cur and cur != rid:
+            return False
+        self._running.pop(sid, None)
+        self._running_futures.pop(sid, None)
+        self._running_cli_types.pop(sid, None)
+        self._running_started_at.pop(sid, None)
+        return True
+
+    def _running_future_alive_locked(self, session_id: str, run_id: str) -> bool:
+        sid = str(session_id or "").strip()
+        rid = str(run_id or "").strip()
+        if not sid or not rid or str(self._running.get(sid) or "").strip() != rid:
+            return False
+        future = self._running_futures.get(sid)
+        if future is None:
+            return False
+        try:
+            return not bool(future.done())
+        except Exception:
+            return False
+
+    def _running_process_active_for_run_locked(self, session_id: str, run_id: str, meta: Optional[dict[str, Any]] = None) -> bool:
+        sid = str(session_id or "").strip()
+        rid = str(run_id or "").strip()
+        if not sid or not rid:
+            return False
+        cli_t = str((meta or {}).get("cliType") or self._running_cli_types.get(sid) or "codex").strip() or "codex"
+        try:
+            rows = _scan_process_table_rows()
+        except Exception:
+            rows = []
+        for _pid, cmd in rows:
+            cmd_txt = str(cmd or "")
+            if _run_busy_cmd_matches(cmd_txt, rid, cli_t) or _run_busy_cmd_fallback_matches(cmd_txt, rid, cli_t):
+                return True
+        if not isinstance(meta, dict) or not meta:
+            return False
+        st = str((meta or {}).get("status") or "").strip().lower()
+        if st in {"done", "error"}:
+            return False
+        try:
+            return bool(_scan_session_busy_rows(sid, cli_type=cli_t, rows=rows))
+        except Exception:
+            return False
+
+    def _running_slot_active_locked(self, session_id: str, run_id: str, meta: Optional[dict[str, Any]] = None) -> bool:
+        return self._running_future_alive_locked(session_id, run_id) or self._running_process_active_for_run_locked(
+            session_id,
+            run_id,
+            meta,
+        )
+
     def _heal_stale_running_locked(self, session_id: str) -> None:
         sid = str(session_id or "").strip()
         if not sid:
@@ -3416,13 +3480,20 @@ class RunScheduler:
             meta = None
         if not meta:
             # Missing/corrupted meta for a claimed running slot is stale.
-            # Release it so later runs in the same session can continue.
-            self._running.pop(sid, None)
+            # Keep it only when the scheduler-owned lease still has active work.
+            if self._running_slot_active_locked(sid, rid, None):
+                return
+            self._clear_running_slot_locked(sid, rid)
             return
         st = str(meta.get("status") or "").strip().lower()
         if st == "running":
+            if self._running_slot_active_locked(sid, rid, meta if isinstance(meta, dict) else None):
+                return
+            self._clear_running_slot_locked(sid, rid)
             return
-        self._running.pop(sid, None)
+        if self._running_slot_active_locked(sid, rid, meta if isinstance(meta, dict) else None):
+            return
+        self._clear_running_slot_locked(sid, rid)
 
     def _try_dispatch_locked(self, session_id: str) -> None:
         self._heal_stale_running_locked(session_id)
@@ -3525,18 +3596,23 @@ class RunScheduler:
         if not q:
             self._q.pop(session_id, None)
         self._running[session_id] = run_id
+        self._running_cli_types[session_id] = cli_type
+        self._running_started_at[session_id] = time.time()
 
         def _runner() -> None:
             try:
                 run_cli_exec(self.store, run_id, cli_type=cli_type, scheduler=self)
             finally:
                 with self._lock:
-                    cur = str(self._running.get(session_id) or "").strip()
-                    if cur == run_id:
-                        self._running.pop(session_id, None)
+                    self._clear_running_slot_locked(session_id, run_id)
                     self._try_dispatch_locked(session_id)
 
-        self._executor.submit(_runner)
+        try:
+            future = self._executor.submit(_runner)
+        except Exception:
+            self._clear_running_slot_locked(session_id, run_id)
+            raise
+        self._running_futures[session_id] = future
 
 
 class RunProcessRegistry:
@@ -4214,6 +4290,14 @@ class RunStore:
             runtime_invalidate_sessions_payload_cache(str(meta.get("projectId") or "").strip())
         except Exception:
             pass
+        try:
+            runtime_invalidate_runs_list_cache(
+                str(meta.get("projectId") or "").strip(),
+                session_id=str(meta.get("sessionId") or "").strip(),
+                channel_id=str(meta.get("channelId") or "").strip(),
+            )
+        except Exception:
+            pass
         return meta
 
     def load_meta(self, run_id: str) -> Optional[dict[str, Any]]:
@@ -4263,6 +4347,14 @@ class RunStore:
             pass
         try:
             runtime_invalidate_sessions_payload_cache(str(meta.get("projectId") or "").strip())
+        except Exception:
+            pass
+        try:
+            runtime_invalidate_runs_list_cache(
+                str(meta.get("projectId") or "").strip(),
+                session_id=str(meta.get("sessionId") or "").strip(),
+                channel_id=str(meta.get("channelId") or "").strip(),
+            )
         except Exception:
             pass
 
@@ -4448,10 +4540,24 @@ class RunStore:
         agent_msgs = _extract_agent_messages_from_file(log_path, max_items=4, cli_type=cli_type)
         log_has_turn_completed = _log_has_terminal_signal(log_path, signal="turn.completed")
         log_has_turn_failed = _log_has_terminal_signal(log_path, signal="turn.failed")
+        generated_media_done = False
+        try:
+            media_probe = dict(meta)
+            media_probe["status"] = "done"
+            if not str(media_probe.get("finishedAt") or "").strip():
+                media_probe["finishedAt"] = _now_iso()
+            if runtime_reconcile_generated_media_for_run(self, run_id, media_probe, log_path=log_path):
+                if str(media_probe.get("generated_media_status") or "").strip() == "generated":
+                    meta = media_probe
+                    generated_media_done = True
+                    changed = True
+        except Exception:
+            generated_media_done = False
         if (
             last
             or terminal_last
             or existing_last_preview
+            or generated_media_done
             or log_has_turn_completed
             or (agent_msgs and not log_has_turn_failed)
         ):
@@ -4470,7 +4576,13 @@ class RunStore:
             if not str(meta.get("finishedAt") or "").strip():
                 meta["finishedAt"] = _now_iso()
                 changed = True
-            preview_src = last or terminal_last or existing_last_preview or (agent_msgs[-1] if agent_msgs else "")
+            preview_src = (
+                last
+                or terminal_last
+                or existing_last_preview
+                or str(meta.get("generated_media_summary") or "").strip()
+                or (agent_msgs[-1] if agent_msgs else "")
+            )
             preview = _safe_text(preview_src.replace("\r\n", "\n"), 300)
             if preview != str(meta.get("lastPreview") or ""):
                 meta["lastPreview"] = preview
@@ -4528,11 +4640,11 @@ class RunStore:
     ) -> list[dict[str, Any]]:
         metas = []
         resolved_payload_mode = str(payload_mode or "").strip().lower()
-        if resolved_payload_mode not in {"", "full", "light", "none"}:
+        if resolved_payload_mode not in {"", "full", "summary", "light", "none"}:
             resolved_payload_mode = ""
         if not resolved_payload_mode:
             resolved_payload_mode = "full" if include_payload else "none"
-        include_payload = resolved_payload_mode != "none"
+        include_payload = resolved_payload_mode not in {"summary", "none"}
         hydrate_light = resolved_payload_mode in {"full", "light"}
         hydrate_full = resolved_payload_mode == "full"
         after_txt = str(after_created_at or "").strip()
@@ -4633,6 +4745,20 @@ class RunStore:
                     parsed_business_refs = _extract_business_refs_from_texts(business_texts, max_items=24)
                     if parsed_business_refs:
                         meta["business_refs"] = parsed_business_refs
+            if resolved_payload_mode == "summary":
+                meta = dict(meta)
+                for key in (
+                    "messagePreview",
+                    "lastPreview",
+                    "partialPreview",
+                    "logPreview",
+                    "skills_used",
+                    "business_refs",
+                    "processRows",
+                    "process_rows",
+                    "process_events",
+                ):
+                    meta.pop(key, None)
             metas.append(meta)
             if len(metas) >= limit:
                 break
@@ -4697,6 +4823,14 @@ class RunStore:
                     continue
                 src[key].replace(dst[key])
             self._remove_live_run_index_entry(run_id)
+            try:
+                runtime_invalidate_runs_list_cache(
+                    str(meta.get("projectId") or "").strip(),
+                    session_id=str(meta.get("sessionId") or "").strip(),
+                    channel_id=str(meta.get("channelId") or "").strip(),
+                )
+            except Exception:
+                pass
         return results
 
 _RUN_ACTION_AUDIT_LOCK = threading.Lock()
@@ -5236,6 +5370,7 @@ class Handler(BaseHTTPRequestHandler):
                 or u.path.startswith("/api/codex/run/")
                 or u.path == "/api/communication/audit"
                 or (u.path.startswith("/api/projects/") and u.path.endswith("/runtime-bubbles"))
+                or (u.path.startswith("/api/projects/") and u.path.endswith("/automation-status"))
                 or (u.path.startswith("/api/projects/") and "/auto-scheduler" in u.path)
                 or u.path == "/api/cli/types"
                 or u.path == "/api/board/global-resource-graph"

@@ -16,7 +16,8 @@
       heartbeatHistoryErrorByTask: Object.create(null), // projectId:taskId -> string
       heartbeatActionByTask: Object.create(null), // projectId:taskId -> action text
       seqByProject: Object.create(null), // projectId -> number
-      pollTimer: 0,                      // window.setInterval id
+      pollTimer: 0,                      // window.setTimeout id
+      visibilityBound: false,            // visibilitychange listener bound
     };
     const PROJECT_AUTO_UI = {
       open: false,
@@ -792,14 +793,50 @@
       renderProjectRebuildBtn();
     }
 
-    function ensureProjectAutoPolling() {
-      if (PROJECT_AUTO.pollTimer) return;
-      PROJECT_AUTO.pollTimer = window.setInterval(() => {
+    function projectAutoPageHidden() {
+      return !!(typeof document !== "undefined" && document.hidden);
+    }
+
+    function projectAutoNeedsDetails() {
+      return !!(PROJECT_AUTO_UI.open || PROJECT_AUTO_UI.recordDrawerOpen);
+    }
+
+    function projectAutoPollDelayMs() {
+      return projectAutoNeedsDetails() ? 5000 : 60000;
+    }
+
+    function scheduleProjectAutoPoll(delayMs) {
+      const waitMs = Math.max(1000, Number(delayMs) || projectAutoPollDelayMs());
+      if (PROJECT_AUTO.pollTimer) window.clearTimeout(PROJECT_AUTO.pollTimer);
+      PROJECT_AUTO.pollTimer = window.setTimeout(() => {
+        PROJECT_AUTO.pollTimer = 0;
         const pid = projectAutoAvailableProjectId();
-        if (!pid) return;
-        const maxAgeMs = PROJECT_AUTO_UI.open ? 4000 : 12000;
-        ensureProjectAutoStatus(pid, { maxAgeMs }).catch(() => {});
-      }, 5000);
+        const includeDetails = projectAutoNeedsDetails();
+        if (pid && !projectAutoPageHidden()) {
+          ensureProjectAutoStatus(pid, {
+            includeDetails,
+            maxAgeMs: includeDetails ? 4000 : 55000,
+          }).catch(() => {});
+        }
+        scheduleProjectAutoPoll(projectAutoPollDelayMs());
+      }, waitMs);
+    }
+
+    function ensureProjectAutoPolling() {
+      if (!PROJECT_AUTO.visibilityBound && typeof document !== "undefined" && document.addEventListener) {
+        PROJECT_AUTO.visibilityBound = true;
+        document.addEventListener("visibilitychange", () => {
+          if (projectAutoPageHidden()) return;
+          const pid = projectAutoAvailableProjectId();
+          if (!pid) return;
+          ensureProjectAutoStatus(pid, {
+            force: true,
+            includeDetails: projectAutoNeedsDetails(),
+          }).catch(() => {});
+        });
+      }
+      if (PROJECT_AUTO.pollTimer) return;
+      scheduleProjectAutoPoll(1000);
     }
 
     function projectRebuildBtnNode() {
@@ -2941,13 +2978,15 @@
       if (!pid || pid === "overview") return;
       const force = !!opts.force;
       const syncDraft = !!opts.syncDraft;
+      const includeDetails = ("includeDetails" in opts) ? !!opts.includeDetails : projectAutoNeedsDetails();
       const maxAgeRaw = Number(opts.maxAgeMs);
       const maxAgeMs = Number.isFinite(maxAgeRaw) && maxAgeRaw >= 0 ? maxAgeRaw : 20000;
       if (syncDraft) delete PROJECT_AUTO.draftByProject[pid];
       if (!force && PROJECT_AUTO.cache[pid]) {
         const fetchedAtMs = Number(PROJECT_AUTO.cache[pid].fetchedAtMs || 0);
         const ageMs = fetchedAtMs > 0 ? (Date.now() - fetchedAtMs) : Number.POSITIVE_INFINITY;
-        if (ageMs <= maxAgeMs) {
+        const detailsReady = !includeDetails || !!PROJECT_AUTO.cache[pid].detailsLoaded;
+        if (ageMs <= maxAgeMs && detailsReady) {
           if (PROJECT_AUTO_UI.open) renderProjectAutoPanel();
           else renderProjectAutoHeaderOnly(pid);
           return;
@@ -2965,65 +3004,61 @@
       if (PROJECT_AUTO_UI.open) renderProjectAutoPanel();
       else renderProjectAutoHeaderOnly(pid);
       try {
-        const statusPromise = fetch("/api/projects/" + encodeURIComponent(pid) + "/auto-scheduler", {
+        const query = includeDetails ? "?include=details" : "";
+        const resp = await fetch("/api/projects/" + encodeURIComponent(pid) + "/automation-status" + query, {
           headers: authHeaders({}),
           cache: "no-store",
         });
-        const tasksPromise = fetch("/api/projects/" + encodeURIComponent(pid) + "/auto-scheduler/inspection-tasks", {
-          headers: authHeaders({}),
-          cache: "no-store",
-        }).catch(() => null);
-        const heartbeatPromise = fetch("/api/projects/" + encodeURIComponent(pid) + "/heartbeat-tasks", {
-          headers: authHeaders({}),
-          cache: "no-store",
-        }).catch(() => null);
-        const [resp, tasksResp, heartbeatResp] = await Promise.all([statusPromise, tasksPromise, heartbeatPromise]);
         if (!resp.ok) {
           const detail = await parseResponseDetail(resp);
           throw new Error(detail || ("HTTP " + resp.status));
         }
         const data = await resp.json().catch(() => ({}));
-        let taskItems = [];
-        let activeTaskId = "";
-        if (tasksResp && tasksResp.ok) {
-          const tasksJson = await tasksResp.json().catch(() => ({}));
-          taskItems = Array.isArray(tasksJson && tasksJson.items) ? tasksJson.items : [];
+        const prev = PROJECT_AUTO.cache[pid] || {};
+        let taskItems = Array.isArray(prev.status && prev.status.inspection_tasks)
+          ? prev.status.inspection_tasks
+          : [];
+        let activeTaskId = firstNonEmptyText([
+          prev.status && prev.status.active_inspection_task_id,
+          data && data.inspection && data.inspection.active_inspection_task_id,
+          data && data.inspection && data.inspection.activeInspectionTaskId,
+        ]);
+        if (includeDetails && Array.isArray(data && data.inspection_tasks)) {
+          taskItems = data.inspection_tasks;
           activeTaskId = firstNonEmptyText([
-            tasksJson && tasksJson.active_inspection_task_id,
-            tasksJson && tasksJson.activeInspectionTaskId,
+            data && data.inspection && data.inspection.active_inspection_task_id,
+            data && data.inspection && data.inspection.activeInspectionTaskId,
+            data && data.status && data.status.active_inspection_task_id,
+            data && data.status && data.status.activeInspectionTaskId,
           ]);
         }
-        let heartbeatTasks = [];
-        let heartbeatMeta = { enabled: false, scan_interval_seconds: 30, count: 0, errors: [], ready: false };
+        let heartbeatTasks = Array.isArray(prev.heartbeatTasks) ? prev.heartbeatTasks : [];
+        let heartbeatMeta = prev.heartbeatMeta || { enabled: false, scan_interval_seconds: 30, count: 0, errors: [], ready: false };
         PROJECT_AUTO.heartbeatErrors[pid] = "";
-        if (heartbeatResp) {
-          if (heartbeatResp.ok) {
-            const heartbeatJson = await heartbeatResp.json().catch(() => ({}));
-            heartbeatTasks = normalizeHeartbeatTaskItemsClient(
-              Array.isArray(heartbeatJson && heartbeatJson.items) ? heartbeatJson.items : [],
-              pid
-            );
-            heartbeatMeta = {
-              enabled: _coerceBoolClient(heartbeatJson && heartbeatJson.enabled, false),
-              scan_interval_seconds: Math.max(20, Number((heartbeatJson && heartbeatJson.scan_interval_seconds) || 30)),
-              count: Math.max(0, Number((heartbeatJson && heartbeatJson.count) || heartbeatTasks.length || 0)),
-              errors: Array.isArray(heartbeatJson && heartbeatJson.errors) ? heartbeatJson.errors : [],
-              ready: _coerceBoolClient(heartbeatJson && heartbeatJson.ready, true),
-            };
-          } else {
-            PROJECT_AUTO.heartbeatErrors[pid] = await parseResponseDetail(heartbeatResp);
-          }
+        if (includeDetails && Array.isArray(data && data.heartbeat_tasks)) {
+          heartbeatTasks = normalizeHeartbeatTaskItemsClient(data.heartbeat_tasks, pid);
+        }
+        if (data && data.heartbeat && typeof data.heartbeat === "object") {
+          const hb = data.heartbeat;
+          heartbeatMeta = {
+            enabled: _coerceBoolClient(hb.enabled, false),
+            scan_interval_seconds: Math.max(20, Number(hb.scan_interval_seconds || 30)),
+            count: Math.max(0, Number(hb.count || hb.task_count || heartbeatTasks.length || 0)),
+            errors: Array.isArray(hb.errors) ? hb.errors : [],
+            ready: _coerceBoolClient(hb.ready, true),
+          };
         }
         if (Number(PROJECT_AUTO.seqByProject[pid] || 0) !== seq) return;
         const statusRaw = (data && typeof data === "object" && data.status && typeof data.status === "object") ? data.status : data;
         if (Array.isArray(taskItems) && taskItems.length) statusRaw.inspection_tasks = taskItems;
         if (activeTaskId) statusRaw.active_inspection_task_id = activeTaskId;
-        const records = normalizeReminderRecordsPayload(data);
+        const records = includeDetails ? normalizeReminderRecordsPayload(data) : (Array.isArray(prev.records) ? prev.records : []);
         PROJECT_AUTO.cache[pid] = {
           status: normalizeProjectAutoState(statusRaw, pid),
           records,
           heartbeatTasks,
           heartbeatMeta,
+          detailsLoaded: includeDetails || !!prev.detailsLoaded,
           fetchedAt: new Date().toISOString(),
           fetchedAtMs: Date.now(),
         };
@@ -3891,10 +3926,47 @@
       return out.join("");
     }
 
+    function enhanceMarkdownTypedBlocks(root) {
+      if (!root || !root.querySelectorAll) return;
+      Array.from(root.querySelectorAll("pre.md-code")).forEach((block) => {
+        if (!block || block.__markdownCopyEnhanced) return;
+        const code = block.querySelector("code");
+        const copyValue = () => String((code || block).textContent || "");
+        block.__markdownCopyEnhanced = true;
+        block.classList.add("md-code-copyable");
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "md-block-copy";
+        btn.setAttribute("aria-label", "复制代码块内容");
+        btn.setAttribute("title", "复制");
+        btn.innerHTML = '<span class="md-block-copy-mark" aria-hidden="true"></span><span class="md-block-copy-feedback" aria-live="polite">已复制</span>';
+        let timer = 0;
+        btn.addEventListener("click", async (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const text = copyValue();
+          if (!text) return;
+          const ok = typeof copyText === "function" ? await copyText(text) : false;
+          window.clearTimeout(timer);
+          btn.classList.toggle("copied", !!ok);
+          btn.classList.toggle("failed", !ok);
+          block.classList.toggle("is-copying", !!ok);
+          const feedback = btn.querySelector(".md-block-copy-feedback");
+          if (feedback) feedback.textContent = ok ? "已复制" : "复制失败";
+          timer = window.setTimeout(() => {
+            btn.classList.remove("copied", "failed");
+            block.classList.remove("is-copying");
+          }, ok ? 1300 : 1800);
+        });
+        block.appendChild(btn);
+      });
+    }
+
     function setMarkdown(elNode, text, fallback = "") {
       if (!elNode) return;
       const src = String(text || "").trim() ? String(text || "") : String(fallback || "");
       elNode.innerHTML = markdownToHtml(src);
+      enhanceMarkdownTypedBlocks(elNode);
       if (typeof enhanceMessageInteractiveObjects === "function") {
         enhanceMessageInteractiveObjects(elNode, { force: true });
       }
@@ -4584,9 +4656,20 @@
         return;
       }
       const mode = String(item.preview_mode || "text");
+      const rawSequenceViewer = typeof buildSequenceDiagramViewer === "function"
+        ? buildSequenceDiagramViewer(String(item.content || ""), { sourceKind: "plain_text" })
+        : null;
+      if (rawSequenceViewer) {
+        body.appendChild(rawSequenceViewer);
+        return;
+      }
       if (mode === "markdown") {
         const box = el("div", { class: "msgobj-preview mdview" });
         box.innerHTML = markdownToHtml(String(item.content || ""));
+        if (typeof enhanceDiagramTypedBlocks === "function") {
+          enhanceDiagramTypedBlocks(box, { scope: "message_object_viewer" });
+        }
+        enhanceMarkdownTypedBlocks(box);
         if (typeof enhanceMessageInteractiveObjects === "function") {
           enhanceMessageInteractiveObjects(box, { force: true });
         }
@@ -4879,7 +4962,6 @@
 
       const srcLines = text.split("\n");
       const lines = [];
-      const maxLines = 220;
 
       const toDebugText = (v) => {
         if (v == null) return "";
@@ -4889,7 +4971,6 @@
       };
 
       for (let i = 0; i < srcLines.length; i++) {
-        if (lines.length >= maxLines) break;
         const raw = String(srcLines[i] || "");
         if (!raw.trim()) continue;
         const parsed = safeParseJsonLine(raw);
@@ -4924,7 +5005,7 @@
 
       return {
         lines,
-        truncated: srcLines.length > lines.length && lines.length >= maxLines,
+        truncated: false,
       };
     }
 
@@ -4950,11 +5031,24 @@
       const runError = String(run.error || "").trim();
       const normalized = normalizeCliDebugLines(String(f.logTail || ""));
       const runId = String(opts.runId || "").trim();
+      const syncing = !!(opts && opts.syncing);
+      const defaultVisibleLines = 300;
+      const pageLines = 300;
+      if (!PCONV.debugLogVisibleLines || typeof PCONV.debugLogVisibleLines !== "object") {
+        PCONV.debugLogVisibleLines = Object.create(null);
+      }
+      const savedVisible = runId ? Number(PCONV.debugLogVisibleLines[runId] || 0) : 0;
+      const visibleLimit = Math.max(defaultVisibleLines, Number.isFinite(savedVisible) && savedVisible > 0 ? savedVisible : defaultVisibleLines);
+      const visibleLines = normalized.lines.slice(0, visibleLimit);
+      const hasMore = normalized.lines.length > visibleLines.length;
 
       const root = el("div", { class: "mdebug" });
       const head = el("div", { class: "mdebug-head" });
       head.appendChild(el("span", { class: "mdebug-cli cli-" + cliTypeClass, text: cliLabel }));
       head.appendChild(el("span", { class: "mdebug-title", text: "调试日志（格式化）" }));
+      if (syncing) {
+        head.appendChild(el("span", { class: "mdebug-sync", text: "同步中" }));
+      }
       root.appendChild(head);
 
       const specFields = readConversationSpecFields(run);
@@ -4973,31 +5067,61 @@
       if (specFields.callbackToText) meta.appendChild(makeDebugKv("callback_to", specFields.callbackToText));
       root.appendChild(meta);
 
-      const logWrap = el("div", { class: "mdebug-log-wrap" });
       if (!normalized.lines.length) {
-        logWrap.appendChild(el("div", { class: "hint", text: "暂无日志内容" }));
+        root.appendChild(el("div", { class: "hint", text: "暂无日志内容" }));
       } else {
         const pre = el("pre", { class: "mdebug-log" });
         if (runId) pre.setAttribute("data-run-id", runId);
-        pre.textContent = normalized.lines.join("\n");
+        pre.textContent = visibleLines.join("\n");
         if (runId) {
-          const saved = Number((PCONV.debugLogScrollTop && PCONV.debugLogScrollTop[runId]) || 0);
+          const savedTop = Number((PCONV.debugLogScrollTop && PCONV.debugLogScrollTop[runId]) || 0);
+          const saveDebugScrollTop = () => {
+            if (!PCONV.debugLogScrollTop || typeof PCONV.debugLogScrollTop !== "object") {
+              PCONV.debugLogScrollTop = Object.create(null);
+            }
+            PCONV.debugLogScrollTop[runId] = Math.max(0, Number(pre.scrollTop || 0));
+          };
+          const markDebugInteraction = () => {
+            PCONV.debugLogUserInteractingUntil = Date.now() + 5000;
+            saveDebugScrollTop();
+          };
           pre.addEventListener("scroll", () => {
-            if (!PCONV.debugLogScrollTop) PCONV.debugLogScrollTop = Object.create(null);
-            PCONV.debugLogScrollTop[runId] = pre.scrollTop;
+            markDebugInteraction();
           }, { passive: true });
-          if (saved > 0) {
+          ["wheel", "pointerdown", "touchstart", "keydown"].forEach((eventName) => {
+            pre.addEventListener(eventName, markDebugInteraction, { passive: true });
+          });
+          if (savedTop > 0) {
             requestAnimationFrame(() => {
-              try { pre.scrollTop = saved; } catch (_) {}
+              try { pre.scrollTop = savedTop; } catch (_) {}
             });
           }
         }
-        logWrap.appendChild(pre);
-        if (normalized.truncated) {
-          logWrap.appendChild(el("div", { class: "hint", text: "日志较长，已显示前 220 行。" }));
+        root.appendChild(pre);
+        if (hasMore) {
+          const moreBar = el("div", { class: "mdebug-morebar is-visible" });
+          const moreBtn = el("button", {
+            class: "btn textbtn mdebug-morebtn",
+            text: "加载更多日志（" + visibleLines.length + "/" + normalized.lines.length + "）",
+          });
+          moreBtn.addEventListener("click", () => {
+            if (!runId) return;
+            if (!PCONV.debugLogVisibleLines || typeof PCONV.debugLogVisibleLines !== "object") {
+              PCONV.debugLogVisibleLines = Object.create(null);
+            }
+            PCONV.debugLogVisibleLines[runId] = Math.min(normalized.lines.length, visibleLimit + pageLines);
+            PCONV.debugLogUserInteractingUntil = Date.now() + 5000;
+            renderConversationDetail();
+          });
+          moreBar.appendChild(moreBtn);
+          root.appendChild(moreBar);
+        } else {
+          root.appendChild(el("div", {
+            class: "hint mdebug-loaded-hint",
+            text: "已显示全部已加载日志；当前内容来自运行时 logTail 片段。",
+          }));
         }
       }
-      root.appendChild(logWrap);
       return root;
     }
 

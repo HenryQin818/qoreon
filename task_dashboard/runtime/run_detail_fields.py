@@ -15,7 +15,22 @@ from task_dashboard.helpers import parse_iso_ts
 
 _TERMINAL_TEXT_CLIS = {"claude", "opencode"}
 _IMAGE_FILE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
+_HTML_FILE_EXTS = {".html", ".htm"}
+_MEDIA_FILE_EXTS = _IMAGE_FILE_EXTS | _HTML_FILE_EXTS
 _CODEX_GENERATED_MEDIA_SOURCE = "codex_imagegen"
+_LOCAL_IMAGEGEN_FALLBACK_SOURCE = "local_imagegen_fallback"
+_GENERATED_MEDIA_SOURCES = {
+    _CODEX_GENERATED_MEDIA_SOURCE,
+    _LOCAL_IMAGEGEN_FALLBACK_SOURCE,
+}
+_MEDIA_RUN_NEEDLES = (
+    "imagegen",
+    "image_gen",
+    "image gen",
+    "generated_images",
+    "generated media",
+    "output/imagegen",
+)
 
 
 def _safe_text(s: Any, max_len: int) -> str:
@@ -188,24 +203,48 @@ def _attachment_ext(att: dict[str, Any]) -> str:
     return str(Path(name).suffix or "").strip().lower()
 
 
+def _attachment_content_type(path: Path) -> str:
+    suffix = str(path.suffix or "").strip().lower()
+    if suffix == ".png":
+        return "image/png"
+    if suffix in {".jpg", ".jpeg"}:
+        return "image/jpeg"
+    if suffix == ".webp":
+        return "image/webp"
+    if suffix == ".gif":
+        return "image/gif"
+    if suffix in _HTML_FILE_EXTS:
+        return "text/html"
+    return ""
+
+
 def _is_image_attachment(att: dict[str, Any]) -> bool:
     return _attachment_ext(att) in _IMAGE_FILE_EXTS
 
 
-def _is_generated_image_attachment(att: dict[str, Any]) -> bool:
+def _is_generated_media_attachment(att: dict[str, Any]) -> bool:
     if not isinstance(att, dict):
         return False
     generated_by = str(att.get("generatedBy") or att.get("generated_by") or "").strip().lower()
     attachment_role = str(att.get("attachment_role") or att.get("attachmentRole") or "").strip().lower()
     source = str(att.get("source") or "").strip().lower()
     return (
-        _is_image_attachment(att)
+        _attachment_ext(att) in _MEDIA_FILE_EXTS
         and (
-            generated_by == _CODEX_GENERATED_MEDIA_SOURCE
+            generated_by in _GENERATED_MEDIA_SOURCES
             or source == "generated"
             or attachment_role == "assistant"
         )
     )
+
+
+def _is_generated_image_attachment(att: dict[str, Any]) -> bool:
+    return _is_generated_media_attachment(att) and _is_image_attachment(att)
+
+
+def _generated_media_attachments(meta: dict[str, Any]) -> list[dict[str, Any]]:
+    attachments = _normalize_run_attachments(meta.get("attachments"))
+    return [att for att in attachments if _is_generated_media_attachment(att)]
 
 
 def _generated_image_attachments(meta: dict[str, Any]) -> list[dict[str, Any]]:
@@ -228,18 +267,56 @@ def synthesize_generated_media_summary(meta: dict[str, Any]) -> str:
     return f"已生成{count}张图片"
 
 
+def _text_looks_like_imagegen(value: Any) -> bool:
+    low = str(value or "").strip().lower()
+    return bool(low and any(needle in low for needle in _MEDIA_RUN_NEEDLES))
+
+
 def _log_looks_like_imagegen(log_path: Path) -> bool:
     if not log_path.exists():
         return False
-    needles = ("imagegen", "image_gen", "generated_images")
     try:
         with log_path.open("r", encoding="utf-8", errors="replace") as fh:
             for raw in fh:
-                low = str(raw or "").lower()
-                if any(needle in low for needle in needles):
+                if _text_looks_like_imagegen(raw):
                     return True
     except Exception:
         return False
+    return False
+
+
+def run_looks_like_generated_media(
+    meta: dict[str, Any],
+    log_path: Path | None = None,
+    *,
+    extra_texts: list[Any] | tuple[Any, ...] | None = None,
+) -> bool:
+    row = meta if isinstance(meta, dict) else {}
+    if str(row.get("cliType") or row.get("cli_type") or "").strip().lower() != "codex":
+        return False
+    if _generated_media_attachments(row):
+        return True
+    if str(row.get("generated_media_summary") or "").strip():
+        return True
+    try:
+        if int(row.get("generated_media_count") or 0) > 0:
+            return True
+    except Exception:
+        pass
+    skills = normalize_skills_used_value(row.get("skills_used"), max_items=20)
+    if any(skill in {"imagegen", "image_gen"} for skill in skills):
+        return True
+    text_values: list[Any] = [
+        row.get("messagePreview"),
+        row.get("lastPreview"),
+        row.get("partialPreview"),
+    ]
+    if extra_texts:
+        text_values.extend(list(extra_texts))
+    if any(_text_looks_like_imagegen(item) for item in text_values):
+        return True
+    if log_path is not None and _log_looks_like_imagegen(log_path):
+        return True
     return False
 
 
@@ -249,10 +326,7 @@ def _run_looks_like_generated_image(meta: dict[str, Any], log_path: Path) -> boo
     status = str(meta.get("status") or "").strip().lower()
     if status != "done":
         return False
-    skills = normalize_skills_used_value(meta.get("skills_used"), max_items=20)
-    if any(skill in {"imagegen", "image_gen"} for skill in skills):
-        return True
-    return _log_looks_like_imagegen(log_path)
+    return run_looks_like_generated_media(meta, log_path)
 
 
 def _candidate_generated_image_files(session_id: str, meta: dict[str, Any]) -> list[Path]:
@@ -297,6 +371,139 @@ def _candidate_generated_image_files(session_id: str, meta: dict[str, Any]) -> l
     return [item[1] for item in matched[-8:]]
 
 
+def _meta_workdirs(meta: dict[str, Any]) -> list[Path]:
+    row = meta if isinstance(meta, dict) else {}
+    raw_values: list[Any] = [
+        row.get("workdir"),
+        row.get("run_cwd"),
+        row.get("worktree_root"),
+    ]
+    context = row.get("project_execution_context")
+    if isinstance(context, dict):
+        for key in ("target", "source"):
+            ref = context.get(key)
+            if isinstance(ref, dict):
+                raw_values.extend([ref.get("workdir"), ref.get("worktree_root")])
+    out: list[Path] = []
+    seen: set[str] = set()
+    for raw in raw_values:
+        text = str(raw or "").strip()
+        if not text:
+            continue
+        try:
+            path = Path(text).expanduser()
+        except Exception:
+            continue
+        key = str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(path)
+    return out
+
+
+def candidate_local_imagegen_files(
+    meta: dict[str, Any],
+    *,
+    now_ts: float = 0.0,
+    max_items: int = 16,
+) -> list[Path]:
+    row = meta if isinstance(meta, dict) else {}
+    start_ts = parse_iso_ts(row.get("startedAt")) or parse_iso_ts(row.get("createdAt")) or 0.0
+    end_ts = (
+        parse_iso_ts(row.get("finishedAt"))
+        or parse_iso_ts(row.get("lastProgressAt"))
+        or float(now_ts or 0.0)
+        or start_ts
+        or 0.0
+    )
+    lower = start_ts - 30.0 if start_ts > 0 else 0.0
+    upper = end_ts + 180.0 if end_ts > 0 else 0.0
+    matched: list[tuple[float, Path]] = []
+    for base in _meta_workdirs(row):
+        root = base / "output" / "imagegen"
+        if not root.exists() or not root.is_dir():
+            continue
+        try:
+            paths = root.rglob("*")
+            for path in paths:
+                if not path.is_file():
+                    continue
+                if str(path.suffix or "").strip().lower() not in _MEDIA_FILE_EXTS:
+                    continue
+                try:
+                    mtime = float(path.stat().st_mtime)
+                except Exception:
+                    continue
+                if lower > 0 and mtime < lower:
+                    continue
+                if upper > 0 and mtime > upper:
+                    continue
+                matched.append((mtime, path))
+        except Exception:
+            continue
+    matched.sort(key=lambda item: (item[0], str(item[1])))
+    limit = max(1, int(max_items or 16))
+    return [item[1] for item in matched[-limit:]]
+
+
+def latest_local_imagegen_mtime(meta: dict[str, Any], *, now_ts: float = 0.0) -> float:
+    latest = 0.0
+    for path in candidate_local_imagegen_files(meta, now_ts=now_ts, max_items=32):
+        try:
+            latest = max(latest, float(path.stat().st_mtime))
+        except Exception:
+            continue
+    return latest
+
+
+def _candidate_generated_media_files(session_id: str, meta: dict[str, Any]) -> list[tuple[Path, str]]:
+    candidates: list[tuple[Path, str]] = []
+    candidates.extend((path, _CODEX_GENERATED_MEDIA_SOURCE) for path in _candidate_generated_image_files(session_id, meta))
+    candidates.extend((path, _LOCAL_IMAGEGEN_FALLBACK_SOURCE) for path in candidate_local_imagegen_files(meta))
+    deduped: list[tuple[Path, str]] = []
+    seen: set[str] = set()
+    for path, source in candidates:
+        key = f"{source}:{path}"
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append((path, source))
+    return deduped
+
+
+def refresh_generated_media_status(
+    meta: dict[str, Any],
+    *,
+    log_path: Path | None = None,
+    extra_texts: list[Any] | tuple[Any, ...] | None = None,
+) -> bool:
+    row = meta if isinstance(meta, dict) else {}
+    if str(row.get("cliType") or row.get("cli_type") or "").strip().lower() != "codex":
+        return False
+    generated = _generated_media_attachments(row)
+    generated_count = 0
+    try:
+        generated_count = max(0, int(row.get("generated_media_count") or 0))
+    except Exception:
+        generated_count = 0
+    status = str(row.get("status") or "").strip().lower()
+    candidate = run_looks_like_generated_media(row, log_path, extra_texts=extra_texts)
+    next_status = ""
+    if generated or str(row.get("generated_media_summary") or "").strip() or generated_count > 0:
+        next_status = "generated"
+    elif candidate and status in {"queued", "retry_waiting", "running"}:
+        next_status = "generating"
+    elif candidate and status in {"done", "error", "interrupted"}:
+        next_status = "failed"
+    if not next_status:
+        return False
+    if str(row.get("generated_media_status") or "").strip() == next_status:
+        return False
+    row["generated_media_status"] = next_status
+    return True
+
+
 def reconcile_generated_media_for_run(store: Any, run_id: str, meta: dict[str, Any], *, log_path: Path | None = None) -> bool:
     row = meta if isinstance(meta, dict) else {}
     rid = str(run_id or row.get("id") or "").strip()
@@ -308,9 +515,9 @@ def reconcile_generated_media_for_run(store: Any, run_id: str, meta: dict[str, A
     attachments = _normalize_run_attachments(row.get("attachments"))
     changed = False
 
-    if not _generated_image_attachments({"attachments": attachments}) and _run_looks_like_generated_image(row, actual_log_path):
+    if _run_looks_like_generated_image(row, actual_log_path):
         session_id = str(row.get("sessionId") or "").strip()
-        candidates = _candidate_generated_image_files(session_id, row)
+        candidates = _candidate_generated_media_files(session_id, row)
         if candidates:
             attach_dir = store.runs_dir / rid / "attachments"
             try:
@@ -326,7 +533,7 @@ def reconcile_generated_media_for_run(store: Any, run_id: str, meta: dict[str, A
                 for att in attachments
                 if isinstance(att, dict)
             }
-            for src in candidates:
+            for src, generated_by in candidates:
                 if attach_dir is None:
                     break
                 base_name = src.name
@@ -342,24 +549,29 @@ def reconcile_generated_media_for_run(store: Any, run_id: str, meta: dict[str, A
                         shutil.copy2(src, target)
                     except Exception:
                         continue
-                key = (_CODEX_GENERATED_MEDIA_SOURCE, target.name, str(target))
+                key = (generated_by, target.name, str(target))
                 if key in existing_keys:
                     continue
                 existing_keys.add(key)
+                item = {
+                    "filename": target.name,
+                    "originalName": src.name,
+                    "url": f"/.runs/{rid}/attachments/{target.name}",
+                    "path": str(target),
+                    "source": "generated",
+                    "generatedBy": generated_by,
+                    "attachment_role": "assistant",
+                }
+                content_type = _attachment_content_type(target)
+                if content_type:
+                    item["contentType"] = content_type
                 attachments.append(
-                    {
-                        "filename": target.name,
-                        "originalName": src.name,
-                        "url": f"/.runs/{rid}/attachments/{target.name}",
-                        "path": str(target),
-                        "source": "generated",
-                        "generatedBy": _CODEX_GENERATED_MEDIA_SOURCE,
-                        "attachment_role": "assistant",
-                    }
+                    item
                 )
                 changed = True
 
     generated = [att for att in attachments if _is_generated_image_attachment(att)]
+    generated_media = [att for att in attachments if _is_generated_media_attachment(att)]
     summary = synthesize_generated_media_summary(
         {
             "attachments": attachments,
@@ -379,6 +591,15 @@ def reconcile_generated_media_for_run(store: Any, run_id: str, meta: dict[str, A
         if int(row.get("generated_media_count") or 0) != len(generated):
             row["generated_media_count"] = len(generated)
             changed = True
+    if generated_media and not generated:
+        if str(row.get("generated_media_kind") or "").strip() != "artifact":
+            row["generated_media_kind"] = "artifact"
+            changed = True
+        if int(row.get("generated_media_count") or 0) != len(generated_media):
+            row["generated_media_count"] = len(generated_media)
+            changed = True
+    if refresh_generated_media_status(row, log_path=actual_log_path):
+        changed = True
     return changed
 
 
@@ -530,7 +751,7 @@ def _clean_business_path(raw: Any) -> str:
         return ""
     p = p[: m.end()]
     low = p.lower()
-    if low.endswith("/skill.md") or ("/.codex/" in low and "/skills/" in low):
+    if low.endswith("/skill.md") or "/.codex/" in low:
         return ""
     if not any(seg in p for seg in _BUSINESS_PATH_SEGMENTS):
         return ""

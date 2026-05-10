@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+from pathlib import Path
 from typing import Any
 
 from task_dashboard.helpers import parse_iso_ts, safe_text
@@ -26,6 +28,21 @@ _HEALTH_OUTCOME_STATES = {
     "failed_business",
     "recovered_notice",
 }
+_MEDIA_FILE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".avif", ".html", ".htm"}
+_MEDIA_SIGNAL_NEEDLES = (
+    "image gen",
+    "imagegen",
+    "image_gen",
+    "generated_images",
+    "output/imagegen",
+    "codex_imagegen",
+)
+_OUTPUT_IMAGEGEN_ARTIFACT_RE = re.compile(
+    r"output/imagegen/[^\s)>\]]+\.(?:png|jpg|jpeg|webp|gif|avif|html)\b",
+    re.IGNORECASE,
+)
+_WORKING_STATUSES = {"queued", "running", "retry_waiting", "dispatching", "collecting"}
+_INTERRUPTED_STATUSES = {"interrupted", "cancelled", "canceled"}
 
 
 def _normalize_text(value: Any, max_len: int = 300) -> str:
@@ -42,6 +59,165 @@ def _latest_process_row_preview(process_rows: Any, max_len: int = 300) -> str:
         if text:
             return text
     return ""
+
+
+def _iter_text_values(value: Any) -> list[str]:
+    rows: list[str] = []
+    if value is None:
+        return rows
+    if isinstance(value, str):
+        text = value.strip()
+        if text:
+            rows.append(text)
+        return rows
+    if isinstance(value, dict):
+        for key in ("text", "message", "summary", "preview", "output", "path"):
+            text = str(value.get(key) or "").strip()
+            if text:
+                rows.append(text)
+        return rows
+    if isinstance(value, list):
+        for item in value:
+            rows.extend(_iter_text_values(item))
+    return rows
+
+
+def _attachment_ext(att: dict[str, Any]) -> str:
+    name = str(att.get("filename") or att.get("originalName") or "").strip()
+    if not name:
+        name = str(att.get("url") or att.get("path") or "").split("?", 1)[0].rsplit("/", 1)[-1]
+    return str(Path(name).suffix or "").strip().lower()
+
+
+def _is_generated_media_attachment(att: Any) -> bool:
+    if not isinstance(att, dict):
+        return False
+    if _attachment_ext(att) not in _MEDIA_FILE_EXTS:
+        return False
+    generated_by = str(att.get("generatedBy") or att.get("generated_by") or "").strip().lower()
+    source = str(att.get("source") or "").strip().lower()
+    role = str(att.get("attachment_role") or att.get("attachmentRole") or "").strip().lower()
+    return generated_by == "codex_imagegen" or source == "generated" or role == "assistant"
+
+
+def _generated_media_attachment_count(meta: dict[str, Any]) -> int:
+    attachments = meta.get("attachments") if isinstance(meta.get("attachments"), list) else []
+    return sum(1 for att in attachments if _is_generated_media_attachment(att))
+
+
+def _generated_media_count(meta: dict[str, Any]) -> int:
+    try:
+        return max(0, int(meta.get("generated_media_count") or 0))
+    except Exception:
+        return 0
+
+
+def _media_signal_evidence(meta: dict[str, Any]) -> list[str]:
+    evidence: list[str] = []
+    if _generated_media_count(meta) > 0 or str(meta.get("generated_media_summary") or "").strip():
+        evidence.append("generated_media_metadata")
+    if _generated_media_attachment_count(meta) > 0:
+        evidence.append("generated_attachment")
+
+    skills = meta.get("skills_used")
+    if isinstance(skills, list):
+        normalized_skills = {str(item or "").strip().lower() for item in skills}
+        if normalized_skills.intersection({"imagegen", "image_gen"}):
+            evidence.append("imagegen_skill")
+
+    text_sources: list[str] = []
+    for key in (
+        "lastPreview",
+        "partialPreview",
+        "messagePreview",
+        "logPreview",
+        "error",
+    ):
+        text_sources.extend(_iter_text_values(meta.get(key)))
+    text_sources.extend(_iter_text_values(meta.get("processRows") or meta.get("process_rows")))
+    haystack = "\n".join(text_sources).lower()
+    output_fallback_matched = bool(_OUTPUT_IMAGEGEN_ARTIFACT_RE.search(haystack))
+    for needle in _MEDIA_SIGNAL_NEEDLES:
+        if needle in haystack:
+            evidence.append(
+                "output_imagegen_fallback"
+                if needle == "output/imagegen"
+                else ("generated_images_log" if needle == "generated_images" else "imagegen_text")
+            )
+    if "output_imagegen_fallback" in evidence and not output_fallback_matched:
+        evidence = [item for item in evidence if item != "output_imagegen_fallback"]
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in evidence:
+        if item in seen:
+            continue
+        seen.add(item)
+        out.append(item)
+    return out[:8]
+
+
+def classify_media_run_monitoring(meta: dict[str, Any]) -> dict[str, Any]:
+    row = meta if isinstance(meta, dict) else {}
+    status = str(row.get("status") or row.get("display_state") or "").strip().lower()
+    evidence = _media_signal_evidence(row)
+    status_text_only_allowed = status in _WORKING_STATUSES or status in _INTERRUPTED_STATUSES or status == "error"
+    strong_evidence = [item for item in evidence if item != "imagegen_text"]
+    candidate = bool(strong_evidence or (status_text_only_allowed and evidence))
+    if not candidate:
+        evidence = []
+    generated_attachment_count = _generated_media_attachment_count(row)
+    generated_count = _generated_media_count(row)
+    has_summary = bool(str(row.get("generated_media_summary") or "").strip())
+    has_result_attachment = generated_attachment_count > 0
+    has_result_metadata = generated_count > 0 or has_summary
+    has_result = has_result_attachment or has_result_metadata
+
+    monitor_status = ""
+    monitor_reason = ""
+    pending = False
+    exempt_reason = ""
+    if candidate:
+        if has_result_attachment:
+            monitor_status = "generated_media_ready"
+            monitor_reason = "generated_attachment_present"
+            exempt_reason = "generated_media_result_present"
+        elif has_result_metadata:
+            monitor_status = "generated_media_metadata_pending_attachment"
+            monitor_reason = "generated_media_metadata_without_attachment"
+            pending = True
+            exempt_reason = "generated_media_metadata_present"
+        elif status in _WORKING_STATUSES:
+            monitor_status = "media_result_pending"
+            monitor_reason = "working_media_generation"
+            pending = True
+            exempt_reason = "media_generation_in_progress"
+        elif status in _INTERRUPTED_STATUSES:
+            monitor_status = "media_generation_interrupted"
+            monitor_reason = "terminal_interrupted_without_media_result"
+        elif status == "error":
+            monitor_status = "media_generation_failed"
+            monitor_reason = "terminal_error_without_media_result"
+        elif status == "done":
+            monitor_status = "media_result_missing"
+            monitor_reason = "done_without_media_result"
+            pending = True
+        else:
+            monitor_status = "media_result_pending"
+            monitor_reason = "media_signal_without_terminal_result"
+            pending = True
+            exempt_reason = "media_generation_signal_present"
+
+    return {
+        "media_run_candidate": bool(candidate),
+        "media_result_pending": bool(pending),
+        "media_monitor_status": monitor_status,
+        "media_monitor_reason": monitor_reason,
+        "media_monitor_evidence": evidence,
+        "media_generated_attachment_count": int(generated_attachment_count),
+        "media_false_stop_exempt": bool(exempt_reason),
+        "media_false_stop_exempt_reason": exempt_reason,
+        "media_terminal_result_present": bool(has_result),
+    }
 
 
 def _run_preview_parts(meta: dict[str, Any]) -> dict[str, str]:

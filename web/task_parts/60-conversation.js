@@ -350,7 +350,7 @@
         const runId = String(n.getAttribute("data-run-id") || "").trim();
         if (!runId) continue;
         const top = Number(n.scrollTop || 0);
-        if (top > 0) PCONV.debugLogScrollTop[runId] = top;
+        PCONV.debugLogScrollTop[runId] = Number.isFinite(top) && top >= 0 ? top : 0;
       }
     }
 
@@ -1889,6 +1889,9 @@
       if (mode === "markdown" && typeof markdownToHtml === "function") {
         body.classList.add("is-markdown");
         body.innerHTML = markdownToHtml(String(item.content || ""));
+        if (typeof enhanceMarkdownTypedBlocks === "function") {
+          enhanceMarkdownTypedBlocks(body);
+        }
         if (typeof enhanceMessageInteractiveObjects === "function") {
           enhanceMessageInteractiveObjects(body, { force: true });
         }
@@ -4036,7 +4039,8 @@
       renderConversationFileUi();
       markConversationTimelineRenderSignature(timeline, timelineRenderSignature);
 
-      if (forceScroll || wasNearBottom) {
+      const debugLogInteracting = Number(PCONV.debugLogUserInteractingUntil || 0) > Date.now();
+      if ((forceScroll || wasNearBottom) && !debugLogInteracting) {
         maybeStickConversationBottom(true);
       } else {
         restoreConversationTimelineScroll(timeline, scrollAnchor);
@@ -4206,6 +4210,8 @@
         PCONV.detailMap = Object.create(null);
         PCONV.debugExpanded = new Set();
         PCONV.debugLogScrollTop = Object.create(null);
+        PCONV.debugLogVisibleLines = Object.create(null);
+        PCONV.debugLogUserInteractingUntil = 0;
         PCONV.bubbleExpanded = new Set();
         PCONV.bubblePendingExpand = new Set();
         PCONV.processUi = Object.create(null);
@@ -4278,7 +4284,8 @@
       }
     }
 
-    async function refreshConversationPanel() {
+    async function refreshConversationPanel(opts = {}) {
+      const refreshOpts = (opts && typeof opts === "object") ? opts : {};
       if (typeof isTaskShareModeActive === "function" && isTaskShareModeActive()) {
         await refreshTaskShareModeConversationPanel();
         return;
@@ -4295,6 +4302,8 @@
         PCONV.runsBySession = Object.create(null);
         PCONV.sessionTimelineMap = Object.create(null);
         PCONV.debugLogScrollTop = Object.create(null);
+        PCONV.debugLogVisibleLines = Object.create(null);
+        PCONV.debugLogUserInteractingUntil = 0;
         PCONV.bubbleExpanded = new Set();
         PCONV.bubblePendingExpand = new Set();
         PCONV.processUi = Object.create(null);
@@ -4335,6 +4344,8 @@
         PCONV.detailMap = Object.create(null);
         PCONV.debugExpanded = new Set();
         PCONV.debugLogScrollTop = Object.create(null);
+        PCONV.debugLogVisibleLines = Object.create(null);
+        PCONV.debugLogUserInteractingUntil = 0;
         PCONV.bubbleExpanded = new Set();
         PCONV.bubblePendingExpand = new Set();
         PCONV.processUi = Object.create(null);
@@ -4365,7 +4376,10 @@
       PCONV.busy = true;
       try {
         // 先加载服务端会话，再与本地绑定会话合并，避免“绑定成功但列表不可见”。
-        await loadChannelSessions(projectId, null);
+        await loadChannelSessions(projectId, null, {
+          source: String(refreshOpts.source || "").trim(),
+          payloadMode: "summary",
+        });
         const serverSessions = Array.isArray(PCONV.sessions) ? PCONV.sessions : [];
         const localSessions = configuredProjectConversations(projectId);
         let baseSessions = mergeConversationSessions(localSessions, serverSessions);
@@ -4497,7 +4511,10 @@
             || String(selectedRuntimeState.queued_run_id || "").trim()
           )
         );
-        const nextPollMs = selectedSessionHasRuntimeWork ? 1200 : conversationPollDelay(hasRuntimeWorking);
+        const selectedFastPollAllowed = typeof shouldUseConversationSelectedRuntimeFastPoll === "function"
+          ? shouldUseConversationSelectedRuntimeFastPoll(selectedSessionHasRuntimeWork)
+          : selectedSessionHasRuntimeWork;
+        const nextPollMs = selectedFastPollAllowed ? 1200 : conversationPollDelay(projectId, hasRuntimeWorking);
         scheduleConversationPoll(nextPollMs);
       } catch (err) {
         console.error("refreshConversationPanel error:", err);

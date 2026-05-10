@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from pathlib import Path
 from typing import Any, Optional
@@ -24,6 +25,35 @@ from . import register_adapter
 class CodexAdapter(CLIAdapter):
     """Adapter for Codex CLI (codex exec)."""
 
+    _DEFAULT_HTTP_PROVIDER_ID = "openai_ccb_http"
+    _DEFAULT_HTTP_BASE_URL = "https://chatgpt.com/backend-api/codex"
+
+    @staticmethod
+    def _env_bool(name: str, default: bool) -> bool:
+        raw = str(os.environ.get(name) or "").strip().lower()
+        if not raw:
+            return default
+        if raw in {"1", "true", "yes", "y", "on"}:
+            return True
+        if raw in {"0", "false", "no", "n", "off"}:
+            return False
+        return default
+
+    @staticmethod
+    def _env_int(name: str, default: int, min_value: int, max_value: int) -> int:
+        raw = str(os.environ.get(name) or "").strip()
+        if raw:
+            try:
+                value = int(raw)
+                return max(min_value, min(max_value, value))
+            except Exception:
+                pass
+        return default
+
+    @staticmethod
+    def _toml_string(value: str) -> str:
+        return json.dumps(str(value or ""), ensure_ascii=False)
+
     @staticmethod
     def _normalize_cli_reasoning_effort(reasoning_effort: str) -> str:
         effort = str(reasoning_effort or "").strip().lower().replace("-", "_").replace(" ", "_")
@@ -34,6 +64,77 @@ class CodexAdapter(CLIAdapter):
     @classmethod
     def _build_codex_invocation_prefix(cls) -> list[str]:
         return [resolve_cli_executable("codex")]
+
+    @classmethod
+    def _ccb_runtime_config_args(cls) -> list[str]:
+        """
+        Keep CCB's background Codex turns lean and predictable.
+
+        Interactive Codex config can enable apps/connectors and WebSocket
+        streaming. CCB does not need app preloading, and run-level recovery is
+        already visible in the dashboard, so the child process defaults to an
+        HTTP-only provider to avoid hidden startup retry loops.
+        """
+        args: list[str] = []
+
+        if cls._env_bool("TASK_DASHBOARD_CODEX_DISABLE_APPS", True):
+            args.extend(["-c", "features.apps=false"])
+
+        if not cls._env_bool("TASK_DASHBOARD_CODEX_FORCE_HTTP", True):
+            return args
+
+        provider_id = str(
+            os.environ.get("TASK_DASHBOARD_CODEX_HTTP_PROVIDER_ID")
+            or cls._DEFAULT_HTTP_PROVIDER_ID
+        ).strip()
+        if not re.fullmatch(r"[A-Za-z0-9_.-]+", provider_id):
+            provider_id = cls._DEFAULT_HTTP_PROVIDER_ID
+
+        base_url = str(
+            os.environ.get("TASK_DASHBOARD_CODEX_HTTP_BASE_URL")
+            or cls._DEFAULT_HTTP_BASE_URL
+        ).strip().rstrip("/")
+        if not base_url:
+            base_url = cls._DEFAULT_HTTP_BASE_URL
+
+        stream_max_retries = cls._env_int(
+            "TASK_DASHBOARD_CODEX_STREAM_MAX_RETRIES",
+            default=0,
+            min_value=0,
+            max_value=5,
+        )
+        request_max_retries = cls._env_int(
+            "TASK_DASHBOARD_CODEX_REQUEST_MAX_RETRIES",
+            default=1,
+            min_value=0,
+            max_value=5,
+        )
+
+        args.extend(
+            [
+                "-c",
+                f"model_provider={cls._toml_string(provider_id)}",
+                "-c",
+                f"model_providers.{provider_id}.name={cls._toml_string('OpenAI CCB HTTP')}",
+                "-c",
+                f"model_providers.{provider_id}.base_url={cls._toml_string(base_url)}",
+                "-c",
+                f"model_providers.{provider_id}.wire_api={cls._toml_string('responses')}",
+                "-c",
+                f"model_providers.{provider_id}.requires_openai_auth=true",
+                "-c",
+                f"model_providers.{provider_id}.supports_websockets=false",
+                "-c",
+                f"model_providers.{provider_id}.stream_max_retries={stream_max_retries}",
+                "-c",
+                f"model_providers.{provider_id}.request_max_retries={request_max_retries}",
+                "-c",
+                "features.responses_websockets=false",
+                "-c",
+                "features.responses_websockets_v2=false",
+            ]
+        )
+        return args
 
     @classmethod
     def info(cls) -> CLIInfo:
@@ -125,6 +226,7 @@ class CodexAdapter(CLIAdapter):
         cmd = cls._build_codex_invocation_prefix() + ["exec"]
         if profile_label:
             cmd.extend(["-p", profile_label])
+        cmd.extend(cls._ccb_runtime_config_args())
         if model:
             cmd.extend(["-m", model])
         effort = cls._normalize_cli_reasoning_effort(reasoning_effort)
@@ -158,6 +260,7 @@ class CodexAdapter(CLIAdapter):
         Command: codex exec --skip-git-repo-check [--sandbox <mode>] -o <output_path> "<seed_prompt>"
         """
         cmd = cls._build_codex_invocation_prefix() + ["exec"]
+        cmd.extend(cls._ccb_runtime_config_args())
         if model:
             cmd.extend(["-m", model])
         effort = cls._normalize_cli_reasoning_effort(reasoning_effort)

@@ -111,6 +111,7 @@ class ConversationPollingGovernorUiLogicTests(unittest.TestCase):
             eval(extractFunction("web/task_parts/74-session-bootstrap-and-sessions.js", "ensureConversationSessionDirectoryStateMaps"));
             eval(extractFunction("web/task_parts/74-session-bootstrap-and-sessions.js", "markConversationSessionDirectoryMeta"));
             eval(extractFunction("web/task_parts/74-session-bootstrap-and-sessions.js", "normalizeConversationPollingNumber"));
+            eval(extractFunction("web/task_parts/74-session-bootstrap-and-sessions.js", "defaultConversationSessionsPollingHints"));
             eval(extractFunction("web/task_parts/74-session-bootstrap-and-sessions.js", "normalizeConversationSessionsPollingHints"));
             eval(extractFunction("web/task_parts/74-session-bootstrap-and-sessions.js", "updateConversationProjectPollingMeta"));
             eval(extractFunction("web/task_parts/74-session-bootstrap-and-sessions.js", "conversationProjectPollingHints"));
@@ -119,6 +120,7 @@ class ConversationPollingGovernorUiLogicTests(unittest.TestCase):
             eval(extractFunction("web/task_parts/75-conversation-composer.js", "ensureConversationPollingGovernanceStateMaps"));
             eval(extractFunction("web/task_parts/75-conversation-composer.js", "getConversationPollingPolicy"));
             eval(extractFunction("web/task_parts/75-conversation-composer.js", "conversationPollDelay"));
+            eval(extractFunction("web/task_parts/75-conversation-composer.js", "shouldUseConversationSelectedRuntimeFastPoll"));
 
             updateConversationProjectPollingMeta("task_dashboard", {
               perf_governance: { enabled: true },
@@ -154,7 +156,10 @@ class ConversationPollingGovernorUiLogicTests(unittest.TestCase):
 
             document.hidden = true;
             assert.equal(conversationPollDelay("task_dashboard", false), 0);
+            assert.equal(shouldUseConversationSelectedRuntimeFastPoll(true), false);
             document.hidden = false;
+            assert.equal(shouldUseConversationSelectedRuntimeFastPoll(true), true);
+            assert.equal(shouldUseConversationSelectedRuntimeFastPoll(false), false);
 
             updateConversationProjectPollingMeta("task_dashboard", {
               perf_governance: { enabled: true },
@@ -167,6 +172,11 @@ class ConversationPollingGovernorUiLogicTests(unittest.TestCase):
               },
             });
             assert.equal(shouldUseSessionDirectoryLeader("task_dashboard", "", { source: "poll" }), false);
+
+            const sessionsSource = fs.readFileSync(path.join(repoRoot, "web/task_parts/74-session-bootstrap-and-sessions.js"), "utf8");
+            assert.equal(sessionsSource.includes('qs.set("payloadMode", payloadMode);'), true);
+            assert.equal(sessionsSource.includes("readSessionDirectorySnapshot(pid, channelName"), true);
+            assert.equal(sessionsSource.includes("publishSessionDirectorySnapshot(pid, channelName"), true);
             """
         )
         proc = subprocess.run(

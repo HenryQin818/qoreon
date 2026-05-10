@@ -100,6 +100,56 @@ class SessionRoutesCacheTests(unittest.TestCase):
         self.assertEqual(out1["sessions"][0]["id"], "session-a")
         self.assertEqual(out2["sessions"][0]["id"], "session-b")
 
+    def test_list_sessions_response_summary_mode_uses_light_rows(self) -> None:
+        class _SessionStore:
+            def list_sessions(self, *_args, **_kwargs):
+                return [
+                    {
+                        "id": "session-a",
+                        "project_id": "task_dashboard",
+                        "channel_name": "子级02-CCB运行时（server-并发-安全-启动）",
+                        "alias": "后端-任务业务",
+                        "task_tracking": {"current_task_ref": {"task_id": "heavy-task"}},
+                    }
+                ]
+
+        with mock.patch.object(
+            session_routes,
+            "build_sessions_list_payload",
+            side_effect=AssertionError("summary mode should not use the full sessions builder"),
+        ):
+            code, out = session_routes.list_sessions_response(
+                query_string="project_id=task_dashboard&payloadMode=summary",
+                session_store=_SessionStore(),
+                store=object(),
+                environment_name="stable",
+                worktree_root="/tmp/task-dashboard",
+                apply_effective_primary_flags=lambda _store, _pid, rows: rows,
+                decorate_sessions_display_fields=lambda rows: rows,
+                apply_session_context_rows=lambda rows, **_kwargs: rows,
+                apply_session_work_context=lambda row, **_kwargs: row,
+                attach_runtime_state_to_sessions=lambda _store, rows, **_kwargs: [
+                    {
+                        **row,
+                        "runtime_state": {"display_state": "idle"},
+                        "session_display_state": "idle",
+                    }
+                    for row in rows
+                ],
+                heartbeat_runtime=None,
+                load_session_heartbeat_config=lambda _row: {},
+                heartbeat_summary_payload=lambda _row: {},
+            )
+
+        self.assertEqual(code, 200)
+        self.assertEqual(out.get("payloadMode"), "summary")
+        self.assertEqual((out.get("sessions_read_model") or {}).get("payload_mode"), "summary")
+        row = (out.get("sessions") or [])[0]
+        self.assertEqual(row.get("id"), "session-a")
+        self.assertEqual(row.get("runtime_state"), {"display_state": "idle"})
+        self.assertEqual(row.get("agent_display_name"), "后端-任务业务")
+        self.assertNotIn("task_tracking", row)
+
     def test_list_channel_sessions_response_reuses_cached_payload(self) -> None:
         payload = {
             "project_id": "task_dashboard",

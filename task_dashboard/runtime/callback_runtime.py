@@ -1533,7 +1533,12 @@ def _callback_summary_timer_key(key: str) -> str:
     return str(key or "").strip()
 
 
-def _inspect_callback_task_activity(task_path: str) -> dict[str, Any]:
+def _inspect_callback_task_activity(
+    task_path: str,
+    *,
+    project_id: str = "",
+    task_id: str = "",
+) -> dict[str, Any]:
     text = str(task_path or "").strip()
     out: dict[str, Any] = {
         "task_path": text,
@@ -1549,6 +1554,34 @@ def _inspect_callback_task_activity(task_path: str) -> dict[str, Any]:
     path = Path(text)
     root = __getattr__("_repo_root")()
     candidate = path if path.is_absolute() else (root / path)
+
+    resolved_task_path = ""
+    resolved_task_id = ""
+    if project_id or task_id:
+        try:
+            from task_dashboard.task_identity import resolve_task_reference
+
+            resolved = resolve_task_reference(
+                repo_root=root,
+                runtime_base_dir=root,
+                project_id=str(project_id or "").strip(),
+                task_path=text,
+                task_id=str(task_id or "").strip(),
+            )
+            resolved_task_path = str(resolved.get("task_path") or "").strip()
+            resolved_task_id = str(resolved.get("task_id") or "").strip()
+        except Exception:
+            resolved_task_path = ""
+            resolved_task_id = ""
+    if resolved_task_id:
+        out["task_id"] = resolved_task_id
+    if resolved_task_path and resolved_task_path != norm:
+        resolved_candidate = root / resolved_task_path
+        if resolved_candidate.exists():
+            out["task_path"] = resolved_task_path
+            candidate = resolved_candidate
+            norm = resolved_task_path.replace("\\", "/")
+            filename = Path(norm).name
 
     def _mark_archived(reason: str) -> dict[str, Any]:
         out["state"] = "archived"
@@ -1587,6 +1620,21 @@ def _inspect_callback_task_activity(task_path: str) -> dict[str, Any]:
     out["state"] = "unknown"
     out["reason"] = "path_missing_unclassified"
     return out
+
+
+def _invalid_terminal_preview_reason(source_meta: dict[str, Any], event_type: str, last_preview: str) -> str:
+    if str(event_type or "").strip().lower() != "done":
+        return ""
+    preview = str(last_preview or "")
+    if not preview:
+        return ""
+    run_id = str(source_meta.get("id") or "").strip()
+    if not run_id or run_id not in preview:
+        return ""
+    lowered = preview.lower()
+    if "running" in lowered or "仍在执行" in preview or "仍在运行" in preview:
+        return "self_referential_running"
+    return ""
 
 
 def _build_terminal_receipt_summary(
@@ -1650,14 +1698,21 @@ def _build_terminal_receipt_summary(
     progress = progress_map.get(event_type, "系统回执已生成。")
     error = str(source_meta.get("error") or "").strip()
     last_preview = str(source_meta.get("lastPreview") or "").strip()
+    need_peer = need_peer_map.get(event_type, "请主负责确认下一步动作。")
+    expected_result = expected_map.get(event_type, "推进链路保持可追溯。")
+    need_confirm = need_confirm_map.get(event_type, "无")
+    invalid_preview_reason = _invalid_terminal_preview_reason(source_meta, event_type, last_preview)
+    if invalid_preview_reason:
+        current_conclusion = "执行结果无效，需最小复验"
+        progress = "来源任务终态预览仍引用本 run 执行中状态，已降级为无效终态结果。"
+        need_peer = "请按当前主线重发最小复验，提供非自引用的最终结论。"
+        expected_result = "形成可验收的最小复验回执后再进入收口。"
+        need_confirm = "是否重发最小复验"
+        last_preview = ""
     if event_type == "error" and error:
         progress = f"{progress}（错误摘要：{_safe_text(error, 120)}）"
     if event_type == "done" and last_preview:
         progress = f"{progress}（结果摘要：{_safe_text(last_preview, 120)}）"
-
-    need_peer = need_peer_map.get(event_type, "请主负责确认下一步动作。")
-    expected_result = expected_map.get(event_type, "推进链路保持可追溯。")
-    need_confirm = need_confirm_map.get(event_type, "无")
     if is_late:
         need_peer = "关联任务已归档，本条回执已降级为留痕提示；无需重复验收确认。"
         expected_result = "保持归档状态并补齐必要留痕。"
@@ -1701,6 +1756,7 @@ def _build_terminal_receipt_summary(
             "event_reason": str(event_reason or "").strip().lower(),
             "source_run_id": source_run_id,
             "trigger_type": trigger_type,
+            "invalid_terminal_preview_reason": invalid_preview_reason,
             "route_resolution": __getattr__("_compact_route_resolution_v1")(route_resolution),
         },
     }
@@ -1808,6 +1864,8 @@ def _build_terminal_callback_message(
     ).strip().lower()
     error = str(source_meta.get("error") or "").strip()
     last_preview = str(source_meta.get("lastPreview") or "").strip()
+    if _invalid_terminal_preview_reason(source_meta, event_type, last_preview):
+        last_preview = ""
     feedback_path = str(source_meta.get("feedback_file_path") or "").strip()
     event_label = {"done": "完成", "error": "异常", "interrupted": "中断"}.get(event_type, event_type or "事件")
     lines = [_render_receipt_summary_message(summary), "", "技术明细（折叠）："]

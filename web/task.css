@@ -3938,13 +3938,13 @@
       background: rgba(255,255,255,0.62);
       border-radius: 12px;
       padding: 8px;
-      max-height: 260px;
-      overflow: auto;
+      max-height: none;
+      overflow: visible;
       font-family: var(--mono);
       font-size: 11px;
       line-height: 1.45;
-      white-space: pre-wrap;
-      overflow-wrap: anywhere;
+      white-space: normal;
+      overflow-wrap: normal;
     }
     .conv-historybar {
       align-self: center;
@@ -4115,7 +4115,7 @@
     }
     .msgobj-viewer-mask.show { display: flex; }
     .msgobj-viewer-dialog {
-      width: min(980px, 94vw);
+      width: min(1440px, calc(100vw - 40px));
       max-height: 88vh;
       display: grid;
       grid-template-rows: auto minmax(0, 1fr);

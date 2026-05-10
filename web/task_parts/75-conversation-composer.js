@@ -3544,9 +3544,22 @@
 
     function scheduleConversationPoll(ms = 5000) {
       stopConversationPoll();
-      PCONV.pollTimer = setTimeout(() => {
-        refreshConversationPanel();
-      }, ms);
+      const projectId = String(STATE.project || "").trim();
+      const policy = getConversationPollingPolicy(projectId);
+      const callback = () => {
+        refreshConversationPanel({ source: "poll" });
+      };
+      if (typeof scheduleManagedPollTimer === "function") {
+        scheduleManagedPollTimer(PCONV, "pollTimer", ms, callback, {
+          minMs: 1000,
+          hiddenMinMs: policy.enabled ? policy.hidden_poll_interval_ms : 90000,
+          pauseWhenHidden: policy.enabled ? policy.pause_when_hidden : false,
+        });
+        return;
+      }
+      const delay = Math.max(0, Number(ms) || 0);
+      if (!(delay > 0)) return;
+      PCONV.pollTimer = setTimeout(callback, delay);
     }
 
     function ensureConversationPollingGovernanceStateMaps() {
@@ -3600,15 +3613,38 @@
         return 10000;
       }
       if (typeof document !== "undefined" && document.hidden) return 90000;
-      return 45000;
+      return 12000;
+    }
+
+    function ensureConversationResumeRefreshStateMaps() {
+      if (!PCONV.resumeRefreshAtByProject || typeof PCONV.resumeRefreshAtByProject !== "object") {
+        PCONV.resumeRefreshAtByProject = Object.create(null);
+      }
     }
 
     function triggerConversationRefreshOnResume() {
       const projectId = String(STATE.project || "").trim();
       if (!projectId || projectId === "overview") return;
       if (STATE.panelMode !== "conv" && STATE.panelMode !== "channel") return;
+      if (typeof document !== "undefined" && document.hidden) return;
+      if (STATE.panelMode === "channel") {
+        if (typeof refreshCCB === "function" && !CCB.busy) refreshCCB();
+        return;
+      }
+      ensureConversationResumeRefreshStateMaps();
+      const now = Date.now();
+      const debounceMs = 1200;
+      const lastResumeAt = Number(PCONV.resumeRefreshAtByProject[projectId] || 0);
+      if (lastResumeAt > 0 && (now - lastResumeAt) < debounceMs) return;
+      PCONV.resumeRefreshAtByProject[projectId] = now;
       if (PCONV.busy) return;
-      refreshConversationPanel();
+      refreshConversationPanel({ source: "resume", freshnessMs: 0 });
+    }
+
+    function shouldUseConversationSelectedRuntimeFastPoll(selectedSessionHasRuntimeWork) {
+      if (!selectedSessionHasRuntimeWork) return false;
+      if (typeof pollingGovernorPageHidden === "function") return !pollingGovernorPageHidden();
+      return !(typeof document !== "undefined" && document.hidden);
     }
 
     function ensureRunExpanded(runId) {
@@ -3804,16 +3840,17 @@
       }
     }
 
-    async function interruptRunningRun(runMeta) {
+    async function interruptRunningRun(runMeta, opts = {}) {
       const rid = String((runMeta && runMeta.id) || "").trim();
       if (!rid) return;
       if (PCONV.runActionBusy[rid]) return;
+      const actionName = String((opts && opts.actionName) || "执行").trim() || "执行";
       PCONV.runActionBusy[rid] = "interrupt";
       renderConversationDetail();
       try {
-        setHintText("conv", "正在请求打断执行…");
+        setHintText("conv", "正在请求打断" + actionName + "…");
         await callRunAction(rid, "interrupt");
-        setHintText("conv", "已发送打断请求，等待状态回写。");
+        setHintText("conv", "已发送打断" + actionName + "请求，等待状态回写。");
         await refreshConversationPanel();
         scheduleConversationPoll(1200);
       } catch (e) {

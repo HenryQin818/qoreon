@@ -116,10 +116,10 @@ from task_dashboard.runtime.task_assistant_runtime import (
     build_task_assistant_summary,
     delete_task_assistant_response,
     get_task_assistant_response,
+    load_task_assistant_state,
     put_task_assistant_response,
     run_task_assistant_now_response,
 )
-from task_dashboard.runtime.session_task_tracking import build_session_task_tracking
 from task_dashboard.runtime.task_plan_registry import (
     activate_task_plan_response,
     upsert_task_plan_response,
@@ -500,39 +500,29 @@ class RouteDispatcher:
             return payload
         runtime_base_dir = self._task_runtime_base_dir()
         next_rows: list[dict[str, Any]] = []
+        state_cache: dict[str, dict[str, Any]] = {}
+
+        def _configured_task_id_for_session(project_id: str, session_id: str) -> str:
+            pid = str(project_id or "").strip()
+            sid = str(session_id or "").strip()
+            if not pid or not sid:
+                return ""
+            if pid not in state_cache:
+                try:
+                    state_cache[pid] = load_task_assistant_state(runtime_base_dir=runtime_base_dir, project_id=pid)
+                except Exception:
+                    state_cache[pid] = {}
+            items = (state_cache.get(pid) or {}).get("items")
+            if not isinstance(items, dict):
+                return ""
+            for key, value in items.items():
+                item = value if isinstance(value, dict) else {}
+                if str(item.get("target_session_id") or "").strip() == sid:
+                    return str(item.get("task_id") or key or "").strip()
+            return ""
+
         for raw in rows:
             row = dict(raw) if isinstance(raw, dict) else {}
-            tracking = row.get("task_tracking") if isinstance(row.get("task_tracking"), dict) else None
-            if tracking is None:
-                project_id_for_tracking = canonicalize_runtime_project_id(
-                    str(
-                        row.get("project_id")
-                        or row.get("projectId")
-                        or payload.get("project_id")
-                        or payload.get("projectId")
-                        or fallback_project_id
-                        or ""
-                    ).strip()
-                )
-                session_id = str(row.get("id") or row.get("session_id") or "").strip()
-                try:
-                    tracking = build_session_task_tracking(
-                        session=row,
-                        store=self.ctx.store,
-                        project_id=project_id_for_tracking,
-                        session_id=session_id,
-                        runtime_state=row.get("runtime_state") if isinstance(row.get("runtime_state"), dict) else {},
-                    )
-                except Exception:
-                    tracking = None
-            current_task_ref = (tracking.get("current_task_ref") or {}) if isinstance(tracking, dict) else {}
-            if not isinstance(current_task_ref, dict):
-                next_rows.append(row)
-                continue
-            task_id = str(current_task_ref.get("task_id") or "").strip()
-            if not task_id:
-                next_rows.append(row)
-                continue
             project_id = canonicalize_runtime_project_id(
                 str(
                     row.get("project_id")
@@ -543,6 +533,16 @@ class RouteDispatcher:
                     or ""
                 ).strip()
             )
+            tracking = row.get("task_tracking") if isinstance(row.get("task_tracking"), dict) else None
+            current_task_ref = (tracking.get("current_task_ref") or {}) if isinstance(tracking, dict) else {}
+            if not isinstance(current_task_ref, dict):
+                current_task_ref = {}
+            task_id = str(current_task_ref.get("task_id") or "").strip()
+            if not task_id:
+                task_id = _configured_task_id_for_session(project_id, str(row.get("id") or row.get("session_id") or row.get("sessionId") or ""))
+            if not task_id:
+                next_rows.append(row)
+                continue
             if not project_id:
                 next_rows.append(row)
                 continue
@@ -555,6 +555,7 @@ class RouteDispatcher:
             )
             next_tracking = dict(tracking or {})
             next_current = dict(current_task_ref)
+            next_current.setdefault("task_id", task_id)
             next_current["task_assistant"] = summary
             next_tracking["current_task_ref"] = next_current
             row["task_tracking"] = next_tracking
@@ -884,6 +885,7 @@ class RouteDispatcher:
         known_patterns = [
             lambda p: p.startswith("/api/codex/run/"),
             lambda p: p.startswith("/api/projects/") and p.endswith("/runtime-bubbles"),
+            lambda p: p.startswith("/api/projects/") and p.endswith("/automation-status"),
             lambda p: p.startswith("/api/projects/") and "/auto-scheduler" in p,
         ]
 
@@ -1445,6 +1447,10 @@ class RouteDispatcher:
             self._handle_project_assist_request_get(handler, parts[2], parts[4])
             return True
 
+        if len(parts) == 4 and parts[:2] == ["api", "projects"] and parts[3] == "automation-status":
+            self._handle_project_automation_status_get(handler, parts[2], qs)
+            return True
+
         if len(parts) == 4 and parts[:2] == ["api", "projects"] and parts[3] == "auto-scheduler":
             self._handle_project_auto_scheduler_get(handler, parts[2])
             return True
@@ -1641,6 +1647,162 @@ class RouteDispatcher:
             attach_auto_inspection_candidate_preview=self.ctx.attach_auto_inspection_candidate_preview,
         )
         self.ctx.json_response(handler, code, payload)
+
+    def _handle_project_automation_status_get(
+        self,
+        handler: "BaseHTTPRequestHandler",
+        project_id: str,
+        qs: dict[str, list[str]],
+    ) -> None:
+        """Handle GET /api/projects/{project_id}/automation-status."""
+        pid = str(project_id or "").strip()
+        if not pid:
+            self.ctx.json_response(handler, 400, {"error": "missing project_id"})
+            return
+        if not self.ctx.find_project_cfg(pid):
+            self.ctx.json_response(handler, 404, {"error": "project not found"})
+            return
+
+        include_tokens: list[str] = []
+        for key in ("include", "includes"):
+            include_tokens.extend(str(v or "") for v in (qs.get(key) or []))
+        include_tokens.extend("details" for v in (qs.get("details") or []) if self.ctx.coerce_bool(v, False))
+        include_details = any(
+            token.strip().lower() in {"detail", "details", "all", "*"}
+            for raw in include_tokens
+            for token in str(raw or "").replace(";", ",").split(",")
+        )
+
+        status = (
+            self.ctx.project_scheduler_runtime.get_status(pid)
+            if self.ctx.project_scheduler_runtime is not None
+            else self.ctx.build_project_scheduler_status(self.ctx.store, pid)
+        )
+        status = self.ctx.ensure_auto_scheduler_status_shape(status)
+
+        auto_inspection_cfg = self.ctx.load_project_auto_inspection_config(pid)
+        inspection_tasks = self.ctx.normalize_auto_inspection_tasks(
+            auto_inspection_cfg.get("inspection_tasks"),
+            has_explicit_field=True,
+        )
+        heartbeat_cfg = self.ctx.load_project_heartbeat_config(pid)
+        heartbeat_tasks = self.ctx.normalize_heartbeat_tasks(heartbeat_cfg.get("tasks"))
+        heartbeat_payload: dict[str, Any] | None = None
+        if include_details and self.ctx.heartbeat_runtime is not None:
+            try:
+                heartbeat_payload = self.ctx.heartbeat_runtime.list_tasks(pid)
+            except Exception:
+                heartbeat_payload = None
+        if isinstance(heartbeat_payload, dict):
+            heartbeat_tasks = list(heartbeat_payload.get("items") or [])
+
+        active_states = {"queued", "running", "scanning", "collecting", "dispatching", "retry_waiting"}
+
+        def _errors_from(items: Any) -> list[str]:
+            out: list[str] = []
+            for item in (items if isinstance(items, list) else []):
+                if not isinstance(item, dict):
+                    continue
+                for err in item.get("errors") or []:
+                    text = str(err or "").strip()
+                    if text:
+                        out.append(text)
+                last_error = str(item.get("last_error") or "").strip()
+                if last_error:
+                    out.append(last_error)
+            return out
+
+        def _running_count(items: list[dict[str, Any]]) -> int:
+            total = 0
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                state = str(
+                    item.get("state")
+                    or item.get("status")
+                    or item.get("last_status")
+                    or item.get("last_job_status")
+                    or ""
+                ).strip().lower()
+                if bool(item.get("pending_job")) or state in active_states:
+                    total += 1
+            return total
+
+        inspection_errors = list(auto_inspection_cfg.get("errors") or []) + _errors_from(inspection_tasks)
+        heartbeat_errors = list(heartbeat_cfg.get("errors") or []) + _errors_from(heartbeat_tasks)
+        status_errors = [
+            status.get("auto_dispatch_last_error"),
+            status.get("auto_inspection_last_error"),
+            status.get("scheduler_last_error"),
+            status.get("reminder_last_error"),
+        ]
+        first_error = next(
+            (str(err or "").strip() for err in [*status_errors, *inspection_errors, *heartbeat_errors] if str(err or "").strip()),
+            "",
+        )
+
+        status_payload = dict(status or {})
+        if not include_details:
+            for key in (
+                "inspection_tasks",
+                "inspection_records",
+                "reminder_records",
+                "records",
+                "candidate_tasks",
+                "auto_inspection_candidate_preview",
+            ):
+                status_payload.pop(key, None)
+        elif inspection_tasks:
+            status_payload["inspection_tasks"] = inspection_tasks
+            status_payload["active_inspection_task_id"] = str(auto_inspection_cfg.get("active_inspection_task_id") or "")
+
+        heartbeat_enabled = bool(heartbeat_cfg.get("enabled"))
+        heartbeat_count = len(heartbeat_tasks)
+        heartbeat_enabled_count = sum(1 for row in heartbeat_tasks if isinstance(row, dict) and bool(row.get("enabled")))
+        heartbeat_ready_count = sum(1 for row in heartbeat_tasks if isinstance(row, dict) and bool(row.get("enabled")) and bool(row.get("ready")))
+        if isinstance(heartbeat_payload, dict):
+            heartbeat_enabled = bool(heartbeat_payload.get("enabled"))
+            heartbeat_count = int(heartbeat_payload.get("count") or heartbeat_count)
+
+        payload: dict[str, Any] = {
+            "project_id": pid,
+            "include_details": bool(include_details),
+            "updated_at": self.ctx.now_iso(),
+            "status": status_payload,
+            "auto_scheduler": {
+                "enabled": bool(status.get("scheduler_enabled") or status.get("reminder_enabled") or status.get("auto_inspection_enabled")),
+                "state": str(status.get("scheduler_state") or status.get("auto_inspection_state") or "disabled"),
+                "running": str(status.get("scheduler_state") or status.get("auto_inspection_state") or "").strip().lower() in active_states,
+                "last_error": first_error,
+                "last_tick_at": str(status.get("scheduler_last_tick_at") or status.get("auto_inspection_last_at") or ""),
+            },
+            "inspection": {
+                "enabled": bool(auto_inspection_cfg.get("enabled")),
+                "ready": bool(auto_inspection_cfg.get("ready")),
+                "task_count": len(inspection_tasks),
+                "enabled_count": sum(1 for row in inspection_tasks if isinstance(row, dict) and bool(row.get("enabled"))),
+                "running_count": _running_count(inspection_tasks),
+                "active_inspection_task_id": str(auto_inspection_cfg.get("active_inspection_task_id") or ""),
+                "errors": [str(err) for err in inspection_errors if str(err or "").strip()],
+                "last_error": next((str(err) for err in inspection_errors if str(err or "").strip()), ""),
+            },
+            "heartbeat": {
+                "enabled": heartbeat_enabled,
+                "ready": bool((heartbeat_payload or heartbeat_cfg).get("ready")),
+                "scan_interval_seconds": int((heartbeat_payload or heartbeat_cfg).get("scan_interval_seconds") or 30),
+                "task_count": heartbeat_count,
+                "enabled_count": heartbeat_enabled_count,
+                "ready_count": heartbeat_ready_count,
+                "running_count": _running_count(heartbeat_tasks),
+                "errors": [str(err) for err in heartbeat_errors if str(err or "").strip()],
+                "last_error": next((str(err) for err in heartbeat_errors if str(err or "").strip()), ""),
+            },
+            "last_error": first_error,
+        }
+        if include_details:
+            payload["inspection_tasks"] = inspection_tasks
+            payload["heartbeat_tasks"] = heartbeat_tasks
+        self.ctx.json_response(handler, 200, payload)
 
     def _project_config_response_with_share_space(
         self,

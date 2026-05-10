@@ -48,6 +48,142 @@
       };
     }
 
+    function rerenderConversationAssistantFamilyInPlace(row, payload) {
+      if (!row || !row.parentNode) {
+        renderConversationDetail();
+        return;
+      }
+      const nextRow = renderConversationAssistantFamily(payload || {});
+      row.parentNode.replaceChild(nextRow, row);
+      try {
+        refreshConversationFilesFromTimeline(payload && payload.ctx, nextRow.parentNode);
+        renderConversationFileUi();
+      } catch (_) {}
+    }
+
+    function processActionExpandKey(runId, step) {
+      const rid = String(runId || "").trim();
+      const sid = String((step && step.id) || "").trim();
+      return rid + "::" + (sid || "step");
+    }
+
+    function isProcessActionGroupExpanded(runId, step) {
+      if (!PCONV.processActionExpanded || typeof PCONV.processActionExpanded !== "object") {
+        PCONV.processActionExpanded = Object.create(null);
+      }
+      return !!PCONV.processActionExpanded[processActionExpandKey(runId, step)];
+    }
+
+    function toggleProcessActionGroupExpanded(runId, step) {
+      if (!PCONV.processActionExpanded || typeof PCONV.processActionExpanded !== "object") {
+        PCONV.processActionExpanded = Object.create(null);
+      }
+      const key = processActionExpandKey(runId, step);
+      PCONV.processActionExpanded[key] = !PCONV.processActionExpanded[key];
+      return !!PCONV.processActionExpanded[key];
+    }
+
+    function getRunProcessStepGroups(processInfo) {
+      const info = (processInfo && typeof processInfo === "object") ? processInfo : {};
+      if (Array.isArray(info.processStepGroups) && info.processStepGroups.length) {
+        return info.processStepGroups;
+      }
+      const rows = Array.isArray(info.rows)
+        ? info.rows
+        : (Array.isArray(info.items) ? info.items.map((txt) => ({ text: String(txt || ""), at: extractProcessItemTimestamp(txt) })) : []);
+      if (typeof buildRunProcessStepGroups === "function") {
+        const model = buildRunProcessStepGroups(rows);
+        return Array.isArray(model && model.groups) ? model.groups : [];
+      }
+      return rows
+        .map((row, idx) => ({
+          id: "step-" + idx,
+          text: String((row && row.text) || row || "").trim(),
+          at: String((row && row.at) || "").trim(),
+          row,
+          actions: [],
+        }))
+        .filter((step) => step.text);
+    }
+
+    function renderRunProcessStepGroups(runId, processInfo, rerender) {
+      const groups = getRunProcessStepGroups(processInfo);
+      const list = el("div", { class: "process-list process-step-list" });
+      groups.forEach((step, idx) => {
+        const itemTs = String((step && step.at) || (step && step.row && step.row.at) || "").trim();
+        const actions = Array.isArray(step && step.actions) ? step.actions : [];
+        const expanded = actions.length > 0 && isProcessActionGroupExpanded(runId, step);
+        const stepClasses = ["process-step"];
+        stepClasses.push(itemTs ? "has-time" : "no-time");
+        if (actions.length > 0) stepClasses.push("has-actions");
+        if (step && step.synthetic) stepClasses.push("synthetic");
+        const stepNode = el("div", {
+          class: stepClasses.join(" "),
+        });
+        const head = el("div", { class: "process-step-head" });
+        head.appendChild(el("span", { class: "process-idx", text: String(idx + 1) }));
+        const main = el("div", { class: "process-step-main" });
+        main.appendChild(el("div", {
+          class: "process-txt process-step-text",
+          text: String((step && step.text) || ""),
+        }));
+        head.appendChild(main);
+        const meta = (itemTs || actions.length > 0)
+          ? el("div", { class: "process-step-meta" })
+          : null;
+        if (itemTs) {
+          meta.appendChild(el("span", {
+            class: "process-time process-step-time",
+            text: compactDateTime(itemTs),
+            title: zhDateTime(itemTs),
+          }));
+        }
+        if (actions.length > 0) {
+          const toggle = el("button", {
+            class: "process-action-toggle",
+            text: (expanded ? "收起动作 " : "动作 ") + actions.length,
+            title: expanded ? "收起该步骤下的动作明细" : "展开该步骤下的动作明细",
+            "aria-expanded": expanded ? "true" : "false",
+          });
+          toggle.addEventListener("click", () => {
+            toggleProcessActionGroupExpanded(runId, step);
+            if (typeof rerender === "function") rerender();
+            else renderConversationDetail();
+          });
+          meta.appendChild(toggle);
+        }
+        if (meta) head.appendChild(meta);
+        stepNode.appendChild(head);
+        if (actions.length > 0 && expanded) {
+          const actionList = el("div", { class: "process-action-list" });
+          actions.forEach((action) => {
+            const actionTs = String((action && action.at) || "").trim();
+            const actionNode = el("div", { class: "process-action-item" + (actionTs ? "" : " no-time") });
+            actionNode.appendChild(el("span", {
+              class: "process-action-type",
+              text: String((action && action.label) || "动作"),
+              title: String((action && (action.eventType || action.itemType)) || ""),
+            }));
+            actionNode.appendChild(el("span", {
+              class: "process-action-text",
+              text: String((action && action.text) || ""),
+            }));
+            if (actionTs) {
+              actionNode.appendChild(el("span", {
+                class: "process-time process-action-time",
+                text: compactDateTime(actionTs),
+                title: zhDateTime(actionTs),
+              }));
+            }
+            actionList.appendChild(actionNode);
+          });
+          stepNode.appendChild(actionList);
+        }
+        list.appendChild(stepNode);
+      });
+      return list;
+    }
+
     function conversationReceiptProjectionPendingCount(projection) {
       const src = (projection && typeof projection === "object") ? projection : {};
       const pendingActions = Array.isArray(src.pendingActions) ? src.pendingActions : [];
@@ -336,6 +472,20 @@
         PCONV.inlineSnippetExpanded = new Set();
       }
       return PCONV.inlineSnippetExpanded;
+    }
+
+    function conversationRunDetailRefreshPolicy(runStatus, processInfo) {
+      const st = String(runStatus || "").trim().toLowerCase();
+      const isTerminal = !!st && !isRunWorking(st);
+      const reportedCount = Math.max(0, Number((processInfo && processInfo.reportedCount) || 0) || 0);
+      const processCount = Math.max(0, Number((processInfo && processInfo.items && processInfo.items.length) || 0) || 0);
+      const processDetailLagging = reportedCount > processCount;
+      return {
+        terminal: isTerminal,
+        processDetailLagging,
+        force: !isTerminal && processDetailLagging,
+        maxAgeMs: isTerminal ? 0 : 1200,
+      };
     }
 
     function toggleConversationInlineSnippet(expandKey, opts = {}) {
@@ -1981,6 +2131,83 @@
       return 0;
     }
 
+    function conversationGeneratedMediaTextHasSignal(raw) {
+      const text = String(raw || "").trim().toLowerCase();
+      if (!text) return false;
+      return /codex[_-]?imagegen|image\s*gen|imagegen|generated[_\s-]?media|generated[_\s-]?images|output\/imagegen|生成图片|图片生成|生成图|生图/.test(text);
+    }
+
+    function resolveConversationGeneratedMediaUiMeta(payload = {}) {
+      const src = (payload && typeof payload === "object") ? payload : {};
+      const status = String(src.status || "").trim().toLowerCase();
+      const attachments = Array.isArray(src.attachments) ? src.attachments : [];
+      const generatedMediaCount = firstConversationGeneratedMediaCount([
+        src.generatedMediaCount,
+        src.generated_media_count,
+      ]);
+      const generatedMediaSummary = String(firstNonEmptyText([
+        src.generatedMediaSummary,
+        src.generated_media_summary,
+      ]) || "").trim();
+      const generatedMediaKind = String(firstNonEmptyText([
+        src.generatedMediaKind,
+        src.generated_media_kind,
+      ]) || "").trim().toLowerCase();
+      const generatedMediaStatus = String(firstNonEmptyText([
+        src.generatedMediaStatus,
+        src.generated_media_status,
+      ]) || "").trim().toLowerCase();
+      const hasGeneratedMediaAttachment = attachments.some((att) => isConversationAssistantGeneratedMediaAttachment(att));
+      const hasGeneratedImageAttachment = attachments.some((att) => isConversationAssistantGeneratedImageAttachment(att));
+      const processInfo = (src.processInfo && typeof src.processInfo === "object") ? src.processInfo : {};
+      const signalTexts = [];
+      const pushSignalText = (raw) => {
+        const text = String(raw || "").trim();
+        if (text) signalTexts.push(text);
+      };
+      pushSignalText(processInfo.latest);
+      (Array.isArray(processInfo.items) ? processInfo.items : []).forEach(pushSignalText);
+      (Array.isArray(processInfo.rows) ? processInfo.rows : []).forEach((row) => {
+        pushSignalText(row && typeof row === "object" ? row.text : row);
+      });
+      const signalByProcess = signalTexts.some((text) => conversationGeneratedMediaTextHasSignal(text));
+      const signalByMeta = !!(
+        generatedMediaCount > 0
+        || generatedMediaSummary
+        || generatedMediaKind === "image"
+        || generatedMediaStatus
+        || hasGeneratedMediaAttachment
+        || hasGeneratedImageAttachment
+      );
+      const isWorkingMediaState = status === "running" || status === "external_busy";
+      const isFailedMediaState = status === "error" || status === "interrupted";
+      const isGeneratedMediaRun = signalByMeta || ((isWorkingMediaState || isFailedMediaState) && signalByProcess);
+      let phase = "";
+      if (isGeneratedMediaRun) {
+        if (isWorkingMediaState) phase = "generating";
+        else if (status === "interrupted") phase = "interrupted";
+        else if (status === "error" || generatedMediaStatus === "failed") phase = "failed";
+        else if (generatedMediaStatus === "generating") phase = "generating";
+        else if (generatedMediaStatus === "generated") phase = "generated";
+        else if (status === "done" && (signalByMeta || signalByProcess)) phase = "generated";
+      }
+      const stateSubText = phase === "generating"
+        ? "图片生成中，结果通常以附件返回"
+        : (phase === "generated"
+            ? "图片结果已生成，可查看图片结果"
+            : (phase === "interrupted"
+                ? "图片生成已中断，可查看过程并重试"
+                : (phase === "failed"
+                    ? "图片生成未完成，可查看过程并重试"
+                    : "")));
+      return {
+        isGeneratedMediaRun,
+        phase,
+        stateSubText,
+        interruptText: isGeneratedMediaRun ? "打断生成" : "打断执行",
+      };
+    }
+
     function renderConversationGeneratedMediaCard(payload = {}) {
       const count = Math.max(0, Number(payload.count || 0));
       const summary = String(payload.summary || "").trim();
@@ -2525,7 +2752,17 @@
         d && d.full && d.full.run && d.full.run.generated_media_count,
         r && r.generated_media_count,
       ]);
-      const generatedMediaFallback = (generatedMediaCount > 0 && !visibleGeneratedAttachments.length)
+      const generatedMediaKind = String(firstNonEmptyText([
+        d && d.run && d.run.generated_media_kind,
+        d && d.full && d.full.run && d.full.run.generated_media_kind,
+        r && r.generated_media_kind,
+      ]) || "").trim();
+      const generatedMediaStatus = String(firstNonEmptyText([
+        d && d.run && d.run.generated_media_status,
+        d && d.full && d.full.run && d.full.run.generated_media_status,
+        r && r.generated_media_status,
+      ]) || "").trim();
+      const generatedMediaFallback = ((generatedMediaCount > 0 || generatedMediaSummary) && !visibleGeneratedAttachments.length)
         ? renderConversationGeneratedMediaCard({
             count: generatedMediaCount,
             summary: generatedMediaSummary,
@@ -2562,25 +2799,39 @@
       const debugExpanded = PCONV.debugExpanded.has(rid);
       const activeDetailTab = getRunDetailDrawerTab(rid, { debugExpanded });
       const detailDrawerOpen = processExpanded || debugExpanded;
-      const processDetailLagging = Number(processInfo.reportedCount || 0) > Number(processInfo.items.length || 0);
+      const detailRefreshPolicy = conversationRunDetailRefreshPolicy(st, processInfo);
       // 只在用户真的展开“过程/调试”抽屉时再补拉详情。
       // 历史 run 若仅存在过程条数缺口，继续显示聚合计数即可，避免进入
       // “detail 返回 -> 整体重渲 -> 再次 force 拉 detail”的循环，导致选中会话后
       // 页面长时间抖动、点击看起来失效。
-      if (detailDrawerOpen && (!d || !d.loading)) {
+      if (detailDrawerOpen && (!d || !d.loading) && !(detailRefreshPolicy.terminal && d && d.full)) {
         ensureConversationRunDetail(rid, {
-          force: processDetailLagging,
-          maxAgeMs: 1200,
+          force: detailRefreshPolicy.force,
+          maxAgeMs: detailRefreshPolicy.maxAgeMs,
           terminalSyncStatus: isRunWorking(st) ? "" : String(st || "").toLowerCase(),
         });
       }
 
       const assistantBubbleText = String(displayAssistantText || "").trim();
+      const generatedMediaUi = resolveConversationGeneratedMediaUiMeta({
+        status: st,
+        attachments,
+        generatedMediaCount,
+        generatedMediaSummary,
+        generatedMediaKind,
+        generatedMediaStatus,
+        processInfo,
+      });
+      const hasGeneratedMediaResult = generatedMediaUi.phase === "generated"
+        || visibleGeneratedAttachments.length > 0
+        || !!generatedMediaFallback;
       const noVisibleAssistantOutput = !assistantBubbleText && Number(processInfo.count || 0) <= 0 && !err;
-      const assistantBodyPlaceholder = (st === "done" && noVisibleAssistantOutput)
-        ? ((visibleGeneratedAttachments.length > 0 || generatedMediaFallback)
+      const assistantBodyPlaceholder = (st === "done" && !assistantBubbleText && !err)
+        ? (hasGeneratedMediaResult
             ? "本轮执行已完成，结果见下方图片结果。"
-            : "本轮执行已完成，但未生成可展示正文。")
+            : (Number(processInfo.count || 0) <= 0
+                ? "本轮执行已完成，但未生成可展示正文。"
+                : ""))
         : "";
       const assistantDetailFull = d && d.full ? d.full : null;
       const assistantDetailState = assistantDetailFull ? deriveRunStateFromSource(assistantDetailFull.run, "") : "";
@@ -2661,6 +2912,8 @@
           ? (blockedByText && queueReasonText
               ? ("排队原因: " + queueReasonText + " · 阻塞run: " + blockedByText)
               : queuedHint)
+        : (generatedMediaUi.stateSubText && !staleErrorNote
+            ? generatedMediaUi.stateSubText
         : (outcomeMeta && outcomeMeta.subtitle && !isRunWorking(st)
             ? outcomeMeta.subtitle
         : (st === "error"
@@ -2673,7 +2926,7 @@
                         : (assistantBubbleText ? "可查看正文" : "执行已完成，未生成正文"))
                     : (isRunWorking(st)
                         ? (noVisibleAssistantOutput ? "已启动，等待正文或过程输出" : "过程实时更新")
-                        : (processInfo.count > 0 ? "可查看执行过程" : "暂无过程轨迹"))))));
+                        : (processInfo.count > 0 ? "可查看执行过程" : "暂无过程轨迹")))))));
       stateMain.appendChild(el("div", { class: "run-state-sub", text: stateSubText }));
       if (staleErrorNote) {
         stateMain.appendChild(el("div", {
@@ -2721,7 +2974,7 @@
           openRunDetailDrawer(rid, st, "process");
           if (!PCONV.detailMap[rid]) ensureConversationRunDetail(rid);
         }
-        renderConversationDetail();
+        rerenderConversationAssistantFamilyInPlace(aiRow, payload);
       });
       stateActions.appendChild(processBtn);
 
@@ -2737,12 +2990,14 @@
         stateActions.appendChild(cancelRetryBtn);
       }
       if (st === "running") {
-        stopBtn = el("button", { class: "btn textbtn run-action-danger", text: actionBusy === "interrupt" ? "打断中..." : "打断执行" });
+        stopBtn = el("button", { class: "btn textbtn run-action-danger", text: actionBusy === "interrupt" ? "打断中..." : generatedMediaUi.interruptText });
         stopBtn.disabled = !!actionBusy;
         stopBtn.addEventListener("click", async () => {
           if (stopBtn.disabled) return;
           stopBtn.disabled = true;
-          try { await interruptRunningRun(r); } finally { stopBtn.disabled = false; }
+          try {
+            await interruptRunningRun(r, generatedMediaUi.isGeneratedMediaRun ? { actionName: "生成" } : {});
+          } finally { stopBtn.disabled = false; }
         });
       }
 
@@ -2754,11 +3009,11 @@
         if (detailDrawerOpen && activeDetailTab === "debug") {
           PCONV.debugExpanded.delete(rid);
           setRunDetailDrawerTab(rid, "debug");
-          renderConversationDetail();
+          rerenderConversationAssistantFamilyInPlace(aiRow, payload);
         } else {
           openRunDetailDrawer(rid, st, "debug");
           ensureConversationRunDetail(rid);
-          renderConversationDetail();
+          rerenderConversationAssistantFamilyInPlace(aiRow, payload);
         }
       });
       stateActions.appendChild(dbgBtn);
@@ -2799,7 +3054,7 @@
         processTabBtn.addEventListener("click", () => {
           openRunDetailDrawer(rid, st, "process");
           if (!PCONV.detailMap[rid]) ensureConversationRunDetail(rid);
-          renderConversationDetail();
+          rerenderConversationAssistantFamilyInPlace(aiRow, payload);
         });
         drawerTabs.appendChild(processTabBtn);
         const debugTabBtn = el("button", {
@@ -2809,24 +3064,31 @@
         debugTabBtn.addEventListener("click", () => {
           openRunDetailDrawer(rid, st, "debug");
           ensureConversationRunDetail(rid);
-          renderConversationDetail();
+          rerenderConversationAssistantFamilyInPlace(aiRow, payload);
         });
         drawerTabs.appendChild(debugTabBtn);
         drawerHead.appendChild(drawerTabs);
         detailDrawer.appendChild(drawerHead);
 
         if (activeDetailTab === "debug") {
-          if (!d || d.loading) {
+          if (d && d.full) {
+            detailDrawer.appendChild(renderDebugPanel(d.full, {
+              runId: rid,
+              syncing: !!d.loading,
+            }));
+          } else if (!d || d.loading) {
             detailDrawer.appendChild(el("div", { class: "hint", text: "加载调试日志中..." }));
           } else if (d.error) {
             detailDrawer.appendChild(el("div", { class: "hint", text: "调试日志加载失败: " + d.error }));
-          } else if (d.full) {
-            detailDrawer.appendChild(renderDebugPanel(d.full, { runId: rid }));
           }
         } else {
           const processPanel = el("div", { class: "process-panel show embedded" });
           const meta = el("div", { class: "chips process-meta", style: "justify-content:flex-start; gap:6px" });
           meta.appendChild(chip("过程 " + Math.max(processInfo.count, processInfo.items.length) + " 条", "muted"));
+          const processStepCount = Math.max(0, Number(processInfo.processStepCount || 0));
+          const processActionCount = Math.max(0, Number(processInfo.processActionCount || 0));
+          if (processStepCount > 0) meta.appendChild(chip("步骤 " + processStepCount, "muted"));
+          if (processActionCount > 0) meta.appendChild(chip("动作 " + processActionCount, "muted"));
           const drawerStateSourceChip = buildRunDisplayStateSourceChip(r, d, { hideNormal: true });
           if (drawerStateSourceChip) meta.appendChild(drawerStateSourceChip);
           if (outcomeMeta) meta.appendChild(chip(outcomeMeta.label, outcomeMeta.tone));
@@ -2853,26 +3115,9 @@
           processPanel.appendChild(meta);
 
           if (processInfo.items.length > 0) {
-            const list = el("div", { class: "process-list" });
-            const processRows = Array.isArray(processInfo.rows)
-              ? processInfo.rows
-              : (Array.isArray(processInfo.items) ? processInfo.items.map((txt) => ({ text: String(txt || ""), at: extractProcessItemTimestamp(txt) })) : []);
-            processRows.forEach((row, idx) => {
-              const txt = String((row && row.text) || "");
-              const itemTs = String((row && row.at) || "").trim() || extractProcessItemTimestamp(txt);
-              const rowNode = el("div", { class: "process-item" + (itemTs ? "" : " no-time") });
-              rowNode.appendChild(el("span", { class: "process-idx", text: String(idx + 1) }));
-              rowNode.appendChild(el("span", { class: "process-txt", text: txt }));
-              if (itemTs) {
-                rowNode.appendChild(el("span", {
-                  class: "process-time",
-                  text: compactDateTime(itemTs),
-                  title: zhDateTime(itemTs),
-                }));
-              }
-              list.appendChild(rowNode);
-            });
-            processPanel.appendChild(list);
+            processPanel.appendChild(renderRunProcessStepGroups(rid, processInfo, () => {
+              rerenderConversationAssistantFamilyInPlace(aiRow, payload);
+            }));
           } else if (d && d.loading) {
             processPanel.appendChild(el("div", { class: "hint process-empty", text: "过程轨迹同步中..." }));
           } else {

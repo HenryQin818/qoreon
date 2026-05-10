@@ -6,23 +6,43 @@
       sessionLeaderProjects: Object.create(null),
     };
 
+    function pushPollingTrace(eventName, payload = {}) {
+      const root = (typeof window !== "undefined" && window) ? window : null;
+      if (!root) return;
+      const sink = root.__taskDashboardPollingTrace;
+      if (typeof sink === "function") {
+        try {
+          sink(eventName, payload);
+        } catch (_) {}
+      }
+    }
+
     function isPollingVisibilityGovernorEnabled() {
       if (typeof readWindowFeatureFlag === "function") {
-        return readWindowFeatureFlag(FEATURE_POLLING_VISIBILITY_GOVERNOR_KEY, true);
+        const flagName = typeof FEATURE_POLLING_VISIBILITY_GOVERNOR_KEY !== "undefined"
+          ? FEATURE_POLLING_VISIBILITY_GOVERNOR_KEY
+          : "__feature_polling_visibility_governor_v1__";
+        return readWindowFeatureFlag(flagName, true);
       }
       return true;
     }
 
     function isSessionsCrossTabLeaderEnabled() {
       if (typeof readWindowFeatureFlag === "function") {
-        return readWindowFeatureFlag(FEATURE_SESSIONS_CROSS_TAB_LEADER_KEY, true);
+        const flagName = typeof FEATURE_SESSIONS_CROSS_TAB_LEADER_KEY !== "undefined"
+          ? FEATURE_SESSIONS_CROSS_TAB_LEADER_KEY
+          : "__feature_sessions_cross_tab_leader_v1__";
+        return readWindowFeatureFlag(flagName, true);
       }
       return true;
     }
 
     function isPollingSchedulerEnabled() {
       if (typeof readWindowFeatureFlag === "function") {
-        return readWindowFeatureFlag(FEATURE_POLLING_SCHEDULER_KEY, true);
+        const flagName = typeof FEATURE_POLLING_SCHEDULER_KEY !== "undefined"
+          ? FEATURE_POLLING_SCHEDULER_KEY
+          : "__feature_polling_scheduler_v1__";
+        return readWindowFeatureFlag(flagName, true);
       }
       return true;
     }
@@ -150,7 +170,7 @@
       const storageKey = sessionDirectoryLeaderStorageKey(pid);
       const now = Date.now();
       const pageState = pollingGovernorCurrentPageState();
-      const pageEligibleForLeadership = !!(pageState.visible && pageState.hasFocus);
+      const pageEligibleForLeadership = !!pageState.visible;
       let leaseMs = normalizePollingDelayMs(POLLING_GOVERNOR.sessionLeaderLeaseMs, 15000) || 15000;
       let preferredFreshLeaderMs = 0;
       if (typeof conversationProjectPollingHints === "function") {

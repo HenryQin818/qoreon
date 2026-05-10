@@ -3309,6 +3309,7 @@
       runtimePollTimer: 0,
       runtimePollMs: 4000,
       runtimePollInFlight: false,
+      runtimePollVisibilityBound: false,
       runtimeLastRefreshAt: 0,
       runtimePollTickCount: 0,
       wallFixedSize: { w: 980, h: 720 }, // R9: widen wall container
@@ -3847,19 +3848,58 @@
 
     function stopRuntimeBubblesPolling() {
       if (GRAPH.runtimePollTimer) {
-        clearInterval(GRAPH.runtimePollTimer);
+        clearTimeout(GRAPH.runtimePollTimer);
         GRAPH.runtimePollTimer = 0;
       }
       GRAPH.runtimePollInFlight = false;
+    }
+
+    function overviewRuntimePageHidden() {
+      return !!(typeof document !== "undefined" && document.hidden);
+    }
+
+    function runtimeBubblesPollDelayMs() {
+      const base = Math.max(1000, Number(GRAPH.runtimePollMs || 4000));
+      return overviewRuntimePageHidden() ? Math.max(30000, base * 8) : base;
+    }
+
+    function bindRuntimeBubblesVisibilityResume() {
+      if (GRAPH.runtimePollVisibilityBound || typeof document === "undefined" || !document.addEventListener) return;
+      GRAPH.runtimePollVisibilityBound = true;
+      document.addEventListener("visibilitychange", () => {
+        if (overviewRuntimePageHidden()) return;
+        const pid = String(GRAPH.activeProjectId || "").trim();
+        if (!GRAPH.active || !pid) return;
+        stopRuntimeBubblesPolling();
+        refreshRuntimeBubblesNow(pid).finally(() => {
+          if (GRAPH.active && GRAPH.activeProjectId === pid) scheduleRuntimeBubblesPoll(pid, runtimeBubblesPollDelayMs());
+        });
+      });
+    }
+
+    function scheduleRuntimeBubblesPoll(projectId, delayMs) {
+      const pid = String(projectId || "").trim();
+      if (!pid || !GRAPH.active || GRAPH.activeProjectId !== pid) return;
+      if (GRAPH.runtimePollTimer) clearTimeout(GRAPH.runtimePollTimer);
+      GRAPH.runtimePollTimer = setTimeout(() => {
+        GRAPH.runtimePollTimer = 0;
+        if (!GRAPH.active || GRAPH.activeProjectId !== pid) return;
+        if (overviewRuntimePageHidden()) {
+          scheduleRuntimeBubblesPoll(pid, runtimeBubblesPollDelayMs());
+          return;
+        }
+        refreshRuntimeBubblesNow(pid).finally(() => {
+          if (GRAPH.active && GRAPH.activeProjectId === pid) scheduleRuntimeBubblesPoll(pid, runtimeBubblesPollDelayMs());
+        });
+      }, Math.max(1000, Number(delayMs) || runtimeBubblesPollDelayMs()));
     }
 
     function startRuntimeBubblesPolling(projectId) {
       const pid = String(projectId || "").trim();
       stopRuntimeBubblesPolling();
       if (!pid) return;
-      GRAPH.runtimePollTimer = setInterval(() => {
-        refreshRuntimeBubblesNow(pid);
-      }, Math.max(1000, Number(GRAPH.runtimePollMs || 4000)));
+      bindRuntimeBubblesVisibilityResume();
+      scheduleRuntimeBubblesPoll(pid, runtimeBubblesPollDelayMs());
     }
 
     function parseIsoTs(value) {

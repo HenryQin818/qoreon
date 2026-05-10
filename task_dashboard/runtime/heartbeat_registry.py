@@ -47,7 +47,11 @@ from task_dashboard.runtime.channel_admin import (
     resolve_task_root_path as runtime_resolve_task_root_path,
 )
 from task_dashboard.runtime.agent_display_name import attach_agent_display_fields
-from task_dashboard.runtime.run_state_semantics import build_session_semantics, classify_run_semantics
+from task_dashboard.runtime.run_state_semantics import (
+    build_session_semantics,
+    classify_media_run_monitoring,
+    classify_run_semantics,
+)
 from task_dashboard.runtime.session_display_state import (
     build_latest_run_summary as _session_display_build_latest_run_summary,
     build_session_display_fields as _session_display_build_fields,
@@ -1314,7 +1318,9 @@ def _latest_process_row_preview(process_rows: Any, max_len: int = 300) -> str:
 
 def _build_session_summary_from_meta(meta: dict[str, Any]) -> dict[str, Any]:
     process_rows = meta.get("processRows") or meta.get("process_rows") or []
-    ai_preview = str(meta.get("lastPreview") or meta.get("partialPreview") or "").strip()
+    ai_preview = str(
+        meta.get("generated_media_summary") or meta.get("lastPreview") or meta.get("partialPreview") or ""
+    ).strip()
     if not ai_preview:
         ai_preview = _latest_process_row_preview(process_rows, 300)
     user_preview = str(meta.get("messagePreview") or "").strip()
@@ -2018,6 +2024,7 @@ def _build_run_observability_fields(
     st = str(meta.get("status") or "").strip().lower()
     display_state = _run_status_display_state(st)
     run_semantics = classify_run_semantics(meta)
+    media_monitoring = classify_media_run_monitoring(meta)
     queue_reason = str(meta.get("queueReason") or meta.get("queue_reason") or "").strip().lower()
     blocked_by_run_id = str(meta.get("blockedByRunId") or meta.get("blocked_by_run_id") or "").strip()
     if infer_blocked and (not blocked_by_run_id) and st in {"queued", "retry_waiting"} and queue_reason != "session_busy_external":
@@ -2055,6 +2062,15 @@ def _build_run_observability_fields(
         "effective_for_session_preview": bool(run_semantics.get("effective_for_session_preview")),
         "superseded_by_run_id": str(run_semantics.get("superseded_by_run_id") or "").strip(),
         "recovery_of_run_id": str(run_semantics.get("recovery_of_run_id") or "").strip(),
+        "media_run_candidate": bool(media_monitoring.get("media_run_candidate")),
+        "media_result_pending": bool(media_monitoring.get("media_result_pending")),
+        "media_monitor_status": str(media_monitoring.get("media_monitor_status") or "").strip(),
+        "media_monitor_reason": str(media_monitoring.get("media_monitor_reason") or "").strip(),
+        "media_monitor_evidence": list(media_monitoring.get("media_monitor_evidence") or []),
+        "media_generated_attachment_count": int(media_monitoring.get("media_generated_attachment_count") or 0),
+        "media_false_stop_exempt": bool(media_monitoring.get("media_false_stop_exempt")),
+        "media_false_stop_exempt_reason": str(media_monitoring.get("media_false_stop_exempt_reason") or "").strip(),
+        "media_terminal_result_present": bool(media_monitoring.get("media_terminal_result_present")),
     }
 
 
