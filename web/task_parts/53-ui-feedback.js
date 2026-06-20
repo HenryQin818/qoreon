@@ -118,6 +118,36 @@
       };
     }
 
+    async function syncExistingChannelConflictToLocalState(form, payload) {
+      const data = (form && typeof form === "object") ? form : {};
+      const body = (payload && typeof payload === "object") ? payload : {};
+      if (body.channelExistsInProject !== true) return false;
+      const projectId = String(data.projectId || body.projectId || "").trim();
+      const channelName = String(
+        body.channelName
+        || (typeof buildNewChannelName === "function" ? buildNewChannelName(data) : "")
+        || ""
+      ).trim();
+      if (!projectId || !channelName) return false;
+      const merged = upsertCreatedChannelIntoLocalState({
+        projectId,
+        channelName,
+        channelDesc: String(data.channelDesc || body.channelDesc || channelName).trim() || channelName,
+        framework: body.framework || { cliType: "codex" },
+      });
+      if (!merged) return false;
+      if (typeof loadChannelSessions === "function") {
+        try {
+          await loadChannelSessions(projectId, null);
+        } catch (_) {}
+      }
+      if (typeof render === "function") render();
+      if (typeof toast === "function") {
+        toast("通道「" + channelName + "」已存在，已同步到当前页面。", { tone: "success", duration: 3200 });
+      }
+      return true;
+    }
+
     function notifyNewChannelDirectSuccess(form, payload) {
       const createdChannelName = String((payload && payload.channelName) || (typeof buildNewChannelName === "function" ? buildNewChannelName(form) : "") || "").trim();
       let message = "已创建通道";

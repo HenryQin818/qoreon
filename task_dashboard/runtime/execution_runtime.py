@@ -3,14 +3,25 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import mimetypes
 import os
 import subprocess
+import tempfile
 import threading
 import time
 from pathlib import Path
 from typing import Any, Optional
 
+from task_dashboard.claude_permissions import (
+    apply_claude_permission_mode_to_runner_command,
+    normalize_claude_permission_mode,
+)
 from task_dashboard.adapters import CodexAdapter
+from task_dashboard.codebuddy_permissions import (
+    apply_codebuddy_permission_mode_to_runner_command,
+    normalize_codebuddy_permission_mode,
+)
 from task_dashboard.runtime.execution_command import (
     build_execution_command as runtime_build_execution_command,
     prepare_process_spawn as runtime_prepare_process_spawn,
@@ -38,6 +49,9 @@ from task_dashboard.runtime.network_recovery import (
     apply_network_resume_schedule as runtime_apply_network_resume_schedule,
     build_network_resume_retry_meta as runtime_build_network_resume_retry_meta,
 )
+from task_dashboard.runtime.provider_failure import (
+    apply_run_failure_classification as runtime_apply_run_failure_classification,
+)
 from task_dashboard.runtime.restart_recovery import (
     bootstrap_stale_queued_runs as runtime_bootstrap_stale_queued_runs,
     bootstrap_queued_runs as runtime_bootstrap_queued_runs,
@@ -52,10 +66,12 @@ from task_dashboard.runtime.restart_recovery import (
 )
 from task_dashboard.runtime.run_detail_fields import (
     candidate_local_imagegen_files,
+    extract_process_events_from_file,
     extract_terminal_message_from_file,
     latest_local_imagegen_mtime,
     reconcile_generated_media_for_run,
     refresh_generated_media_status,
+    safe_terminal_visible_text,
 )
 from task_dashboard.session_store import SessionStore
 
@@ -73,6 +89,7 @@ __all__ = [
     "_queued_recovery_lazy_interval_s",
     "_restart_recovery_lazy_interval_s",
     "_schedule_network_resume_run",
+    "_schedule_provider_auto_retry_run",
     "_schedule_retry_waiting_fallback",
     "bootstrap_stale_queued_runs",
     "bootstrap_queued_runs",
@@ -82,7 +99,25 @@ __all__ = [
 ]
 
 
-_TERMINAL_TEXT_CLIS = {"claude", "opencode"}
+_TERMINAL_TEXT_CLIS = {"claude", "opencode", "gemini", "codebuddy"}
+_TERMINAL_TEXT_PROCESS_CLEAR_CLIS = {"opencode", "gemini"}
+
+
+def _harvest_terminal_final_text(last_path: Path, log_path: Path, *, cli_type: str) -> str:
+    cli = str(cli_type or "").strip().lower()
+    try:
+        last = last_path.read_text(encoding="utf-8", errors="replace")
+        last = safe_terminal_visible_text(last, cli_type=cli)
+    except Exception:
+        last = ""
+    if str(last or "").strip():
+        return last.replace("\r\n", "\n").strip()
+    try:
+        last = extract_terminal_message_from_file(log_path, cli_type=cli)
+        last = safe_terminal_visible_text(last, cli_type=cli)
+    except Exception:
+        last = ""
+    return last.replace("\r\n", "\n").strip() if str(last or "").strip() else ""
 
 
 def __getattr__(name: str):
@@ -152,6 +187,332 @@ def _build_callback_context_message(meta: dict[str, Any], original_message: str)
     if bool(summary.get("late_callback")):
         lines.append("补充说明: 该回执已按迟到留痕口径处理。")
     return "\n".join(lines)
+
+
+_D24_CODEX_IMAGE_CONTENT_TYPES = {"image/png", "image/jpeg", "image/webp", "image/gif"}
+_D24_CODEX_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
+
+
+def _runtime_attachment_values(raw: Any) -> list[dict[str, Any]]:
+    values: list[dict[str, Any]] = []
+    if isinstance(raw, list):
+        for item in raw:
+            if isinstance(item, dict):
+                values.append(item)
+    return values
+
+
+def _nested_runtime_attachments(raw: Any) -> list[dict[str, Any]]:
+    if not isinstance(raw, dict):
+        return []
+    out: list[dict[str, Any]] = []
+    out.extend(_runtime_attachment_values(raw.get("attachments")))
+    runtime_input = raw.get("runtime_input") if isinstance(raw.get("runtime_input"), dict) else raw.get("runtimeInput")
+    if isinstance(runtime_input, dict):
+        out.extend(_runtime_attachment_values(runtime_input.get("attachments")))
+    adapter_input = raw.get("adapter_input") if isinstance(raw.get("adapter_input"), dict) else raw.get("adapterInput")
+    if isinstance(adapter_input, dict):
+        out.extend(_nested_runtime_attachments(adapter_input))
+    queue_job = raw.get("queue_job") if isinstance(raw.get("queue_job"), dict) else raw.get("queueJob")
+    if isinstance(queue_job, dict):
+        out.extend(_nested_runtime_attachments(queue_job))
+    task_envelope = raw.get("task_envelope") if isinstance(raw.get("task_envelope"), dict) else raw.get("taskEnvelope")
+    if isinstance(task_envelope, dict):
+        out.extend(_nested_runtime_attachments(task_envelope))
+    return out
+
+
+def _attachment_identity_keys(attachment: dict[str, Any]) -> set[str]:
+    keys: set[str] = set()
+    for key in (
+        "attachment_id",
+        "attachmentId",
+        "id",
+        "localId",
+        "local_id",
+        "message_part_id",
+        "messagePartId",
+        "url",
+        "path",
+        "localPath",
+        "local_path",
+        "resolved_local_path",
+        "file_path",
+        "filename",
+        "originalName",
+    ):
+        value = str(attachment.get(key) or "").strip()
+        if value:
+            keys.add(f"{key}:{value}")
+            if key in {"url", "path", "localPath", "local_path", "resolved_local_path", "file_path"}:
+                keys.add(value)
+    return keys
+
+
+def _controlled_attachment_roots(runs_root: Path) -> list[Path]:
+    roots: list[Path] = []
+    for raw in (
+        runs_root,
+        runs_root.parent,
+        Path(tempfile.gettempdir()) / "task-dashboard-codex-runner",
+    ):
+        try:
+            roots.append(Path(raw).resolve())
+        except Exception:
+            continue
+    return roots
+
+
+def _path_is_under_any(path: Path, roots: list[Path]) -> bool:
+    try:
+        resolved = path.resolve()
+    except Exception:
+        return False
+    for root in roots:
+        try:
+            resolved.relative_to(root)
+            return True
+        except Exception:
+            continue
+    return False
+
+
+def _resolve_runtime_attachment_path(runs_root: Path, attachment: dict[str, Any]) -> Path | None:
+    roots = _controlled_attachment_roots(runs_root)
+    for key in ("resolved_local_path", "local_path", "localPath", "path", "file_path"):
+        raw = str(attachment.get(key) or "").strip()
+        if not raw:
+            continue
+        try:
+            candidate = Path(raw).expanduser().resolve()
+        except Exception:
+            continue
+        if candidate.exists() and candidate.is_file() and os.access(candidate, os.R_OK) and _path_is_under_any(candidate, roots):
+            return candidate
+    try:
+        resolver = __getattr__("_resolve_attachment_local_path")
+        resolved = resolver(runs_root, attachment)
+        if resolved is not None:
+            candidate = Path(resolved).resolve()
+            if candidate.exists() and candidate.is_file() and os.access(candidate, os.R_OK):
+                return candidate
+    except Exception:
+        pass
+    return None
+
+
+def _runtime_attachment_content_type(attachment: dict[str, Any], path: Path) -> str:
+    content_type = str(
+        attachment.get("content_type")
+        or attachment.get("contentType")
+        or attachment.get("mimeType")
+        or attachment.get("mime_type")
+        or ""
+    ).strip().lower()
+    if content_type == "image/jpg":
+        return "image/jpeg"
+    if content_type:
+        return content_type
+    guessed, _ = mimetypes.guess_type(str(path))
+    return str(guessed or "").strip().lower()
+
+
+def _sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            if not chunk:
+                break
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _resolve_runtime_image_attachments(meta: dict[str, Any], runs_root: Path) -> list[dict[str, Any]]:
+    raw_items = _nested_runtime_attachments(meta)
+    out: list[dict[str, Any]] = []
+    seen_paths: set[str] = set()
+    max_bytes_raw = str(os.environ.get("TASK_DASHBOARD_CODEX_IMAGE_MAX_BYTES") or "").strip()
+    try:
+        max_bytes = int(max_bytes_raw) if max_bytes_raw else 25 * 1024 * 1024
+    except Exception:
+        max_bytes = 25 * 1024 * 1024
+    for item in raw_items:
+        path = _resolve_runtime_attachment_path(runs_root, item)
+        if path is None:
+            continue
+        path_key = str(path)
+        if path_key in seen_paths:
+            continue
+        content_type = _runtime_attachment_content_type(item, path)
+        kind = str(item.get("kind") or item.get("attachment_kind") or "").strip().lower()
+        if kind and kind != "image":
+            continue
+        if content_type not in _D24_CODEX_IMAGE_CONTENT_TYPES:
+            continue
+        if path.suffix.lower() not in _D24_CODEX_IMAGE_EXTENSIONS:
+            continue
+        try:
+            size_bytes = int(path.stat().st_size)
+        except Exception:
+            size_bytes = int(item.get("size_bytes") or item.get("size") or 0)
+        if size_bytes <= 0 or size_bytes > max_bytes:
+            continue
+        sha256 = str(item.get("sha256") or item.get("hash") or "").strip()
+        if not sha256:
+            try:
+                sha256 = _sha256_file(path)
+            except Exception:
+                sha256 = ""
+        seen_paths.add(path_key)
+        out.append(
+            {
+                "attachment_id": str(
+                    item.get("attachment_id") or item.get("attachmentId") or item.get("id") or item.get("localId") or ""
+                ).strip(),
+                "message_part_id": str(item.get("message_part_id") or item.get("messagePartId") or "").strip(),
+                "filename": str(item.get("filename") or item.get("originalName") or path.name).strip() or path.name,
+                "kind": "image",
+                "content_type": content_type,
+                "size_bytes": size_bytes,
+                "sha256": sha256,
+                "source": str(item.get("source") or "message_attachment").strip() or "message_attachment",
+                "runtime_passthrough": True,
+                "adapter_arg_kind": "codex_image_flag",
+                "resolved_local_path": path_key,
+                "_source_keys": sorted(_attachment_identity_keys(item)),
+            }
+        )
+    return out
+
+
+def _metadata_without_runtime_passthrough_attachments(
+    meta: dict[str, Any],
+    runtime_attachments: list[dict[str, Any]],
+) -> dict[str, Any]:
+    if not runtime_attachments:
+        return meta
+    exclude_keys: set[str] = set()
+    for item in runtime_attachments:
+        raw_keys = item.get("_source_keys")
+        if isinstance(raw_keys, list):
+            exclude_keys.update(str(key) for key in raw_keys if str(key or "").strip())
+    if not exclude_keys:
+        return meta
+    attachments = meta.get("attachments") if isinstance(meta.get("attachments"), list) else []
+    filtered: list[Any] = []
+    changed = False
+    for item in attachments:
+        if isinstance(item, dict) and _attachment_identity_keys(item) & exclude_keys:
+            changed = True
+            continue
+        filtered.append(item)
+    if not changed:
+        return meta
+    updated = dict(meta)
+    updated["attachments"] = filtered
+    return updated
+
+
+def _count_codex_image_args(cmd: list[str]) -> int:
+    count = 0
+    for token in list(cmd or []):
+        text = str(token or "")
+        if text in {"-i", "--image"} or text.startswith("--image="):
+            count += 1
+    return count
+
+
+def _safe_prompt_line(value: Any) -> str:
+    return str(value or "").replace("\r", " ").replace("\n", " ").strip()
+
+
+def _build_claude_image_path_fallback_prompt(runtime_attachments: list[dict[str, Any]]) -> str:
+    image_lines: list[str] = []
+    for index, item in enumerate(runtime_attachments if isinstance(runtime_attachments, list) else [], start=1):
+        if not isinstance(item, dict):
+            continue
+        path = _safe_prompt_line(item.get("resolved_local_path"))
+        if not path:
+            continue
+        filename = _safe_prompt_line(item.get("filename")) or Path(path).name
+        content_type = _safe_prompt_line(item.get("content_type")) or "image"
+        image_lines.append(f"{index}. {filename} ({content_type}): {path}")
+    if not image_lines:
+        return ""
+    return "\n\n".join(
+        [
+            "",
+            "[CCB 图片附件读取提示]",
+            "本次消息包含图片附件。Claude Code 未使用原生图片参数，CCB 已提供本机绝对路径兜底。",
+            "请优先使用 Read/读取工具打开以下图片文件，基于图片内容作答；不要只根据文件名或路径猜测。",
+            "\n".join(image_lines),
+            "[/CCB 图片附件读取提示]",
+        ]
+    )
+
+
+def _build_claude_image_path_fallback_summary(runtime_attachments: list[dict[str, Any]]) -> dict[str, Any]:
+    count = 0
+    public_attachments: list[dict[str, Any]] = []
+    for item in runtime_attachments if isinstance(runtime_attachments, list) else []:
+        if not isinstance(item, dict):
+            continue
+        if not str(item.get("resolved_local_path") or "").strip():
+            continue
+        count += 1
+        public_attachments.append(
+            {
+                "attachment_id": str(item.get("attachment_id") or "").strip(),
+                "message_part_id": str(item.get("message_part_id") or "").strip(),
+                "filename": str(item.get("filename") or "").strip(),
+                "content_type": str(item.get("content_type") or "").strip(),
+                "size_bytes": int(item.get("size_bytes") or 0),
+                "sha256": str(item.get("sha256") or "").strip(),
+                "runtime_passthrough": True,
+                "path_redacted": True,
+            }
+        )
+    return {
+        "enabled": bool(count),
+        "image_count": count,
+        "adapter_arg_kind": "claude_prompt_path_fallback" if count else "",
+        "prompt_contains_absolute_paths": bool(count),
+        "requires_read_tool": bool(count),
+        "attachments": public_attachments,
+        "path_redacted": True,
+    }
+
+
+def _build_runtime_attachment_summary(
+    runtime_attachments: list[dict[str, Any]],
+    *,
+    adapter_image_arg_count: int,
+    actual_cli_invoked: bool,
+) -> dict[str, Any]:
+    public_attachments: list[dict[str, Any]] = []
+    for item in runtime_attachments:
+        public_attachments.append(
+            {
+                "attachment_id": str(item.get("attachment_id") or "").strip(),
+                "message_part_id": str(item.get("message_part_id") or "").strip(),
+                "filename": str(item.get("filename") or "").strip(),
+                "content_type": str(item.get("content_type") or "").strip(),
+                "size_bytes": int(item.get("size_bytes") or 0),
+                "sha256": str(item.get("sha256") or "").strip(),
+                "runtime_passthrough": True,
+                "path_redacted": True,
+            }
+        )
+    image_count = len(public_attachments)
+    arg_count = int(adapter_image_arg_count or 0)
+    return {
+        "image_passed": bool(actual_cli_invoked and image_count > 0 and arg_count >= image_count),
+        "image_count": image_count,
+        "adapter_image_arg_count": arg_count,
+        "adapter_arg_kind": "codex_image_flag" if image_count else "",
+        "attachments": public_attachments,
+        "path_redacted": True,
+    }
 
 
 def _restart_recovery_run_cli_exec(*args, **kwargs):
@@ -394,6 +755,284 @@ def _schedule_network_resume_run(
     return retry_id
 
 
+def _default_provider_auto_retry_delay_s() -> int:
+    raw = str(os.environ.get("CCB_PROVIDER_RETRY_DELAY_S") or "").strip()
+    if raw:
+        try:
+            value = int(float(raw))
+            if value >= 0:
+                return min(value, 3600)
+        except Exception:
+            pass
+    return 60
+
+
+def _default_provider_auto_retry_max_attempts() -> int:
+    raw = str(os.environ.get("CCB_PROVIDER_RETRY_MAX") or "").strip()
+    if raw:
+        try:
+            value = int(float(raw))
+            if value >= 0:
+                return min(value, 2)
+        except Exception:
+            pass
+    return 2
+
+
+def _meta_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() not in {"", "0", "false", "none", "null", "no", "off"}
+
+
+def _provider_retry_root_id(meta: dict[str, Any]) -> str:
+    return str(meta.get("retry_of") or meta.get("retryOf") or meta.get("id") or "").strip()
+
+
+def _provider_retry_current_attempt(meta: dict[str, Any]) -> int:
+    try:
+        return max(0, int(meta.get("retry_attempt") or meta.get("retryAttempt") or 0))
+    except Exception:
+        return 0
+
+
+def _provider_retry_reason(meta: dict[str, Any]) -> str:
+    provider_error = meta.get("provider_error") if isinstance(meta.get("provider_error"), dict) else {}
+    kind = str(provider_error.get("kind") or "").strip().lower()
+    return f"provider_{kind}" if kind else "provider_transient"
+
+
+def _provider_auto_retry_eligible(meta: dict[str, Any], *, max_attempts: int) -> tuple[bool, str]:
+    if not isinstance(meta, dict):
+        return False, "invalid_meta"
+    if str(meta.get("status") or "").strip().lower() != "error":
+        return False, "not_error"
+    if str(meta.get("failure_class") or "").strip().lower() != "provider_transient":
+        return False, "not_provider_transient"
+    provider_error = meta.get("provider_error") if isinstance(meta.get("provider_error"), dict) else {}
+    if not bool(provider_error.get("retryable")):
+        return False, "provider_error_not_retryable"
+    if str(meta.get("side_effect_risk") or "").strip().lower() != "none":
+        return False, f"side_effect_risk_{str(meta.get('side_effect_risk') or 'unknown').strip().lower()}"
+    if str(meta.get("recovery_mode") or "").strip().lower() != "auto_retry":
+        return False, "recovery_mode_not_auto_retry"
+    if not _meta_bool(meta.get("auto_retry_eligible")):
+        return False, "auto_retry_eligible_false"
+    if _meta_bool(meta.get("recovery_required")):
+        return False, "recovery_required"
+    if _meta_bool(meta.get("hidden")):
+        return False, "hidden_run"
+    if _meta_bool(meta.get("autoResumePrompt")):
+        return False, "network_resume_prompt"
+    if str(meta.get("networkResumeRunId") or meta.get("network_resume_run_id") or "").strip():
+        return False, "network_resume_already_scheduled"
+    if _meta_bool(meta.get("visible_in_channel_chat")) or _meta_bool(meta.get("visibleInChannelChat")):
+        return False, "visible_in_channel_chat"
+    if str(meta.get("providerRetryRunId") or meta.get("provider_auto_retry_run_id") or "").strip():
+        return False, "provider_retry_already_scheduled"
+    if _meta_bool(meta.get("retry_exhausted")) or _meta_bool(meta.get("retryExhausted")):
+        return False, "retry_exhausted"
+    if max_attempts <= 0:
+        return False, "provider_retry_disabled"
+    if _provider_retry_current_attempt(meta) >= max_attempts:
+        return False, "retry_exhausted"
+    return True, "provider_transient_low_risk"
+
+
+def _provider_retry_read_message(store, meta: dict[str, Any], *, fallback_meta: Optional[dict[str, Any]] = None) -> str:
+    rows = [meta]
+    if isinstance(fallback_meta, dict) and fallback_meta is not meta:
+        rows.append(fallback_meta)
+    for row in rows:
+        paths = row.get("paths") if isinstance(row.get("paths"), dict) else {}
+        msg_path = str(paths.get("msg") or "").strip()
+        if msg_path:
+            try:
+                text = Path(msg_path).read_text(encoding="utf-8", errors="replace")
+                if text.strip():
+                    return text
+            except Exception:
+                pass
+        rid = str(row.get("id") or "").strip()
+        if rid and hasattr(store, "_paths"):
+            try:
+                text = store._paths(rid)["msg"].read_text(encoding="utf-8", errors="replace")
+                if text.strip():
+                    return text
+            except Exception:
+                pass
+    return str(meta.get("messagePreview") or fallback_meta.get("messagePreview") if isinstance(fallback_meta, dict) else "").strip()
+
+
+_PROVIDER_RETRY_EXTRA_META_KEYS = (
+    "source_ref",
+    "target_ref",
+    "callback_to",
+    "owner_ref",
+    "sender_agent_ref",
+    "mention_targets",
+    "reply_to_run_id",
+    "replyToRunId",
+    "reply_to",
+    "replyTo",
+    "task_path",
+    "execution_mode",
+    "topic",
+    "task_id",
+    "owner_channel_name",
+    "execution_stage",
+    "current_conclusion",
+    "need_confirmation",
+    "next_action",
+    "blocking_status",
+    "message_kind",
+    "interaction_mode",
+    "plan_first",
+    "plan_phase",
+    "plan_prompt_version",
+    "task_with_receipt_guard_version",
+    "localServerOrigin",
+    "environment",
+    "worktree_root",
+    "workdir",
+    "branch",
+    "project_execution_context",
+    "codebuddy_permission_mode",
+    "claude_permission_mode",
+)
+
+
+def _provider_retry_extra_meta(source_meta: dict[str, Any]) -> dict[str, Any]:
+    extra: dict[str, Any] = {}
+    for key in _PROVIDER_RETRY_EXTRA_META_KEYS:
+        if key in source_meta:
+            extra[key] = source_meta.get(key)
+    # Provider retry is an internal retry run. Keep source/callback context but
+    # do not mark the retry artifact as a newly announced channel message.
+    extra["visible_in_channel_chat"] = False
+    extra["trigger_type"] = "provider_auto_retry"
+    return extra
+
+
+def _mark_provider_retry_exhausted(meta: dict[str, Any], *, max_attempts: int, reason: str = "retry_exhausted") -> None:
+    meta["providerRetryExhausted"] = True
+    meta["retry_exhausted"] = True
+    meta["retryExhaustedAt"] = _now_iso()
+    meta["providerRetryMaxAttempts"] = int(max_attempts)
+    meta["auto_retry_eligible"] = False
+    meta["retry_eligibility_reason"] = reason
+    meta["recovery_mode"] = "manual_recovery"
+    meta["recovery_required"] = True
+
+
+def _schedule_provider_auto_retry_run(
+    store,
+    source_meta: dict[str, Any],
+    *,
+    scheduler,
+    cli_type: str,
+) -> str:
+    if not isinstance(source_meta, dict):
+        return ""
+    source_id = str(source_meta.get("id") or "").strip()
+    project_id = str(source_meta.get("projectId") or "").strip()
+    channel_name = str(source_meta.get("channelName") or "").strip()
+    session_id = str(source_meta.get("sessionId") or "").strip()
+    if not source_id or not project_id or not channel_name or not session_id:
+        return ""
+
+    max_attempts = _default_provider_auto_retry_max_attempts()
+    eligible, reason = _provider_auto_retry_eligible(source_meta, max_attempts=max_attempts)
+    if not eligible:
+        if reason == "retry_exhausted":
+            _mark_provider_retry_exhausted(source_meta, max_attempts=max_attempts)
+        return ""
+
+    root_id = _provider_retry_root_id(source_meta) or source_id
+    root_meta = store.load_meta(root_id) if root_id != source_id and hasattr(store, "load_meta") else None
+    if not isinstance(root_meta, dict) or not root_meta:
+        root_meta = source_meta
+    next_attempt = _provider_retry_current_attempt(source_meta) + 1
+    if next_attempt > max_attempts:
+        _mark_provider_retry_exhausted(source_meta, max_attempts=max_attempts)
+        return ""
+
+    message = _provider_retry_read_message(store, root_meta, fallback_meta=source_meta)
+    if not str(message or "").strip():
+        source_meta["auto_retry_eligible"] = False
+        source_meta["retry_eligibility_reason"] = "missing_original_message"
+        source_meta["recovery_mode"] = "manual_recovery"
+        source_meta["recovery_required"] = True
+        return ""
+
+    delay_s = _default_provider_auto_retry_delay_s()
+    due_ts = time.time() + float(delay_s)
+    reason_text = _provider_retry_reason(source_meta)
+    base_meta = root_meta if isinstance(root_meta, dict) and root_meta else source_meta
+    retry_run = store.create_run(
+        project_id,
+        channel_name,
+        session_id,
+        message,
+        profile_label=str(base_meta.get("profileLabel") or ""),
+        model=str(base_meta.get("model") or "").strip(),
+        cli_type=cli_type,
+        attachments=list(base_meta.get("attachments") or []) if isinstance(base_meta.get("attachments"), list) else None,
+        sender_type=str(base_meta.get("sender_type") or "system").strip() or "system",
+        sender_id=str(base_meta.get("sender_id") or "ccb").strip() or "ccb",
+        sender_name=str(base_meta.get("sender_name") or "CCB Runtime").strip() or "CCB Runtime",
+        extra_meta=_provider_retry_extra_meta(base_meta),
+        reasoning_effort=str(base_meta.get("reasoning_effort") or "").strip(),
+    )
+    retry_id = str(retry_run.get("id") or "").strip()
+    if not retry_id:
+        return ""
+
+    retry_meta = dict(store.load_meta(retry_id) or retry_run)
+    retry_meta.update(
+        {
+            "status": "retry_waiting",
+            "retry_of": root_id,
+            "retryOf": root_id,
+            "retry_parent_run_id": source_id,
+            "retry_attempt": next_attempt,
+            "retryAttempt": next_attempt,
+            "retry_reason": reason_text,
+            "retryReason": reason_text,
+            "retryKind": "provider_transient_auto_retry",
+            "retry_kind": "provider_transient_auto_retry",
+            "retryDelaySeconds": int(delay_s),
+            "retryScheduledAt": _iso_after_s(int(delay_s)),
+            "retryCancelable": True,
+            "provider_auto_retry": True,
+            "providerRetryMaxAttempts": int(max_attempts),
+            "side_effect_risk": "none",
+            "recovery_mode": "auto_retry",
+            "auto_retry_eligible": True,
+            "retry_eligibility_reason": "provider_transient_no_side_effect_evidence",
+            "provider_error": dict(source_meta.get("provider_error") or {})
+            if isinstance(source_meta.get("provider_error"), dict)
+            else {},
+        }
+    )
+    store.save_meta(retry_id, retry_meta)
+
+    source_meta["providerRetryRunId"] = retry_id
+    source_meta["providerRetryScheduledAt"] = _iso_after_s(int(delay_s))
+    source_meta["providerRetryAttempt"] = next_attempt
+    source_meta["providerRetryMaxAttempts"] = int(max_attempts)
+    source_meta["providerRetryReason"] = reason_text
+    source_meta["superseded_by"] = retry_id
+    source_meta["superseded_by_run_id"] = retry_id
+    source_meta["retry_status"] = "retry_waiting"
+
+    if scheduler is not None and str(os.environ.get("CCB_SCHEDULER") or "").strip() != "0":
+        scheduler.schedule_retry_waiting(retry_id, session_id, due_ts, cli_type=cli_type)
+    else:
+        _schedule_retry_waiting_fallback(store, retry_id, session_id, cli_type, due_ts)
+    return retry_id
+
+
 def run_codex_exec(store, run_id: str, timeout_s: Optional[int] = None) -> None:
     run_cli_exec(store, run_id, timeout_s=timeout_s, cli_type="codex")
 
@@ -435,10 +1074,17 @@ def run_cli_exec(
     except Exception:
         pass
 
-    attachment_block = __getattr__("_build_attachment_prompt_block")(meta, store.runs_dir)
+    runtime_image_attachments = _resolve_runtime_image_attachments(meta, store.runs_dir)
+    prompt_meta = _metadata_without_runtime_passthrough_attachments(meta, runtime_image_attachments)
+    attachment_block = __getattr__("_build_attachment_prompt_block")(prompt_meta, store.runs_dir)
     if attachment_block:
         message = message + attachment_block
     message = _build_callback_context_message(meta, message)
+    claude_image_path_fallback = ""
+    if str(cli_type or "").strip().lower() == "claude" and runtime_image_attachments:
+        claude_image_path_fallback = _build_claude_image_path_fallback_prompt(runtime_image_attachments)
+        if claude_image_path_fallback:
+            message = message + claude_image_path_fallback
 
     meta["status"] = "running"
     meta["startedAt"] = _now_iso()
@@ -461,6 +1107,7 @@ def run_cli_exec(
         resolve_run_work_context=__getattr__("_resolve_run_work_context"),
         load_project_execution_context=__getattr__("_load_project_execution_context"),
         resolve_project_workdir=__getattr__("_resolve_project_workdir"),
+        resolve_channel_workdir=__getattr__("_resolve_channel_workdir"),
         project_channel_model=__getattr__("_project_channel_model"),
         project_channel_reasoning_effort=__getattr__("_project_channel_reasoning_effort"),
     )
@@ -493,6 +1140,14 @@ def run_cli_exec(
         cli_type=cli_type,
         supports_model=supports_model,
         profile_not_found_recent=__getattr__("_profile_not_found_recent"),
+        permission_mode=(
+            str(meta.get("codebuddy_permission_mode") or "")
+            if str(cli_type or "").strip().lower() == "codebuddy"
+            else str(meta.get("claude_permission_mode") or "")
+            if str(cli_type or "").strip().lower() == "claude"
+            else ""
+        ),
+        attachments=runtime_image_attachments,
     )
     base_cmd = list(command_bundle.get("base_cmd") or [])
     cmd = list(command_bundle.get("cmd") or [])
@@ -510,6 +1165,43 @@ def run_cli_exec(
     spawn_mode = str(spawn_bundle.get("mode") or "direct")
     mirrored_from = str(spawn_bundle.get("mirrored_from") or "")
     execution_profile = str(spawn_bundle.get("execution_profile") or execution_profile or "sandboxed")
+    runtime_image_arg_count = (
+        _count_codex_image_args(spawn_cmd)
+        if str(cli_type or "").strip().lower() == "codex" and runtime_image_attachments
+        else 0
+    )
+    if runtime_image_attachments:
+        meta["runtime_attachment_summary"] = _build_runtime_attachment_summary(
+            runtime_image_attachments,
+            adapter_image_arg_count=runtime_image_arg_count,
+            actual_cli_invoked=False,
+        )
+        if claude_image_path_fallback:
+            meta["claude_image_path_fallback"] = _build_claude_image_path_fallback_summary(runtime_image_attachments)
+        meta["image_passed"] = False
+        meta["adapter_image_arg_count"] = runtime_image_arg_count
+        try:
+            store.save_meta(run_id, meta)
+        except Exception:
+            pass
+    if str(cli_type or "").strip().lower() == "codebuddy":
+        codebuddy_permission_mode = normalize_codebuddy_permission_mode(meta.get("codebuddy_permission_mode"))
+        meta["codebuddy_permission_mode"] = codebuddy_permission_mode
+        spawn_env["TASK_DASHBOARD_CODEBUDDY_PERMISSION_MODE"] = codebuddy_permission_mode
+        spawn_cmd = apply_codebuddy_permission_mode_to_runner_command(spawn_cmd, codebuddy_permission_mode)
+        try:
+            store.save_meta(run_id, meta)
+        except Exception:
+            pass
+    if str(cli_type or "").strip().lower() == "claude":
+        claude_permission_mode = normalize_claude_permission_mode(meta.get("claude_permission_mode"))
+        meta["claude_permission_mode"] = claude_permission_mode
+        spawn_env["TASK_DASHBOARD_CLAUDE_PERMISSION_MODE"] = claude_permission_mode
+        spawn_cmd = apply_claude_permission_mode_to_runner_command(spawn_cmd, claude_permission_mode)
+        try:
+            store.save_meta(run_id, meta)
+        except Exception:
+            pass
 
     try:
         log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -537,31 +1229,53 @@ def run_cli_exec(
                 bufsize=1,
                 env=spawn_env,
             )
+            if str(cli_type or "").strip().lower() == "codex":
+                meta["actual_cli_invoked"] = True
+                meta["deterministic_fallback_used"] = False
+                if runtime_image_attachments:
+                    meta["runtime_attachment_summary"] = _build_runtime_attachment_summary(
+                        runtime_image_attachments,
+                        adapter_image_arg_count=runtime_image_arg_count,
+                        actual_cli_invoked=True,
+                    )
+                    meta["image_passed"] = bool(
+                        meta["runtime_attachment_summary"].get("image_passed")
+                    )
+                    meta["adapter_image_arg_count"] = runtime_image_arg_count
+                try:
+                    store.save_meta(run_id, meta)
+                except Exception:
+                    pass
             registry = __getattr__("RUN_PROCESS_REGISTRY")
             registry.register(run_id, proc)
             try:
                 lock = threading.Lock()
                 err_buf: list[str] = []
                 live_auth_error: dict[str, str] = {"text": ""}
-                is_terminal_text_cli = str(cli_type or "").strip().lower() in _TERMINAL_TEXT_CLIS
+                cli_type_normalized = str(cli_type or "").strip().lower()
+                is_terminal_text_cli = cli_type_normalized in _TERMINAL_TEXT_CLIS
+                should_clear_process_fields = cli_type_normalized in _TERMINAL_TEXT_PROCESS_CLEAR_CLIS
                 existing_rows_raw = meta.get("processRows") or meta.get("process_rows") or []
                 existing_rows: list[dict[str, str]] = []
-                if isinstance(existing_rows_raw, list) and not is_terminal_text_cli:
+                if isinstance(existing_rows_raw, list) and not should_clear_process_fields:
                     for item in existing_rows_raw[-240:]:
                         if not isinstance(item, dict):
                             continue
                         text = _safe_text(item.get("text"), 3000).strip()
                         if not text:
                             continue
-                        existing_rows.append(
-                            {
-                                "text": text,
-                                "at": str(item.get("at") or item.get("timestamp") or item.get("time") or "").strip(),
-                            }
-                        )
-                existing_events_raw = meta.get("process_events") or []
+                        row = {
+                            "text": text,
+                            "at": str(item.get("at") or item.get("timestamp") or item.get("time") or "").strip(),
+                        }
+                        for optional_key in ("event_type", "item_type", "title", "path", "source"):
+                            optional_value = _safe_text(item.get(optional_key), 1000).strip()
+                            if optional_value:
+                                row[optional_key] = optional_value
+                        existing_rows.append(row)
+                existing_events_raw = meta.get("process_events") or meta.get("processEvents") or []
                 existing_events: list[dict[str, str]] = []
-                if isinstance(existing_events_raw, list) and not is_terminal_text_cli:
+                if isinstance(existing_events_raw, list) and not should_clear_process_fields:
                     for item in existing_events_raw[-240:]:
                         if not isinstance(item, dict):
                             continue
@@ -582,9 +1296,11 @@ def run_cli_exec(
                 if is_terminal_text_cli:
                     meta["agentMessagesCount"] = 0
                     meta["partialPreview"] = ""
-                    meta["processRows"] = []
-                    meta["process_rows"] = []
-                    meta["process_events"] = []
+                    if should_clear_process_fields:
+                        meta["processRows"] = []
+                        meta["process_rows"] = []
+                        meta["process_events"] = []
+                        meta["processEvents"] = []
                 process_state: dict[str, Any] = {
                     "count": 0 if is_terminal_text_cli else int(meta.get("agentMessagesCount") or 0),
                     "latest": "" if is_terminal_text_cli else str(meta.get("partialPreview") or ""),
@@ -776,6 +1492,27 @@ def run_cli_exec(
 
                 t_out.join(timeout=1.5)
                 t_err.join(timeout=1.5)
+                if cli_type_normalized in {"codebuddy", "claude"}:
+                    with lock:
+                        has_process_fields = bool(
+                            meta.get("processRows") or meta.get("process_events") or meta.get("processEvents")
+                        )
+                    if not has_process_fields:
+                        recovered_events = extract_process_events_from_file(
+                            log_path,
+                            max_items=240,
+                            cli_type=cli_type_normalized,
+                        )
+                        if recovered_events:
+                            with lock:
+                                for event in recovered_events:
+                                    runtime_append_process_event(
+                                        process_state,
+                                        meta,
+                                        event,
+                                        safe_text=_safe_text,
+                                        now_iso=_now_iso,
+                                    )
                 latest_meta = store.load_meta(run_id) or {}
                 interrupt_requested_at = str(latest_meta.get("interruptRequestedAt") or "").strip()
                 interrupted_by_user = registry.consume_interrupted(run_id)
@@ -813,6 +1550,11 @@ def run_cli_exec(
                 elif interrupted_by_user:
                     meta["status"] = "error"
                     meta["error"] = "interrupted by user"
+                    meta["interrupt_origin"] = "user"
+                    meta["interrupt_requested_by"] = "user"
+                    if interrupt_requested_at:
+                        meta["interrupt_requested_at"] = interrupt_requested_at
+                    meta["chain_state"] = "cancelled_by_user"
                     meta.pop("errorType", None)
                     with lock:
                         logf.write("\n[system] interrupted by user\n")
@@ -981,9 +1723,20 @@ def run_cli_exec(
                                     logf.write(log_line)
                                     logf.flush()
                     else:
-                        terminal_error = __getattr__("_detect_terminal_text_cli_incomplete_error")(
-                            cli_type,
-                            log_path=log_path,
+                        harvested_final = ""
+                        if cli_type_normalized == "claude":
+                            harvested_final = _harvest_terminal_final_text(
+                                last_path,
+                                log_path,
+                                cli_type=cli_type_normalized,
+                            )
+                        terminal_error = (
+                            ""
+                            if harvested_final
+                            else __getattr__("_detect_terminal_text_cli_incomplete_error")(
+                                cli_type,
+                                log_path=log_path,
+                            )
                         )
                         if terminal_error:
                             meta["status"] = "error"
@@ -1011,20 +1764,18 @@ def run_cli_exec(
     meta.pop("interruptRequestedAt", None)
     meta.pop("interruptRequestedBy", None)
     meta["finishedAt"] = _now_iso()
-    try:
-        last = last_path.read_text(encoding="utf-8", errors="replace")
-        meta["lastPreview"] = _safe_text(last.replace("\r\n", "\n").strip(), 300)
-    except Exception:
-        last = ""
-    if not str(last or "").strip():
-        last = extract_terminal_message_from_file(log_path, cli_type=cli_type)
-        if last:
-            meta["lastPreview"] = _safe_text(last.replace("\r\n", "\n").strip(), 300)
-    if str(cli_type or "").strip().lower() in _TERMINAL_TEXT_CLIS:
+    cli_type_normalized = str(cli_type or "").strip().lower()
+    last = _harvest_terminal_final_text(last_path, log_path, cli_type=cli_type_normalized)
+    if last:
+        meta["lastPreview"] = _safe_text(last, 300)
+    if cli_type_normalized in _TERMINAL_TEXT_CLIS:
         meta["agentMessagesCount"] = 0
         meta["partialPreview"] = ""
-        meta["processRows"] = []
-        meta["process_rows"] = []
+        if cli_type_normalized in _TERMINAL_TEXT_PROCESS_CLEAR_CLIS:
+            meta["processRows"] = []
+            meta["process_rows"] = []
+            meta["process_events"] = []
+            meta["processEvents"] = []
     try:
         skill_texts: list[str] = []
         if last:
@@ -1050,6 +1801,33 @@ def run_cli_exec(
         meta["business_refs"] = __getattr__("_normalize_business_refs_value")(meta.get("business_refs"), max_items=24)
     try:
         reconcile_generated_media_for_run(store, run_id, meta, log_path=log_path)
+    except Exception:
+        pass
+    try:
+        log_tail = __getattr__("_tail_text")(log_path, max_chars=24_000)
+    except Exception:
+        log_tail = ""
+    try:
+        runtime_apply_run_failure_classification(meta, log_text=log_tail, last_text=last)
+    except Exception:
+        pass
+    try:
+        retry_run_id = _schedule_provider_auto_retry_run(
+            store,
+            meta,
+            scheduler=scheduler,
+            cli_type=cli_type,
+        )
+        if retry_run_id:
+            try:
+                with log_path.open("a", encoding="utf-8") as logf:
+                    logf.write(
+                        "\n[system] provider transient failure eligible, scheduled "
+                        f"auto retry run={retry_run_id} attempt={meta.get('providerRetryAttempt')} "
+                        f"in {meta.get('providerRetryScheduledAt')}\n"
+                    )
+            except Exception:
+                pass
     except Exception:
         pass
     current_count = int(meta.get("agentMessagesCount") or 0)

@@ -41,6 +41,30 @@ class SessionStoreModelTests(unittest.TestCase):
             got = store.get_session("11111111-1111-1111-1111-111111111111") or {}
             self.assertEqual(got.get("model"), "codex-spark")
 
+    def test_update_session_supports_status(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            store = SessionStore(base_dir=Path(td))
+            store.create_session(
+                project_id="task_dashboard",
+                channel_name="辅助04-原型设计与Demo可视化（静态数据填充-业务规格确认）",
+                cli_type="codex",
+                session_id="12121212-1212-1212-1212-121212121212",
+            )
+            inactive = store.update_session(
+                "12121212-1212-1212-1212-121212121212",
+                status="inactive",
+            ) or {}
+            self.assertEqual(inactive.get("status"), "inactive")
+
+            active = store.update_session(
+                "12121212-1212-1212-1212-121212121212",
+                status="active",
+            ) or {}
+            self.assertEqual(active.get("status"), "active")
+
+            got = store.get_session("12121212-1212-1212-1212-121212121212") or {}
+            self.assertEqual(got.get("status"), "active")
+
     def test_update_session_supports_reasoning_effort(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             store = SessionStore(base_dir=Path(td))

@@ -317,6 +317,52 @@ def _build_session_health_runtime_shell_data(
     }
 
 
+def _build_runstore_health_runtime_shell_data(
+    *,
+    projects_meta: list[dict[str, Any]],
+    generated_at: str,
+    task_page_link: str,
+    overview_page_link: str,
+    session_health_page_link: str,
+    runstore_health_page_link: str,
+) -> dict[str, Any]:
+    project_summaries: list[dict[str, str]] = []
+    for project in projects_meta:
+        if not isinstance(project, dict):
+            continue
+        project_id = _as_str(project.get("id")).strip()
+        if not project_id:
+            continue
+        project_summaries.append(
+            {
+                "project_id": project_id,
+                "project_name": _as_str(project.get("name") or project_id).strip() or project_id,
+            }
+        )
+    primary_project_id, primary_project_name = _pick_primary_project_meta(project_summaries)
+    return {
+        "generated_at": generated_at,
+        "project_id": primary_project_id,
+        "project_name": primary_project_name,
+        "title": "RunStore Health 运行记录治理",
+        "subtitle": "独立查看 hot 运行记录规模、风险和受控归档入口；归档不是删除。",
+        "live_health_endpoint": f"/api/runstore/health?projectId={quote(primary_project_id)}" if primary_project_id else "",
+        "live_hot_runs_endpoint": f"/api/runstore/hot-runs?projectId={quote(primary_project_id)}" if primary_project_id else "",
+        "archive_dry_run_endpoint": "/api/runstore/archive/dry-run",
+        "archive_execute_endpoint": "/api/runstore/archive/execute",
+        "projects": project_summaries,
+        "links": {
+            "task_page": task_page_link,
+            "overview_page": overview_page_link,
+            "session_health_page": session_health_page_link,
+            "runstore_health_page": runstore_health_page_link,
+        },
+        "summary": {
+            "note": "静态构建只注入页面壳子；运行数据由同源 RunStore API 按项目拉取。",
+        },
+    }
+
+
 def _resolve_optional_path(root: Path, raw: str) -> Path | None:
     value = _as_str(raw).strip()
     if not value:
@@ -735,6 +781,12 @@ def main(argv: list[str] | None = None) -> int:
         help="session health page output html path (relative to root)",
     )
     ap.add_argument(
+        "--out-runstore-health",
+        type=str,
+        default="dist/project-runstore-health.html",
+        help="RunStore health page output html path (relative to root)",
+    )
+    ap.add_argument(
         "--out-message-risk-dashboard",
         type=str,
         default="dist/project-message-risk-dashboard.html",
@@ -823,6 +875,9 @@ def main(argv: list[str] | None = None) -> int:
     session_health_page_link = str(
         os.environ.get("TASK_DASHBOARD_SESSION_HEALTH_PAGE_LINK") or "project-session-health-dashboard.html"
     ).strip() or "project-session-health-dashboard.html"
+    runstore_health_page_link = str(
+        os.environ.get("TASK_DASHBOARD_RUNSTORE_HEALTH_PAGE_LINK") or "project-runstore-health.html"
+    ).strip() or "project-runstore-health.html"
     message_risk_page_link = str(
         os.environ.get("TASK_DASHBOARD_MESSAGE_RISK_PAGE_LINK") or "project-message-risk-dashboard.html"
     ).strip() or "project-message-risk-dashboard.html"
@@ -845,6 +900,7 @@ def main(argv: list[str] | None = None) -> int:
     out_agent_directory_path = (root / args.out_agent_directory).resolve()
     out_agent_relationship_board_path = (root / args.out_agent_relationship_board).resolve()
     out_session_health_path = (root / args.out_session_health).resolve()
+    out_runstore_health_path = (root / args.out_runstore_health).resolve()
     out_message_risk_dashboard_path = (root / args.out_message_risk_dashboard).resolve()
     out_agent_capability_report_path = (root / args.out_agent_capability_report).resolve()
     out_agent_curtain_path = (root / args.out_agent_curtain).resolve()
@@ -858,6 +914,7 @@ def main(argv: list[str] | None = None) -> int:
     out_agent_directory_path.parent.mkdir(parents=True, exist_ok=True)
     out_agent_relationship_board_path.parent.mkdir(parents=True, exist_ok=True)
     out_session_health_path.parent.mkdir(parents=True, exist_ok=True)
+    out_runstore_health_path.parent.mkdir(parents=True, exist_ok=True)
     out_message_risk_dashboard_path.parent.mkdir(parents=True, exist_ok=True)
     out_agent_capability_report_path.parent.mkdir(parents=True, exist_ok=True)
     out_agent_curtain_path.parent.mkdir(parents=True, exist_ok=True)
@@ -886,6 +943,10 @@ def main(argv: list[str] | None = None) -> int:
             continue
         project_execution_context = _project_execution_context_from_config(root, pc)
 
+        def _is_primary_session_row(row: dict[str, Any]) -> bool:
+            role = _as_str(row.get("session_role")).strip().lower()
+            return bool(row.get("is_primary")) or role in {"primary", "main", "主会话"}
+
         map_from_store: dict[str, dict[str, Any]] = {}
         sessions_from_store = _load_project_session_rows(
             root,
@@ -898,6 +959,14 @@ def main(argv: list[str] | None = None) -> int:
             ch_name = _as_str(sess.get("channel_name")).strip()
             if not ch_name:
                 continue
+            existing = map_from_store.get(ch_name)
+            if existing is not None:
+                existing_primary = _is_primary_session_row(existing)
+                current_primary = _is_primary_session_row(sess)
+                if existing_primary and not current_primary:
+                    continue
+                if existing_primary == current_primary:
+                    continue
             session_context = _session_project_execution_context(sess, project_execution_context)
             map_from_store[ch_name] = {
                 "name": ch_name,
@@ -1305,6 +1374,7 @@ def main(argv: list[str] | None = None) -> int:
             "agent_curtain_page": agent_curtain_page_link,
             "agent_relationship_board_page": agent_relationship_board_page_link,
             "session_health_page": session_health_page_link,
+            "runstore_health_page": runstore_health_page_link,
             "agent_capability_page": agent_capability_page_link,
         },
         "project_chat_page": project_chat_page_link,
@@ -1316,6 +1386,7 @@ def main(argv: list[str] | None = None) -> int:
         "open_source_sync_page": open_source_sync_page_link,
         "platform_architecture_board_page": platform_architecture_board_page_link,
         "session_health_page": session_health_page_link,
+        "runstore_health_page": runstore_health_page_link,
         "agent_capability_page": agent_capability_page_link,
         "overview": overview_data,
     }
@@ -1398,6 +1469,14 @@ def main(argv: list[str] | None = None) -> int:
         agent_curtain_page_link=agent_curtain_page_link,
         session_health_page_link=session_health_page_link,
         agent_directory_page_link=agent_directory_page_link,
+    )
+    runstore_health_page_data: dict[str, Any] = _build_runstore_health_runtime_shell_data(
+        projects_meta=projects_meta,
+        generated_at=task_data["generated_at"],
+        task_page_link=task_page_link,
+        overview_page_link=overview_page_link,
+        session_health_page_link=session_health_page_link,
+        runstore_health_page_link=runstore_health_page_link,
     )
     if not fast_static_build:
         session_health_page_data = build_session_health_page(
@@ -1570,4 +1649,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     out_session_health_path.write_text(session_health_html, encoding="utf-8")
     print(f"Wrote: {out_session_health_path}")
+
+    runstore_health_html = render_from_template(
+        script_dir,
+        "template_runstore_health.html",
+        runstore_health_page_data,
+    )
+    out_runstore_health_path.write_text(runstore_health_html, encoding="utf-8")
+    print(f"Wrote: {out_runstore_health_path}")
     return 0

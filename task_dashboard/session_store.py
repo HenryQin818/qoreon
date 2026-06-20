@@ -36,6 +36,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+from task_dashboard.claude_models import normalize_claude_model
+from task_dashboard.claude_permissions import normalize_claude_permission_mode
+from task_dashboard.codebuddy_permissions import normalize_codebuddy_permission_mode
 from task_dashboard.runtime.project_execution_context import (
     build_context_override_values,
     normalize_project_execution_context,
@@ -191,7 +194,19 @@ class SessionStore:
             if isinstance(project_execution_context, dict)
             else {}
         )
+        raw_claude_permission_mode = str(out.get("claude_permission_mode") or "").strip()
+        cli_type = str(out.get("cli_type") or "codex").strip().lower()
+        out["model"] = (
+            normalize_claude_model(out.get("model"))
+            if cli_type == "claude"
+            else str(out.get("model") or "").strip()
+        )
         out["reasoning_effort"] = _normalize_reasoning_effort_value(out.get("reasoning_effort"))
+        out["codebuddy_permission_mode"] = normalize_codebuddy_permission_mode(out.get("codebuddy_permission_mode"))
+        if cli_type == "claude" or raw_claude_permission_mode:
+            out["claude_permission_mode"] = normalize_claude_permission_mode(raw_claude_permission_mode)
+        else:
+            out.pop("claude_permission_mode", None)
         return self._apply_project_context_storage_semantics_to_normalized(out)
 
     def _apply_project_context_storage_semantics(self, session: dict[str, Any]) -> dict[str, Any]:
@@ -258,6 +273,8 @@ class SessionStore:
         session_id: str = "",
         model: str = "",
         reasoning_effort: str = "",
+        codebuddy_permission_mode: str = "",
+        claude_permission_mode: str = "",
         environment: str = "",
         worktree_root: str = "",
         workdir: str = "",
@@ -297,6 +314,10 @@ class SessionStore:
             "alias": alias or "",
             "model": str(model or "").strip(),
             "reasoning_effort": _normalize_reasoning_effort_value(reasoning_effort),
+            "codebuddy_permission_mode": normalize_codebuddy_permission_mode(codebuddy_permission_mode),
+            "claude_permission_mode": normalize_claude_permission_mode(claude_permission_mode)
+            if str(claude_permission_mode or "").strip()
+            else "",
             "environment": str(environment or "").strip(),
             "worktree_root": str(worktree_root or "").strip(),
             "workdir": str(workdir or "").strip(),
@@ -354,6 +375,8 @@ class SessionStore:
         alias: str = "",
         model: str = "",
         reasoning_effort: str = "",
+        codebuddy_permission_mode: str = "",
+        claude_permission_mode: str = "",
         environment: str = "",
         worktree_root: str = "",
         workdir: str = "",
@@ -401,6 +424,10 @@ class SessionStore:
                 update_fields["model"] = str(model).strip()
             if reasoning_effort:
                 update_fields["reasoning_effort"] = _normalize_reasoning_effort_value(reasoning_effort)
+            if codebuddy_permission_mode:
+                update_fields["codebuddy_permission_mode"] = normalize_codebuddy_permission_mode(codebuddy_permission_mode)
+            if claude_permission_mode:
+                update_fields["claude_permission_mode"] = normalize_claude_permission_mode(claude_permission_mode)
             if environment:
                 update_fields["environment"] = str(environment).strip()
             if worktree_root:
@@ -432,6 +459,8 @@ class SessionStore:
             session_id=sid,
             model=model,
             reasoning_effort=reasoning_effort,
+            codebuddy_permission_mode=codebuddy_permission_mode,
+            claude_permission_mode=claude_permission_mode,
             environment=environment,
             worktree_root=worktree_root,
             workdir=workdir,
@@ -482,10 +511,13 @@ class SessionStore:
                         # Update allowed fields
                         allowed_fields = {
                             "alias",
+                            "status",
                             "channel_name",
                             "cli_type",
                             "model",
                             "reasoning_effort",
+                            "codebuddy_permission_mode",
+                            "claude_permission_mode",
                             "environment",
                             "worktree_root",
                             "workdir",

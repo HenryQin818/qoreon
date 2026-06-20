@@ -7,6 +7,7 @@
         || outcome === "interrupted_user"
         || outcome === "failed_config"
         || outcome === "failed_business"
+        || outcome === "provider_transient_failed"
       ) {
         return "error";
       }
@@ -198,6 +199,72 @@
       return null;
     }
 
+    function isConversationRunWorkingForPoll(run) {
+      const item = (run && typeof run === "object") ? run : {};
+      const rid = String(item.id || "").trim();
+      const detail = rid && typeof PCONV !== "undefined" && PCONV && PCONV.detailMap ? (PCONV.detailMap[rid] || null) : null;
+      const displayState = typeof getRunDisplayState === "function"
+        ? String(getRunDisplayState(item, detail) || "").trim().toLowerCase()
+        : "";
+      const detailStates = [
+        detail && detail.status,
+        detail && detail.display_state,
+        detail && detail.displayState,
+        detail && detail.full && detail.full.run && detail.full.run.status,
+        detail && detail.full && detail.full.run && detail.full.run.display_state,
+        detail && detail.full && detail.full.run && detail.full.run.displayState,
+        detail && detail.full && detail.full.run && detail.full.run.outcome_state,
+        detail && detail.full && detail.full.run && detail.full.run.outcomeState,
+      ].map((raw) => String(raw || "").trim().toLowerCase()).filter(Boolean);
+      const hasTerminalDetail = detailStates.some((st) => (
+        st === "done"
+        || st === "success"
+        || st === "error"
+        || st === "failed"
+        || st === "cancelled"
+        || st === "canceled"
+        || st === "interrupted"
+        || st === "interrupted_infra"
+        || st === "interrupted_user"
+      ));
+      const hasWorkingDetail = detailStates.some((st) => (
+        st === "running" || st === "queued" || st === "retry_waiting"
+      ));
+      if (hasTerminalDetail && !hasWorkingDetail) return false;
+      const candidates = [
+        displayState,
+        item.display_state,
+        item.displayState,
+        item.status,
+        item.state,
+        detail && detail.status,
+        detail && detail.display_state,
+        detail && detail.displayState,
+        detail && detail.full && detail.full.run && detail.full.run.status,
+        detail && detail.full && detail.full.run && detail.full.run.display_state,
+        detail && detail.full && detail.full.run && detail.full.run.displayState,
+      ];
+      return candidates.some((raw) => {
+        const st = String(raw || "").trim().toLowerCase();
+        return st === "running" || st === "queued" || st === "retry_waiting";
+      });
+    }
+
+    function conversationSelectedSessionHasWorkingRun(projectId, sessionId) {
+      const sid = String(sessionId || "").trim();
+      if (!sid || typeof PCONV === "undefined" || !PCONV) return false;
+      const pid = String(projectId || (typeof STATE !== "undefined" && STATE ? STATE.project : "") || "").trim();
+      const timelineKey = pid + "::" + sid;
+      const timelineRuns = PCONV.sessionTimelineMap && Array.isArray(PCONV.sessionTimelineMap[timelineKey])
+        ? PCONV.sessionTimelineMap[timelineKey]
+        : [];
+      const sessionRuns = PCONV.runsBySession && Array.isArray(PCONV.runsBySession[sid])
+        ? PCONV.runsBySession[sid]
+        : [];
+      return timelineRuns.some(isConversationRunWorkingForPoll)
+        || sessionRuns.some(isConversationRunWorkingForPoll);
+    }
+
     function buildConversationSessionRunSummary(currentSession, currentRuntimeState, liveRunHint = null) {
       const session = (currentSession && typeof currentSession === "object") ? currentSession : {};
       const runtimeState = (currentRuntimeState && typeof currentRuntimeState === "object") ? currentRuntimeState : {};
@@ -301,6 +368,102 @@
           meta.updatedAt ? ("updated_at: " + meta.updatedAt) : "",
         ].filter(Boolean).join("\n"),
       };
+    }
+
+    function buildConversationProjectionExplanationCard(meta) {
+      const item = (meta && typeof meta === "object") ? meta : null;
+      if (!item || !item.heading) return null;
+      const root = el("div", {
+        class: "conv-projection-explain " + String(item.tone || "muted"),
+        title: String(item.title || item.heading || ""),
+      });
+      const icon = el("div", { class: "conv-projection-explain-icon", text: "i", "aria-hidden": "true" });
+      const body = el("div", { class: "conv-projection-explain-body" });
+      body.appendChild(el("div", {
+        class: "conv-projection-explain-title",
+        text: String(item.heading || ""),
+      }));
+      body.appendChild(el("div", {
+        class: "conv-projection-explain-text",
+        text: String(item.body || "当前忙态没有可投影为普通正文的消息。"),
+      }));
+      const details = (Array.isArray(item.details) ? item.details : [])
+        .map((one) => {
+          const row = (one && typeof one === "object") ? one : {};
+          return {
+            label: String(row.label || "").trim(),
+            text: String(row.text || "").trim(),
+          };
+        })
+        .filter((one) => one.label && one.text)
+        .slice(0, 4);
+      if (details.length) {
+        const detailGrid = el("div", { class: "conv-projection-explain-details" });
+        details.forEach((one) => {
+          const row = el("div", { class: "conv-projection-explain-detail" });
+          row.appendChild(el("span", { class: "conv-projection-explain-detail-k", text: one.label }));
+          row.appendChild(el("span", { class: "conv-projection-explain-detail-v", text: one.text }));
+          detailGrid.appendChild(row);
+        });
+        body.appendChild(detailGrid);
+      }
+      const chips = (Array.isArray(item.chips) ? item.chips : [])
+        .map((one) => String(one || "").trim())
+        .filter(Boolean)
+        .slice(0, 4);
+      if (chips.length) {
+        const chipRow = el("div", { class: "conv-projection-explain-chips" });
+        chips.forEach((chipText) => chipRow.appendChild(el("span", {
+          class: "conv-projection-explain-chip",
+          text: chipText,
+        })));
+        body.appendChild(chipRow);
+      }
+      root.appendChild(icon);
+      root.appendChild(body);
+      return root;
+    }
+
+    function buildConversationSessionBindingBlockCard(meta, sessionId) {
+      const item = (meta && typeof meta === "object") ? meta : null;
+      if (!item) return null;
+      const chips = ["普通发送已暂停"];
+      if (item.runId) chips.push("run " + shortId(item.runId));
+      const card = buildConversationProjectionExplanationCard({
+        tone: "warn",
+        heading: item.heading || "配置阻塞：会话绑定失败",
+        body: item.body || "CLI conversation 未完成初始化或已丢失；请重试初始化或等待后端修复。",
+        title: item.title || item.body || "",
+        chips,
+      });
+      if (!card) return null;
+      const sid = String(sessionId || "").trim();
+      const body = card.querySelector(".conv-projection-explain-body");
+      if (sid && body && typeof requestConversationSessionDetailHydration === "function") {
+        const actionRow = el("div", { class: "conv-projection-explain-actions" });
+        const retry = el("button", {
+          class: "conv-projection-explain-action",
+          text: "点击重试状态",
+          type: "button",
+          title: "重新读取该 Agent 的最新绑定状态",
+        });
+        retry.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          retry.disabled = true;
+          retry.textContent = "状态更新中";
+          const task = requestConversationSessionDetailHydration(sid, {
+            force: true,
+            reason: "session_binding_block_retry",
+          });
+          Promise.resolve(task)
+            .catch(() => {})
+            .finally(() => renderConversationDetail(false));
+        });
+        actionRow.appendChild(retry);
+        body.appendChild(actionRow);
+      }
+      return card;
     }
 
     function buildConversationRuntimeShadowRuns(ctx, currentSession, currentRuntimeState, shadowMeta) {
@@ -2613,6 +2776,10 @@
           status: String(runtimeState.status || runtimeState.display_state || "").trim(),
           active_run_id: String(runtimeState.active_run_id || "").trim(),
           queued_run_id: String(runtimeState.queued_run_id || "").trim(),
+          busy_source: String(runtimeState.busy_source || "").trim(),
+          display_secondary_state: String(runtimeState.display_secondary_state || "").trim(),
+          active_run_visibility: String(runtimeState.active_run_visibility || "").trim(),
+          active_run_projection_reason: String(runtimeState.active_run_projection_reason || "").trim(),
         },
         runs,
       });
@@ -3339,8 +3506,24 @@
         renderConversationFileEntry(ctx);
         PCONV.taskDrawerOpen = true;
         PCONV.taskDrawerSessionKey = key;
-        renderConversationTaskDrawer(payload);
-        renderConversationTaskEntry(ctx, payload);
+        let nextPayload = payload;
+        if (typeof requestConversationSessionDetailHydration === "function") {
+          const task = requestConversationSessionDetailHydration(ctx.sessionId, {
+            maxAgeMs: 60_000,
+            reason: "task_drawer",
+          });
+          Promise.resolve(task)
+            .catch(() => {})
+            .finally(() => {
+              if (PCONV.taskDrawerOpen && String(PCONV.taskDrawerSessionKey || "") === key) {
+                renderConversationTaskDrawer(currentConversationTaskPayload());
+              }
+              renderConversationDetail(false);
+            });
+          nextPayload = currentConversationTaskPayload();
+        }
+        renderConversationTaskDrawer(nextPayload);
+        renderConversationTaskEntry(ctx, nextPayload);
       };
     }
 
@@ -3433,6 +3616,41 @@
       return ids.has(rid);
     }
 
+    function renderConversationDetailHydrationHint(hintEl, sessionId, session = null) {
+      const box = hintEl || null;
+      if (!box) return;
+      box.innerHTML = "";
+      const sid = String(sessionId || "").trim();
+      if (!sid || typeof conversationSessionDetailHydrationStatus !== "function") return;
+      const meta = conversationSessionDetailHydrationStatus(sid, session);
+      const state = String((meta && meta.state) || "").trim();
+      if (!meta || !state || state === "ready" || state === "idle") return;
+      const wrap = el("div", { class: "conv-detail-hydration is-" + state });
+      const label = el("span", { class: "conv-detail-hydration-label", text: String(meta.label || "状态可能延迟") });
+      const message = el("span", { class: "conv-detail-hydration-message", text: String(meta.message || "后台补全中") });
+      wrap.appendChild(label);
+      wrap.appendChild(message);
+      if (meta.canRetry && typeof requestConversationSessionDetailHydration === "function") {
+        const retry = el("button", { class: "conv-detail-hydration-retry", text: "点击重试状态", type: "button" });
+        retry.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          retry.disabled = true;
+          retry.textContent = "状态更新中";
+          const task = requestConversationSessionDetailHydration(sid, {
+            force: true,
+            reason: "manual_retry",
+          });
+          renderConversationDetail(false);
+          Promise.resolve(task)
+            .catch(() => {})
+            .finally(() => renderConversationDetail(false));
+        });
+        wrap.appendChild(retry);
+      }
+      box.appendChild(wrap);
+    }
+
     function renderConversationDetail(forceScroll = false) {
       const titleEl = document.getElementById("detailTitle");
       const subEl = document.getElementById("detailSub");
@@ -3465,6 +3683,10 @@
         subEl.textContent = "";
         hintEl.textContent = "";
         if (senderHintEl) senderHintEl.textContent = "";
+        if (typeof renderConversationComposerCodeBuddyModel === "function") renderConversationComposerCodeBuddyModel(null);
+        if (typeof renderConversationComposerCodeBuddyPermissionMode === "function") renderConversationComposerCodeBuddyPermissionMode(null);
+        if (typeof renderConversationComposerClaudeModel === "function") renderConversationComposerClaudeModel(null);
+        if (typeof renderConversationComposerClaudePermissionMode === "function") renderConversationComposerClaudePermissionMode(null);
         renderConversationEnterSendToggle(false);
         renderConversationQuickTips(null, []);
         renderConversationTrainingPrompt(null, []);
@@ -3497,6 +3719,10 @@
         subEl.textContent = "";
         hintEl.textContent = "";
         if (senderHintEl) senderHintEl.textContent = "";
+        if (typeof renderConversationComposerCodeBuddyModel === "function") renderConversationComposerCodeBuddyModel(null);
+        if (typeof renderConversationComposerCodeBuddyPermissionMode === "function") renderConversationComposerCodeBuddyPermissionMode(null);
+        if (typeof renderConversationComposerClaudeModel === "function") renderConversationComposerClaudeModel(null);
+        if (typeof renderConversationComposerClaudePermissionMode === "function") renderConversationComposerClaudePermissionMode(null);
         renderConversationEnterSendToggle(false);
         renderConversationQuickTips(null, []);
         renderConversationTrainingPrompt(null, []);
@@ -3527,8 +3753,19 @@
       const agentDisplay = firstNonEmptyText([ctx.agentName, ctx.alias, ctx.displayChannel]) || "未命名会话";
       const currentSession = findConversationSessionById(String(ctx.sessionId || ""));
       const currentSessionId = String(ctx.sessionId || "").trim();
-      if (currentSessionId && typeof ensureConversationSessionDetailLoaded === "function") {
-        ensureConversationSessionDetailLoaded(currentSessionId, { maxAgeMs: 15_000 }).catch(() => {});
+      const sessionBindingBlockMeta = typeof conversationSessionBindingBlockMeta === "function"
+        ? conversationSessionBindingBlockMeta(currentSession)
+        : null;
+      if (
+        currentSessionId
+        && typeof scheduleConversationSessionDetailHydration === "function"
+        && !(typeof conversationSessionHasDetailPayload === "function" && conversationSessionHasDetailPayload(currentSession))
+      ) {
+        scheduleConversationSessionDetailHydration(currentSessionId, {
+          delayMs: 2200,
+          maxAgeMs: 60_000,
+          reason: "detail_background",
+        });
       }
       titleEl.innerHTML = "";
       const titleRow = el("div", { class: "detail-title-row" });
@@ -3551,11 +3788,18 @@
       subEl.title = "";
       hintEl.textContent = "";
       if (senderHintEl) senderHintEl.textContent = buildConversationComposerSenderHint();
+      if (typeof renderConversationComposerCodeBuddyModel === "function") renderConversationComposerCodeBuddyModel(ctx);
+      if (typeof renderConversationComposerCodeBuddyPermissionMode === "function") renderConversationComposerCodeBuddyPermissionMode(ctx);
+      if (typeof renderConversationComposerClaudeModel === "function") renderConversationComposerClaudeModel(ctx);
+      if (typeof renderConversationComposerClaudePermissionMode === "function") renderConversationComposerClaudePermissionMode(ctx);
       renderConversationEnterSendToggle(PCONV.enterSendEnabled !== false);
-      input.placeholder = conversationComposerPlaceholder(cliChipName);
-      input.disabled = false;
-      sendBtn.disabled = PCONV.sending;
+      input.placeholder = sessionBindingBlockMeta
+        ? "会话绑定失败，暂不能发送；请重试状态或等待后端完成绑定修复"
+        : conversationComposerPlaceholder(cliChipName);
+      input.disabled = !!sessionBindingBlockMeta;
+      sendBtn.disabled = !!sessionBindingBlockMeta || PCONV.sending;
       sendBtn.textContent = PCONV.sending ? "发送中..." : "发送";
+      sendBtn.title = sessionBindingBlockMeta ? conversationSessionBindingBlockMessage(currentSession) : "";
       const memoKey = convComposerDraftKey(ctx.projectId, ctx.sessionId);
       const memoBusy = String(PCONV.memoActionBusyBySessionKey[memoKey] || "");
       if (memoSaveBtn) {
@@ -3634,10 +3878,34 @@
         liveRunHint && liveRunHint.runId,
       ]) || "").trim();
       const currentQueuedRunId = String((currentRuntimeState && currentRuntimeState.queued_run_id) || "").trim();
+      const currentLatestDoneRunId = (() => {
+        for (let i = runs.length - 1; i >= 0; i -= 1) {
+          const item = runs[i] || {};
+          const itemId = String(item.id || "").trim();
+          if (!itemId) continue;
+          const itemDetail = PCONV.detailMap[itemId] || null;
+          const itemStatus = String(getRunDisplayState(item, itemDetail) || "").trim().toLowerCase();
+          const itemOutcomeState = typeof getRunOutcomeState === "function"
+            ? String(getRunOutcomeState(item, itemDetail) || "").trim().toLowerCase()
+            : "";
+          if (itemStatus === "done" || itemOutcomeState === "success") return itemId;
+        }
+        return "";
+      })();
       hintEl.textContent = "";
       hintEl.title = "";
-      subEl.textContent = sessionRunSummary ? String(sessionRunSummary.text || "") : "";
-      subEl.title = sessionRunSummary ? String(sessionRunSummary.title || sessionRunSummary.text || "") : "";
+      subEl.textContent = sessionBindingBlockMeta
+        ? (String(sessionBindingBlockMeta.heading || "配置阻塞：会话绑定失败") + " · " + String(sessionBindingBlockMeta.body || ""))
+        : (sessionRunSummary ? String(sessionRunSummary.text || "") : "");
+      subEl.title = sessionBindingBlockMeta
+        ? String(sessionBindingBlockMeta.title || sessionBindingBlockMeta.body || "")
+        : (sessionRunSummary ? String(sessionRunSummary.title || sessionRunSummary.text || "") : "");
+      if (sessionBindingBlockMeta) {
+        hintEl.textContent = String(sessionBindingBlockMeta.action || "请刷新状态，或等待后端完成绑定修复后再发送。");
+        hintEl.title = String(sessionBindingBlockMeta.title || sessionBindingBlockMeta.body || "");
+      } else {
+        renderConversationDetailHydrationHint(hintEl, currentSessionId, currentSession);
+      }
       const timelineLoading = PCONV.timelineLoadingKey === timelineKey;
       const timelineLoadingBefore = PCONV.timelineBeforeLoadingKey === timelineKey;
       const timelineBeforeError = String(PCONV.timelineBeforeErrorByKey[timelineKey] || "");
@@ -3646,8 +3914,14 @@
       const timelineHasMoreBefore = hasStoredBeforeFlag
         ? !!PCONV.timelineBeforeHasMoreByKey[timelineKey]
         : (hasSessionTimelineCache ? runs.length >= CONV_PAGE.timelineInitial : runs.length > 0);
-      renderConversationQuickTips(ctx, runs);
-      renderConversationTrainingPrompt(ctx, runs, { timelineReady: hasSessionTimelineCache });
+      const projectionExplanationMeta = typeof conversationProjectionExplanationMeta === "function"
+        ? conversationProjectionExplanationMeta(currentSession, currentRuntimeState, runs, { timelineLoading })
+        : null;
+      const identityExplanationMeta = typeof agentIdentityExplanationMeta === "function"
+        ? agentIdentityExplanationMeta(currentSession)
+        : null;
+      renderConversationQuickTips(sessionBindingBlockMeta ? null : ctx, sessionBindingBlockMeta ? [] : runs);
+      renderConversationTrainingPrompt(sessionBindingBlockMeta ? null : ctx, sessionBindingBlockMeta ? [] : runs, { timelineReady: hasSessionTimelineCache });
       refreshConversationRecentAgentsFromRuns(ctx, runs);
       renderConvComposerRunActions(ctx, runs);
       // 找到“最新可展开”的 AI 正文：
@@ -3690,7 +3964,7 @@
         PCONV.autoExpandedLatestBubbleKey = latestExpandableBubbleKey;
       }
 
-      if (!runs.length && !(PCONV.optimistic && PCONV.optimistic.sessionId === ctx.sessionId)) {
+      if (!runs.length && !projectionExplanationMeta && !identityExplanationMeta && !sessionBindingBlockMeta && !(PCONV.optimistic && PCONV.optimistic.sessionId === ctx.sessionId)) {
         appendTimelineNode(el("div", { class: "hint", text: timelineLoading ? "加载会话记录中..." : "该会话暂无消息记录，可直接在下方发送消息。" }));
       }
 
@@ -3714,6 +3988,16 @@
           historyBar.appendChild(el("span", { class: "conv-history-done", text: "历史消息已全部加载" }));
         }
         appendTimelineNode(historyBar);
+      }
+
+      if (identityExplanationMeta) {
+        appendTimelineNode(buildConversationProjectionExplanationCard(identityExplanationMeta));
+      }
+      if (projectionExplanationMeta) {
+        appendTimelineNode(buildConversationProjectionExplanationCard(projectionExplanationMeta));
+      }
+      if (sessionBindingBlockMeta) {
+        appendTimelineNode(buildConversationSessionBindingBlockCard(sessionBindingBlockMeta, currentSessionId));
       }
 
       const seenCallbackEventKeys = new Set();
@@ -3943,6 +4227,7 @@
           mentionTargets,
           currentActiveRunId,
           currentQueuedRunId,
+          currentLatestDoneRunId,
         });
         appendTimelineNode(aiRow);
       }
@@ -4385,6 +4670,26 @@
         let baseSessions = mergeConversationSessions(localSessions, serverSessions);
         PCONV.projectRuns = [];
         PCONV.runsBySession = Object.create(null);
+        try {
+          const runPayload = await loadRuns({
+            projectId,
+            limit: 30,
+            payloadMode: "summary",
+          });
+          const projectRuns = Array.isArray(runPayload && runPayload.runs) ? runPayload.runs : [];
+          PCONV.projectRuns = projectRuns.slice();
+          projectRuns.forEach((run) => {
+            const sid = String(firstNonEmptyText([run && run.sessionId, run && run.session_id]) || "").trim();
+            if (!sid) return;
+            if (!Array.isArray(PCONV.runsBySession[sid])) PCONV.runsBySession[sid] = [];
+            PCONV.runsBySession[sid].push(run);
+          });
+          if (typeof applyConversationRuntimeOverlayFromRuns === "function") {
+            baseSessions = applyConversationRuntimeOverlayFromRuns(baseSessions, projectRuns);
+          }
+        } catch (_) {
+          PCONV.projectRuns = [];
+        }
         for (const s of baseSessions) {
           const latestRunSummary = getSessionLatestRunSummary(s);
           const preferSyntheticPreviewSender = sessionUsesSyntheticPreviewSender(s, getSessionPrimaryPreviewText(s));
@@ -4509,12 +4814,18 @@
           && (
             String(selectedRuntimeState.active_run_id || "").trim()
             || String(selectedRuntimeState.queued_run_id || "").trim()
+            || ["running", "queued", "retry_waiting"].includes(String(getSessionStatus(selectedSession) || selectedRuntimeState.display_state || "").trim().toLowerCase())
           )
         );
+        const selectedSessionHasWorkingRun = selectedSessionHasRuntimeWork
+          || conversationSelectedSessionHasWorkingRun(projectId, selectedSessionId);
         const selectedFastPollAllowed = typeof shouldUseConversationSelectedRuntimeFastPoll === "function"
-          ? shouldUseConversationSelectedRuntimeFastPoll(selectedSessionHasRuntimeWork)
-          : selectedSessionHasRuntimeWork;
-        const nextPollMs = selectedFastPollAllowed ? 1200 : conversationPollDelay(projectId, hasRuntimeWorking);
+          ? shouldUseConversationSelectedRuntimeFastPoll(selectedSessionHasWorkingRun)
+          : selectedSessionHasWorkingRun;
+        const selectedFastPollMs = (typeof CONVERSATION_SELECTED_FAST_POLL_MS === "number" && CONVERSATION_SELECTED_FAST_POLL_MS > 0)
+          ? CONVERSATION_SELECTED_FAST_POLL_MS
+          : 3500;
+        const nextPollMs = selectedFastPollAllowed ? selectedFastPollMs : conversationPollDelay(projectId, hasRuntimeWorking);
         scheduleConversationPoll(nextPollMs);
       } catch (err) {
         console.error("refreshConversationPanel error:", err);

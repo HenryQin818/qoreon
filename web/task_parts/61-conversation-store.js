@@ -98,6 +98,114 @@
       return src;
     }
 
+    function conversationStoreNormalizeSessionModel(raw) {
+      if (typeof normalizeSessionModel === "function") return normalizeSessionModel(raw);
+      return String(raw || "").trim();
+    }
+
+    function conversationStoreCodeBuddyDefaultModel() {
+      if (typeof codeBuddyDefaultModel === "function") return conversationStoreNormalizeSessionModel(codeBuddyDefaultModel());
+      return "deepseek-v4-pro";
+    }
+
+    function conversationStoreIsCodeBuddyCliType(raw) {
+      if (typeof isCodeBuddyCliType === "function") return isCodeBuddyCliType(raw);
+      return String(raw || "").trim().toLowerCase() === "codebuddy";
+    }
+
+    function conversationStoreNormalizeCodeBuddyPermissionMode(raw) {
+      if (typeof normalizeCodeBuddyPermissionMode === "function") return normalizeCodeBuddyPermissionMode(raw);
+      const text = String(raw || "").trim();
+      return text === "bypassPermissions" ? "bypassPermissions" : "default";
+    }
+
+    function conversationStoreCodeBuddyDefaultPermissionMode() {
+      if (typeof codeBuddyDefaultPermissionMode === "function") {
+        return conversationStoreNormalizeCodeBuddyPermissionMode(codeBuddyDefaultPermissionMode());
+      }
+      return "default";
+    }
+
+    function conversationStoreModelSourceIsExplicit(raw) {
+      const text = String(raw || "").trim().toLowerCase();
+      return /(?:composer-model-switch|session-info|session-detail|model-save|manual|user|edit|detail)/i.test(text);
+    }
+
+    function conversationStorePermissionSourceIsExplicit(raw) {
+      const text = String(raw || "").trim().toLowerCase();
+      return /(?:composer-permission-switch|session-info|session-detail|permission-save|manual|user|edit|detail)/i.test(text);
+    }
+
+    function conversationStoreHasCodeBuddyPermissionMode(row) {
+      const src = (row && typeof row === "object") ? row : {};
+      if (src._codebuddy_permission_mode_present === true || src.codebuddyPermissionModePresent === true) return true;
+      return Object.prototype.hasOwnProperty.call(src, "codebuddy_permission_mode")
+        || Object.prototype.hasOwnProperty.call(src, "codebuddyPermissionMode");
+    }
+
+    function conversationStoreMergeSessionModel(src, prev, opts = {}) {
+      const srcModel = conversationStoreNormalizeSessionModel(src && src.model);
+      const prevModel = conversationStoreNormalizeSessionModel(prev && prev.model);
+      if (!prevModel) return srcModel;
+      if (!srcModel) return prevModel;
+      const cliType = String(
+        (src && (src.cli_type || src.cliType))
+        || (prev && (prev.cli_type || prev.cliType))
+        || ""
+      ).trim().toLowerCase();
+      if (conversationStoreIsCodeBuddyCliType(cliType)) {
+        const defaultModel = conversationStoreCodeBuddyDefaultModel();
+        const source = String(
+          (opts && opts.source)
+          || (src && (src.source || src.model_source || src.modelSource))
+          || ""
+        ).trim();
+        if (
+          srcModel === defaultModel
+          && prevModel !== defaultModel
+          && !conversationStoreModelSourceIsExplicit(source)
+        ) {
+          return prevModel;
+        }
+      }
+      return srcModel;
+    }
+
+    function conversationStoreMergeSessionPermissionMode(src, prev, opts = {}) {
+      const source = String(
+        (opts && opts.source)
+        || (src && (src.source || src.codebuddy_permission_mode_source || src.codebuddyPermissionModeSource))
+        || ""
+      ).trim();
+      const srcHasMode = conversationStoreHasCodeBuddyPermissionMode(src);
+      const srcMode = conversationStoreNormalizeCodeBuddyPermissionMode(
+        srcHasMode ? (src.codebuddy_permission_mode || src.codebuddyPermissionMode) : ""
+      );
+      const prevMode = conversationStoreNormalizeCodeBuddyPermissionMode(
+        prev && (prev.codebuddy_permission_mode || prev.codebuddyPermissionMode)
+      );
+      if (!prevMode || prevMode === "default") {
+        return srcHasMode ? srcMode : prevMode;
+      }
+      if (!srcHasMode) return prevMode;
+      const cliType = String(
+        (src && (src.cli_type || src.cliType))
+        || (prev && (prev.cli_type || prev.cliType))
+        || ""
+      ).trim().toLowerCase();
+      if (conversationStoreIsCodeBuddyCliType(cliType)) {
+        const defaultMode = conversationStoreCodeBuddyDefaultPermissionMode();
+        if (
+          srcMode === defaultMode
+          && prevMode !== defaultMode
+          && !conversationStorePermissionSourceIsExplicit(source)
+        ) {
+          return prevMode;
+        }
+      }
+      return srcMode;
+    }
+
     function conversationStoreUpsertSession(session, opts = {}) {
       const src = (session && typeof session === "object") ? session : {};
       const sid = String(src.sessionId || src.id || src.session_id || (opts && opts.sessionId) || "").trim();
@@ -113,6 +221,9 @@
         projectId: pid,
         sessionId: sid,
         id: sid,
+        model: conversationStoreMergeSessionModel(src, prev, opts),
+        codebuddy_permission_mode: conversationStoreMergeSessionPermissionMode(src, prev, opts),
+        codebuddyPermissionMode: conversationStoreMergeSessionPermissionMode(src, prev, opts),
         updatedAt: String(src.updatedAt || src.updated_at || src.lastActiveAt || src.last_used_at || prev.updatedAt || conversationStoreNowIso()),
         source: String((opts && opts.source) || src.source || prev.source || ""),
       };

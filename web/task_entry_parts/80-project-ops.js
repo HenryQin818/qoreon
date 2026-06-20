@@ -117,6 +117,11 @@
       : (((DATA && DATA.links) && DATA.links.agent_relationship_board_page)
       ? String(DATA.links.agent_relationship_board_page)
       : "/share/project-agent-relationship-board.html");
+    const RUNSTORE_HEALTH_PAGE = (DATA && DATA.runstore_health_page)
+      ? String(DATA.runstore_health_page)
+      : (((DATA && DATA.links) && DATA.links.runstore_health_page)
+      ? String(DATA.links.runstore_health_page)
+      : "/share/project-runstore-health.html");
 
     function openProjectRelationshipBoard() {
       const base = String(AGENT_RELATIONSHIP_BOARD_PAGE || "/share/project-agent-relationship-board.html").trim();
@@ -132,6 +137,22 @@
     const projectRelationshipBoardBtn = document.getElementById("projectRelationshipBoardBtn");
     if (projectRelationshipBoardBtn) {
       projectRelationshipBoardBtn.addEventListener("click", openProjectRelationshipBoard);
+    }
+
+    function openRunstoreHealthPage() {
+      const base = String(RUNSTORE_HEALTH_PAGE || "/share/project-runstore-health.html").trim();
+      const projectId = String((STATE && STATE.project) || "").trim();
+      if (!base || !projectId || projectId === "overview") return;
+      const params = new URLSearchParams();
+      params.set("p", projectId);
+      if (STATE && STATE.channel) params.set("c", String(STATE.channel));
+      if (STATE && STATE.selectedSessionId) params.set("sid", String(STATE.selectedSessionId));
+      window.open(base + "#" + params.toString(), "_blank", "noopener,noreferrer");
+    }
+
+    const runstoreHealthBtn = document.getElementById("runstoreHealthBtn");
+    if (runstoreHealthBtn) {
+      runstoreHealthBtn.addEventListener("click", openRunstoreHealthPage);
     }
 
     function getToken() {
@@ -3972,9 +3993,10 @@
       }
     }
 
-    const MESSAGE_OBJECT_TOKEN_RE = /(https?:\/\/[^\s<>"']+|\/share\/[^\s<>"']+|\/\.runs\/[^\s<>"']+|\/(?:Users|Volumes|private|tmp|var|opt|Applications|Library|System)[^\s<>"']+|(?:web|docs|tests|static_sites|task_dashboard|任务规划|\.runs|\.run)(?:\/[^\s<>"']+)+)/g;
+    const MESSAGE_OBJECT_TOKEN_RE = /(https?:\/\/[^\s<>"']+|\/share\/[^\s<>"']+|\/\.runs\/[^\s<>"']+|\/(?:Users|Volumes|private|tmp|var|opt|Applications|Library|System)[^\s<>"']+|\/(?:产出物|材料|沉淀|证据|附件|图片|截图|文档|草稿|临时|任务|问题|反馈|答复|讨论空间|已完成|暂缓|归档)(?:\/[^\s<>"']+)+|(?:web|docs|tests|static_sites|task_dashboard|任务规划|\.runs|\.run)(?:\/[^\s<>"']+)+|(?:产出物|材料|沉淀|证据|附件|图片|截图|文档|草稿|临时|任务|问题|反馈|答复|讨论空间|已完成|暂缓|归档)(?:\/[^\s<>"']+)+)/g;
+    const MESSAGE_OBJECT_CHANNEL_RELATIVE_ROOT_RE = /^(?:\/?产出物(?:\/(?:材料|沉淀|证据|附件|图片|截图|文档|草稿|临时))?|\/?(?:材料|沉淀|证据|附件|图片|截图|文档|草稿|临时)|\/?(?:任务|问题|反馈|答复|讨论空间|已完成|暂缓|归档))(?:\/.+)+$/;
     const MESSAGE_OBJECT_FILE_EXT_BOUNDARY_RE = /\.(md|markdown|html?|pdf|png|jpe?g|webp|gif|svg|docx?|xlsx?|pptx?|txt|json|csv|toml|ya?ml)(?:[?#][^\s<>"']*)?(?=$|[\s),.;:!?，。；：！？、」』】》〉])/i;
-    const MESSAGE_OBJECT_EXTENDABLE_PATH_ROOT_RE = /^(?:\/(?:Users|Volumes|private|tmp|var|opt|Applications|Library|System)(?:\/|$)|(?:web|docs|tests|static_sites|task_dashboard|任务规划|\.runs|\.run)(?:\/|$))/;
+    const MESSAGE_OBJECT_EXTENDABLE_PATH_ROOT_RE = /^(?:\/(?:Users|Volumes|private|tmp|var|opt|Applications|Library|System|产出物|材料|沉淀|证据|附件|图片|截图|文档|草稿|临时|任务|问题|反馈|答复|讨论空间|已完成|暂缓|归档)(?:\/|$)|(?:web|docs|tests|static_sites|task_dashboard|任务规划|\.runs|\.run|产出物|材料|沉淀|证据|附件|图片|截图|文档|草稿|临时|任务|问题|反馈|答复|讨论空间|已完成|暂缓|归档)(?:\/|$))/;
     const MESSAGE_OBJECT_EXTENDED_FORBIDDEN_RE = /[<>"'`]/;
     const MESSAGE_OBJECT_PATH_LINE_SUFFIX_RE = /^(.*\.(?:md|markdown|html?|pdf|png|jpe?g|webp|gif|svg|docx?|xlsx?|pptx?|txt|json|csv|toml|ya?ml)):(\d+)(?::(\d+))?$/i;
     const MESSAGE_OBJECT_TRAILING_PUNCT_RE = /[),.;:!?，。；：！？、」』】》〉]+$/;
@@ -4002,6 +4024,275 @@
 
     function isLikelyWorkspaceRelativePath(token) {
       return MESSAGE_OBJECT_RELATIVE_ROOT_RE.test(String(token || "").trim());
+    }
+
+    function normalizeMessageObjectProjectLike(raw) {
+      return (raw && typeof raw === "object") ? raw : {};
+    }
+
+    function messageObjectCurrentProjectId() {
+      try {
+        if (typeof currentConversationCtx === "function") {
+          const ctx = currentConversationCtx();
+          const pid = String((ctx && ctx.projectId) || "").trim();
+          if (pid) return pid;
+        }
+      } catch (_) {}
+      return String((typeof STATE !== "undefined" && STATE && STATE.project) || "").trim();
+    }
+
+    function messageObjectCurrentChannelName() {
+      try {
+        if (typeof currentConversationCtx === "function") {
+          const ctx = currentConversationCtx();
+          const ch = String((ctx && ctx.channelName) || "").trim();
+          if (ch) return ch;
+        }
+      } catch (_) {}
+      try {
+        if (typeof findConversationSessionById === "function" && typeof STATE !== "undefined" && STATE && STATE.selectedSessionId) {
+          const session = findConversationSessionById(STATE.selectedSessionId);
+          const ch = String((session && (session.channel_name || session.channelName || session.primaryChannel)) || "").trim();
+          if (ch) return ch;
+        }
+      } catch (_) {}
+      return String((typeof STATE !== "undefined" && STATE && STATE.channel) || "").trim();
+    }
+
+    function messageObjectProjectById(projectId) {
+      const pid = String(projectId || "").trim();
+      if (!pid) return null;
+      try {
+        if (typeof projectById === "function") {
+          const project = projectById(pid);
+          if (project) return project;
+        }
+      } catch (_) {}
+      const projects = (typeof DATA !== "undefined" && DATA && Array.isArray(DATA.projects)) ? DATA.projects : [];
+      return projects.find((project) => String((project && project.id) || "") === pid) || null;
+    }
+
+    function messageObjectExecutionContextWorktreeRoot(project) {
+      const proj = normalizeMessageObjectProjectLike(project);
+      const context = normalizeMessageObjectProjectLike(proj.project_execution_context || proj.projectExecutionContext || proj.execution_context || proj.executionContext);
+      const target = normalizeMessageObjectProjectLike(context.target || context.target_ref || context.targetRef);
+      const source = normalizeMessageObjectProjectLike(context.source || context.source_ref || context.sourceRef);
+      return firstNonEmptyText([
+        target.worktree_root,
+        target.worktreeRoot,
+        source.worktree_root,
+        source.worktreeRoot,
+        context.worktree_root,
+        context.worktreeRoot,
+        proj.worktree_root,
+        proj.worktreeRoot,
+      ]);
+    }
+
+    function messageObjectProjectRootPath(projectId) {
+      const pid = String(projectId || messageObjectCurrentProjectId() || "").trim();
+      if (!pid || pid === "overview") return "";
+      const project = messageObjectProjectById(pid);
+      const contextRoot = messageObjectExecutionContextWorktreeRoot(project);
+      if (contextRoot && contextRoot[0] === "/") return contextRoot.replace(/\/+$/, "");
+      try {
+        if (typeof resolveProjectRootPath === "function") {
+          const resolved = String(resolveProjectRootPath(pid) || "").trim();
+          if (resolved && resolved[0] === "/") return resolved.replace(/\/+$/, "");
+        }
+      } catch (_) {}
+      const directRoot = firstNonEmptyText([
+        project && project.project_root_abs,
+        project && project.projectRootAbs,
+        project && project.project_root,
+        project && project.projectRoot,
+      ]);
+      if (directRoot && directRoot[0] === "/") return directRoot.replace(/\/+$/, "");
+      const taskRoot = String((project && (project.task_root_rel || project.taskRootRel)) || "").trim();
+      if (taskRoot && taskRoot[0] === "/") {
+        const compact = taskRoot.replace(/\/+$/, "");
+        const marker = "/任务规划";
+        if (compact.endsWith(marker)) return compact.slice(0, compact.length - marker.length).replace(/\/+$/, "");
+      }
+      return "";
+    }
+
+    function normalizeMessageObjectChannelKey(raw) {
+      let src = String(raw || "").trim();
+      if (!src) return "";
+      try {
+        src = src.normalize("NFKC");
+      } catch (_) {}
+      return src
+        .replace(/[\\／]+/g, "/")
+        .replace(/\s*\/\s*/g, "/")
+        .replace(/\s+/g, "")
+        .replace(/體/g, "体")
+        .replace(/題/g, "题")
+        .toLowerCase();
+    }
+
+    function messageObjectProjectTaskRootPath(projectId) {
+      const pid = String(projectId || messageObjectCurrentProjectId() || "").trim();
+      if (!pid || pid === "overview") return "";
+      const project = messageObjectProjectById(pid);
+      const root = messageObjectProjectRootPath(pid);
+      const taskRoot = String((project && (project.task_root_abs || project.taskRootAbs || project.task_root || project.taskRoot || project.task_root_rel || project.taskRootRel)) || "").trim();
+      if (taskRoot && taskRoot[0] === "/") return taskRoot.replace(/\/+$/, "");
+      if (!root) return "";
+      const projectRootRel = String((project && (project.project_root_rel || project.projectRootRel)) || "").trim().replace(/^\/+|\/+$/g, "");
+      const compactTaskRoot = taskRoot.replace(/^\/+|\/+$/g, "");
+      if (projectRootRel && compactTaskRoot && (compactTaskRoot === projectRootRel || compactTaskRoot.startsWith(projectRootRel + "/"))) {
+        const rest = compactTaskRoot.slice(projectRootRel.length).replace(/^\/+/, "");
+        return (root.replace(/\/+$/, "") + (rest ? ("/" + rest) : "")).replace(/\/+$/, "");
+      }
+      const marker = "/任务规划";
+      const idx = compactTaskRoot.indexOf(marker.replace(/^\//, ""));
+      if (idx >= 0) {
+        const rest = compactTaskRoot.slice(idx).replace(/^\/+/, "");
+        return (root.replace(/\/+$/, "") + "/" + rest).replace(/\/+$/, "");
+      }
+      return root.replace(/\/+$/, "") + "/任务规划";
+    }
+
+    function messageObjectChannelCandidates(project) {
+      const proj = normalizeMessageObjectProjectLike(project);
+      const out = [];
+      const push = (value) => {
+        const text = String(value || "").trim();
+        if (text && !out.includes(text)) out.push(text);
+      };
+      const fromRows = (rows) => {
+        if (!Array.isArray(rows)) return;
+        rows.forEach((row) => {
+          if (!row || typeof row !== "object") return;
+          push(row.name);
+          push(row.channel_name);
+          push(row.channelName);
+          push(row.primaryChannel);
+        });
+      };
+      fromRows(proj.channels);
+      fromRows(proj.channel_sessions);
+      fromRows(proj.sessions);
+      fromRows(proj.sessions_json);
+      return out;
+    }
+
+    function resolveMessageObjectConfiguredChannelName(project, channelName) {
+      const ch = String(channelName || "").trim();
+      if (!ch) return "";
+      const channels = messageObjectChannelCandidates(project);
+      if (channels.includes(ch)) return ch;
+      const key = normalizeMessageObjectChannelKey(ch);
+      if (!key) return ch;
+      return channels.find((name) => normalizeMessageObjectChannelKey(name) === key) || ch;
+    }
+
+    function messageObjectCurrentSessionLike() {
+      const sid = String((typeof STATE !== "undefined" && STATE && STATE.selectedSessionId) || "").trim();
+      if (!sid) return null;
+      try {
+        if (typeof findConversationSessionById === "function") {
+          const session = findConversationSessionById(sid);
+          if (session) return session;
+        }
+      } catch (_) {}
+      return null;
+    }
+
+    function inferMessageObjectChannelRootFromPath(path, channelName, taskRoot) {
+      const p = String(path || "").trim().replace(/\/+$/, "");
+      const chKey = normalizeMessageObjectChannelKey(channelName);
+      if (!p || !chKey) return "";
+      const segs = p.split("/").filter(Boolean);
+      const taskIdx = segs.lastIndexOf("任务规划");
+      if (taskIdx < 0 || taskIdx + 1 >= segs.length) return "";
+      const dir = String(segs[taskIdx + 1] || "").trim();
+      if (!dir || normalizeMessageObjectChannelKey(dir) !== chKey) return "";
+      if (p[0] === "/") return "/" + segs.slice(0, taskIdx + 2).join("/");
+      if (taskRoot) return taskRoot.replace(/\/+$/, "") + "/" + dir;
+      return segs.slice(0, taskIdx + 2).join("/");
+    }
+
+    function messageObjectChannelRootFromCurrentSession(projectId, channelName) {
+      const session = messageObjectCurrentSessionLike();
+      if (!session) return "";
+      const context = normalizeMessageObjectProjectLike(session.project_execution_context || session.projectExecutionContext);
+      const target = normalizeMessageObjectProjectLike(context.target || context.target_ref || context.targetRef);
+      const source = normalizeMessageObjectProjectLike(context.source || context.source_ref || context.sourceRef);
+      const taskRoot = messageObjectProjectTaskRootPath(projectId);
+      const workdir = firstNonEmptyText([
+        target.workdir,
+        target.work_dir,
+        source.workdir,
+        source.work_dir,
+        session.workdir,
+        session.work_dir,
+      ]);
+      return inferMessageObjectChannelRootFromPath(workdir, channelName, taskRoot);
+    }
+
+    function messageObjectItemsForProject(projectId) {
+      const pid = String(projectId || "").trim();
+      if (!pid || pid === "overview") return [];
+      try {
+        if (typeof itemsForProject === "function") {
+          const items = itemsForProject(pid);
+          if (Array.isArray(items) && items.length) return items;
+        }
+      } catch (_) {}
+      const items = (typeof DATA !== "undefined" && DATA && Array.isArray(DATA.items)) ? DATA.items : [];
+      return items.filter((it) => String((it && it.project_id) || "").trim() === pid);
+    }
+
+    function messageObjectChannelRootFromItems(projectId, channelName) {
+      const taskRoot = messageObjectProjectTaskRootPath(projectId);
+      const items = messageObjectItemsForProject(projectId);
+      for (const it of items) {
+        const inferred = inferMessageObjectChannelRootFromPath(it && it.path, channelName, taskRoot);
+        if (inferred) return inferred;
+      }
+      return "";
+    }
+
+    function messageObjectChannelRootPath(projectId, channelName) {
+      const pid = String(projectId || messageObjectCurrentProjectId() || "").trim();
+      const ch = String(channelName || messageObjectCurrentChannelName() || "").trim();
+      if (!pid || pid === "overview" || !ch) return "";
+      const project = messageObjectProjectById(pid);
+      const configuredChannel = resolveMessageObjectConfiguredChannelName(project, ch);
+      const sessionRoot = messageObjectChannelRootFromCurrentSession(pid, configuredChannel) || messageObjectChannelRootFromCurrentSession(pid, ch);
+      if (sessionRoot) return sessionRoot;
+      const itemRoot = messageObjectChannelRootFromItems(pid, configuredChannel) || messageObjectChannelRootFromItems(pid, ch);
+      if (itemRoot) return itemRoot;
+      const taskRoot = messageObjectProjectTaskRootPath(pid);
+      if (!taskRoot) return "";
+      const fallbackChannel = configuredChannel.includes("/") ? configuredChannel.replace(/\s*\/\s*/g, "／") : configuredChannel;
+      return taskRoot.replace(/\/+$/, "") + "/" + fallbackChannel.replace(/^\/+|\/+$/g, "");
+    }
+
+    function normalizeMessageObjectChannelRelativePath(raw) {
+      let src = stripMessageObjectPathLineSuffix(decodeMessageObjectFsPath(raw)).trim();
+      if (!src) return "";
+      src = src.replace(/^\/+/, "");
+      if (!src || !MESSAGE_OBJECT_CHANNEL_RELATIVE_ROOT_RE.test(src)) return "";
+      if (/^(?:材料|沉淀|证据|附件|图片|截图|文档|草稿|临时)(?:\/|$)/.test(src)) {
+        return "产出物/" + src.replace(/^\/+/, "");
+      }
+      return src;
+    }
+
+    function isLikelyChannelRelativePath(token) {
+      return !!normalizeMessageObjectChannelRelativePath(token);
+    }
+
+    function resolveMessageObjectChannelRelativePath(path) {
+      const rel = normalizeMessageObjectChannelRelativePath(path);
+      if (!rel) return "";
+      const channelRoot = messageObjectChannelRootPath();
+      if (!channelRoot) return rel;
+      return channelRoot.replace(/\/+$/, "") + "/" + rel.replace(/^\/+/, "");
     }
 
     function guessTaskDashboardRootPath() {
@@ -4060,6 +4351,8 @@
 
     function resolveMessageObjectPath(path) {
       const src = stripMessageObjectPathLineSuffix(decodeMessageObjectFsPath(path));
+      const channelPath = resolveMessageObjectChannelRelativePath(src);
+      if (channelPath) return channelPath;
       if (!src || src[0] === "/" || !isLikelyWorkspaceRelativePath(src)) return src;
       const root = guessTaskDashboardRootPath();
       if (!root) return src;
@@ -4263,6 +4556,17 @@
           label: token,
           openUrl: location.origin + token,
           defaultAction: "open_url",
+        };
+      }
+      if (isLikelyChannelRelativePath(token)) {
+        const path = resolveMessageObjectPath(token);
+        return {
+          kind: "fs_path",
+          tone: token.includes(".") ? "file" : "dir",
+          value: token,
+          label: token,
+          path,
+          defaultAction: "preview_path",
         };
       }
       if (/^\//.test(token)) {
@@ -4843,6 +5147,7 @@
       if (t === "claude") return "CLAUDE";
       if (t === "opencode") return "OPENCODE";
       if (t === "trae") return "TRAE";
+      if (t === "codebuddy") return "CODEBUDDY";
       if (t === "codex") return "CODEX";
       return t.toUpperCase();
     }
@@ -4853,6 +5158,7 @@
       if (t === "opencode") return "opencode";
       if (t === "gemini") return "gemini";
       if (t === "trae") return "trae";
+      if (t === "codebuddy") return "codebuddy";
       if (t === "codex") return "codex";
       return "other";
     }
@@ -4864,11 +5170,301 @@
       if (t === "opencode") return "OpenCode";
       if (t === "gemini") return "Gemini";
       if (t === "trae") return "Trae";
+      if (t === "codebuddy") return "CodeBuddy";
       return String(raw || "").trim() || "Codex";
     }
 
     function normalizeSessionModel(raw) {
       return String(raw || "").trim();
+    }
+
+    const CODEBUDDY_DEFAULT_MODEL = "deepseek-v4-pro";
+    const CODEBUDDY_MODEL_OPTIONS = [
+      "deepseek-v4-pro",
+      "deepseek-v4-flash",
+      "deepseek-v3-2-volc",
+      "glm-5.1",
+      "glm-5.0",
+      "glm-5.0-turbo",
+      "glm-5v-turbo",
+      "glm-4.7",
+      "minimax-m3",
+      "minimax-m2.7",
+      "kimi-k2.6",
+      "kimi-k2.5",
+      "hy3-preview",
+    ];
+
+    function isCodeBuddyCliType(raw) {
+      return String(raw || "").trim().toLowerCase() === "codebuddy";
+    }
+
+    const CLAUDE_DEFAULT_MODEL = "claude-opus-4-8";
+    const CLAUDE_MODEL_OPTIONS = [
+      "claude-opus-4-8",
+      "claude-sonnet-4-6",
+      "claude-haiku-4-5",
+      "claude-fable-5",
+      "default",
+      "sonnet",
+      "opus",
+      "haiku",
+      "best",
+      "opusplan",
+    ];
+
+    function isClaudeCliType(raw) {
+      const t = String(raw || "").trim().toLowerCase();
+      return t === "claude" || t === "claudecode" || t === "claude_code" || t === "claude-code";
+    }
+
+    function normalizeStaticInstructionFilesPayload(raw) {
+      const src = (raw && typeof raw === "object") ? raw : {};
+      const files = (src.static_instruction_files && typeof src.static_instruction_files === "object")
+        ? src.static_instruction_files
+        : ((src.staticInstructionFiles && typeof src.staticInstructionFiles === "object") ? src.staticInstructionFiles : null);
+      if (!files) return null;
+      const source = (files.source && typeof files.source === "object") ? files.source : {};
+      const summary = (files.summary && typeof files.summary === "object") ? files.summary : {};
+      const mirrors = Array.isArray(files.mirrors) ? files.mirrors : [];
+      return {
+        source,
+        mirrors: mirrors.map((item) => (item && typeof item === "object") ? item : {}),
+        summary,
+        repairEndpoint: String(files.repairEndpoint || files.repair_endpoint || "").trim(),
+      };
+    }
+
+    function staticInstructionFileName(row, fallback) {
+      return String((row && (row.fileName || row.file_name || row.name)) || fallback || "").trim();
+    }
+
+    function staticInstructionSyncStatus(row) {
+      return String((row && (row.syncStatus || row.sync_status || row.status)) || "").trim().toLowerCase();
+    }
+
+    function staticInstructionStatusText(statusRaw) {
+      const status = String(statusRaw || "").trim().toLowerCase();
+      if (status === "synced") return "已同步";
+      if (status === "missing") return "缺失，可修复";
+      if (status === "stale") return "待同步";
+      if (status === "conflict") return "冲突，需确认";
+      if (status === "blocked") return "已阻断";
+      if (status === "skipped") return "已跳过";
+      return "等待服务端同步状态";
+    }
+
+    function staticInstructionStatusTone(statusRaw) {
+      const status = String(statusRaw || "").trim().toLowerCase();
+      if (status === "synced") return "good";
+      if (status === "missing" || status === "stale" || status === "skipped") return "warn";
+      if (status === "conflict" || status === "blocked") return "bad";
+      return "muted";
+    }
+
+    function staticInstructionMirrorForCli(files, cliTypeRaw) {
+      const normalized = normalizeStaticInstructionFilesPayload(files) || files;
+      const cliType = String(cliTypeRaw || "").trim().toLowerCase();
+      const mirrors = Array.isArray(normalized && normalized.mirrors) ? normalized.mirrors : [];
+      return mirrors.find((item) => String(item && (item.cliType || item.cli_type) || "").trim().toLowerCase() === cliType) || null;
+    }
+
+    function staticInstructionDefaultMirrorFileName(cliTypeRaw) {
+      const cliType = String(cliTypeRaw || "").trim().toLowerCase();
+      if (cliType === "codebuddy") return "CODEBUDDY.md";
+      if (cliType === "claude") return "CLAUDE.md";
+      return "";
+    }
+
+    function staticInstructionSourceDisplay(files) {
+      const normalized = normalizeStaticInstructionFilesPayload(files) || files || {};
+      return staticInstructionFileName(normalized.source || {}, "AGENTS.md") || "AGENTS.md";
+    }
+
+    function codeBuddyDefaultModel() {
+      return CODEBUDDY_DEFAULT_MODEL;
+    }
+
+    function codeBuddyModelOptions() {
+      return CODEBUDDY_MODEL_OPTIONS.slice();
+    }
+
+    function codeBuddyModelDisplayName(raw) {
+      const model = normalizeSessionModel(raw);
+      const labels = {
+        "deepseek-v4-pro": "DeepSeek V4 Pro",
+        "deepseek-v4-flash": "DeepSeek V4 Flash",
+        "deepseek-v3-2-volc": "DeepSeek V3.2 Volc",
+        "glm-5.1": "GLM 5.1",
+        "glm-5.0": "GLM 5.0",
+        "glm-5.0-turbo": "GLM 5.0 Turbo",
+        "glm-5v-turbo": "GLM 5V Turbo",
+        "glm-4.7": "GLM 4.7",
+        "minimax-m3": "MiniMax M3",
+        "minimax-m2.7": "MiniMax M2.7",
+        "kimi-k2.6": "Kimi K2.6",
+        "kimi-k2.5": "Kimi K2.5",
+        "hy3-preview": "HY3 Preview",
+      };
+      return labels[model] || model;
+    }
+
+    function codeBuddyModelOptionText(raw) {
+      const model = normalizeSessionModel(raw);
+      const displayName = codeBuddyModelDisplayName(model);
+      return displayName && displayName !== model ? (displayName + " · " + model) : model;
+    }
+
+    function populateCodeBuddyModelSelect(selectEl, selectedRaw) {
+      if (!selectEl) return "";
+      const selected = normalizeSessionModel(selectedRaw) || codeBuddyDefaultModel();
+      selectEl.innerHTML = "";
+      const known = new Set(codeBuddyModelOptions());
+      codeBuddyModelOptions().forEach((model) => {
+        selectEl.appendChild(el("option", { value: model, text: codeBuddyModelOptionText(model) }));
+      });
+      if (selected && !known.has(selected)) {
+        selectEl.appendChild(el("option", {
+          value: selected,
+          text: "历史模型：" + selected + "（当前不在账号支持快照中，保留原值，可改选）",
+        }));
+      }
+      selectEl.value = selected;
+      return String(selectEl.value || selected || "");
+    }
+
+    function claudeDefaultModel() {
+      return CLAUDE_DEFAULT_MODEL;
+    }
+
+    function claudeModelOptions() {
+      return CLAUDE_MODEL_OPTIONS.slice();
+    }
+
+    function claudeModelDisplayName(raw) {
+      const model = normalizeSessionModel(raw);
+      const labels = {
+        "claude-opus-4-8": "Claude Opus 4.8",
+        "claude-sonnet-4-6": "Claude Sonnet 4.6",
+        "claude-haiku-4-5": "Claude Haiku 4.5",
+        "claude-fable-5": "Claude Fable 5",
+        "default": "Alias: default",
+        "sonnet": "Alias: sonnet",
+        "opus": "Alias: opus",
+        "haiku": "Alias: haiku",
+        "best": "Alias: best",
+        "opusplan": "Alias: opusplan",
+      };
+      return labels[model] || model;
+    }
+
+    function claudeModelOptionText(raw) {
+      const model = normalizeSessionModel(raw);
+      const displayName = claudeModelDisplayName(model);
+      return displayName && displayName !== model ? (displayName + " · " + model) : model;
+    }
+
+    function populateClaudeModelSelect(selectEl, selectedRaw) {
+      if (!selectEl) return "";
+      const selected = normalizeSessionModel(selectedRaw) || claudeDefaultModel();
+      selectEl.innerHTML = "";
+      const known = new Set(claudeModelOptions());
+      claudeModelOptions().forEach((model) => {
+        selectEl.appendChild(el("option", { value: model, text: claudeModelOptionText(model) }));
+      });
+      if (selected && !known.has(selected)) {
+        selectEl.appendChild(el("option", {
+          value: selected,
+          text: "历史模型：" + selected + "（当前不在账号支持快照中，保留原值，可改选）",
+        }));
+      }
+      selectEl.value = selected;
+      return String(selectEl.value || selected || "");
+    }
+
+    const CODEBUDDY_PERMISSION_MODE_DEFAULT = "default";
+    const CODEBUDDY_PERMISSION_MODE_OPTIONS = [
+      { value: "default", label: "默认授权" },
+      { value: "bypassPermissions", label: "全部授权" },
+    ];
+
+    function normalizeCodeBuddyPermissionMode(raw) {
+      const text = String(raw || "").trim();
+      if (!text) return CODEBUDDY_PERMISSION_MODE_DEFAULT;
+      if (text === "default" || text === "bypassPermissions") return text;
+      const key = text.toLowerCase().replace(/[\s-]+/g, "_");
+      if (key === "bypass_permissions" || key === "bypasspermissions") return "bypassPermissions";
+      return CODEBUDDY_PERMISSION_MODE_DEFAULT;
+    }
+
+    function codeBuddyDefaultPermissionMode() {
+      return CODEBUDDY_PERMISSION_MODE_DEFAULT;
+    }
+
+    function codeBuddyPermissionModeOptions() {
+      return CODEBUDDY_PERMISSION_MODE_OPTIONS.map((opt) => ({ ...opt }));
+    }
+
+    function codeBuddyPermissionModeDisplayName(raw) {
+      const mode = normalizeCodeBuddyPermissionMode(raw);
+      const hit = CODEBUDDY_PERMISSION_MODE_OPTIONS.find((opt) => opt.value === mode);
+      return hit ? hit.label : "默认授权";
+    }
+
+    function populateCodeBuddyPermissionModeSelect(selectEl, selectedRaw) {
+      if (!selectEl) return "";
+      const selected = normalizeCodeBuddyPermissionMode(selectedRaw);
+      selectEl.innerHTML = "";
+      codeBuddyPermissionModeOptions().forEach((opt) => {
+        selectEl.appendChild(el("option", { value: opt.value, text: opt.label }));
+      });
+      selectEl.value = selected;
+      return String(selectEl.value || selected || codeBuddyDefaultPermissionMode());
+    }
+
+    const CLAUDE_PERMISSION_MODE_DEFAULT = "bypassPermissions";
+    const CLAUDE_PERMISSION_MODE_OPTIONS = [
+      { value: "bypassPermissions", label: "最大授权" },
+      { value: "default", label: "默认授权" },
+      { value: "acceptEdits", label: "自动接受编辑" },
+      { value: "plan", label: "计划模式" },
+    ];
+
+    function normalizeClaudePermissionMode(raw) {
+      const text = String(raw || "").trim();
+      if (!text) return CLAUDE_PERMISSION_MODE_DEFAULT;
+      if (text === "default" || text === "acceptEdits" || text === "plan" || text === "bypassPermissions") return text;
+      const key = text.toLowerCase().replace(/[\s-]+/g, "_");
+      if (key === "accept_edits" || key === "acceptedits") return "acceptEdits";
+      if (key === "bypass_permissions" || key === "bypasspermissions" || key === "dangerously_skip_permissions") return "bypassPermissions";
+      if (key === "dangerouslyskippermissions" || key === "__dangerously_skip_permissions") return "bypassPermissions";
+      if (key === "full" || key === "max" || key === "maximum") return "bypassPermissions";
+      return CLAUDE_PERMISSION_MODE_DEFAULT;
+    }
+
+    function claudeDefaultPermissionMode() {
+      return CLAUDE_PERMISSION_MODE_DEFAULT;
+    }
+
+    function claudePermissionModeOptions() {
+      return CLAUDE_PERMISSION_MODE_OPTIONS.map((opt) => ({ ...opt }));
+    }
+
+    function claudePermissionModeDisplayName(raw) {
+      const mode = normalizeClaudePermissionMode(raw);
+      const hit = CLAUDE_PERMISSION_MODE_OPTIONS.find((opt) => opt.value === mode);
+      return hit ? hit.label : "最大授权";
+    }
+
+    function populateClaudePermissionModeSelect(selectEl, selectedRaw) {
+      if (!selectEl) return "";
+      const selected = normalizeClaudePermissionMode(selectedRaw);
+      selectEl.innerHTML = "";
+      claudePermissionModeOptions().forEach((opt) => {
+        selectEl.appendChild(el("option", { value: opt.value, text: opt.label }));
+      });
+      selectEl.value = selected;
+      return String(selectEl.value || selected || claudeDefaultPermissionMode());
     }
 
     function normalizeReasoningEffort(raw) {
@@ -4887,10 +5483,11 @@
     function modelInputPlaceholderByCli(cliTypeRaw) {
       const t = String(cliTypeRaw || "").trim().toLowerCase();
       if (t === "codex") return "例如：codex-spark（留空使用默认模型）";
-      if (t === "claude") return "例如：claude-sonnet（可选，留空默认）";
+      if (t === "claude") return "默认 claude-opus-4-8；可选完整模型 ID 或 alias";
       if (t === "gemini") return "例如：gemini-2.0-flash（可选，留空默认）";
       if (t === "opencode") return "可选模型标识（留空使用默认模型）";
       if (t === "trae") return "例如：gpt-4.1（需配置 TRAE_CONFIG_FILE）";
+      if (t === "codebuddy") return "默认 deepseek-v4-pro 仅为创建预设，可改选；实际保存模型 ID";
       return "留空使用该 CLI 默认模型";
     }
 
@@ -5980,6 +6577,19 @@
         }
       }
       if (!text) return "系统: 暂无消息";
+      if (typeof safeCodeBuddyTextForDisplay === "function") {
+        const previewRunId = String(firstNonEmptyText([
+          latestEffectiveSummary && latestEffectiveSummary.run_id,
+          latestEffectiveSummary && latestEffectiveSummary.runId,
+          latestSummary && latestSummary.run_id,
+          latestSummary && latestSummary.runId,
+          s && s.latestRunId,
+          s && s.latest_run_id,
+        ]) || "").trim();
+        text = safeCodeBuddyTextForDisplay(text, previewRunId, null, null, {
+          cliType: String((s && s.cli_type) || (s && s.cliType) || ""),
+        });
+      }
       const cachedLabel = useCachedSender
         ? firstNonEmptyText([s && s.lastSenderName, latestSummary && latestSummary.sender_name])
         : "";

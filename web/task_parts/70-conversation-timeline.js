@@ -106,10 +106,102 @@
         .filter((step) => step.text);
     }
 
+    function appendProcessActionDetailRow(container, label, value, extraClass = "") {
+      const text = String(value || "").trim();
+      if (!text) return;
+      const row = el("div", { class: "process-action-node-detail-row" + (extraClass ? " " + extraClass : "") });
+      row.appendChild(el("span", { class: "process-action-node-detail-label", text: label }));
+      row.appendChild(el("span", { class: "process-action-node-detail-value", text, title: text }));
+      container.appendChild(row);
+    }
+
+    function renderRunProcessActionNode(runId, step, idx, rerender) {
+      const action = (step && step.action && typeof step.action === "object") ? step.action : (step || {});
+      const itemTs = String((action && action.at) || (step && step.at) || "").trim();
+      const typeKey = String((action && action.typeKey) || "unknown").trim().toLowerCase() || "unknown";
+      const status = String((action && action.status) || "completed").trim().toLowerCase() || "completed";
+      const label = String((action && action.label) || "未知");
+      const statusLabel = String((action && action.statusLabel) || "已完成");
+      const target = String((action && action.target) || "当前上下文");
+      const expanded = isProcessActionGroupExpanded(runId, step);
+      const summary = target && target !== "当前上下文"
+        ? target
+        : String((action && action.text) || (step && step.text) || "");
+      const node = el("div", {
+        class: [
+          "process-action-node",
+          "type-" + typeKey,
+          "status-" + status,
+          itemTs ? "has-time" : "no-time",
+          expanded ? "expanded" : "collapsed",
+        ].join(" "),
+        role: "button",
+        tabindex: "0",
+        "aria-expanded": expanded ? "true" : "false",
+        title: expanded ? "点击收起动作详情" : "点击展开动作详情",
+      });
+      const toggle = () => {
+        toggleProcessActionGroupExpanded(runId, step);
+        if (typeof rerender === "function") rerender();
+        else renderConversationDetail();
+      };
+      node.addEventListener("click", toggle);
+      node.addEventListener("keydown", (ev) => {
+        if (!ev || (ev.key !== "Enter" && ev.key !== " ")) return;
+        ev.preventDefault();
+        toggle();
+      });
+      node.appendChild(el("span", { class: "process-idx process-action-node-idx", text: String(idx + 1) }));
+      const main = el("div", { class: "process-action-node-main" });
+      const line = el("div", { class: "process-action-node-line" });
+      line.appendChild(el("span", {
+        class: "process-action-node-badge",
+        text: label,
+        title: String((action && (action.eventType || action.itemType)) || label),
+      }));
+      line.appendChild(el("span", {
+        class: "process-action-node-text",
+        text: summary,
+        title: summary,
+      }));
+      line.appendChild(el("span", {
+        class: "process-action-node-status",
+        text: statusLabel,
+      }));
+      line.appendChild(el("span", {
+        class: "process-action-node-caret",
+        text: expanded ? "收起" : "展开",
+      }));
+      main.appendChild(line);
+      if (expanded) {
+        const detail = el("div", { class: "process-action-node-detail" });
+        appendProcessActionDetailRow(detail, "摘要", String((action && (action.detailText || action.text)) || (step && step.text) || ""));
+        appendProcessActionDetailRow(detail, "目标", target);
+        appendProcessActionDetailRow(detail, "错误", action && action.errorSummary, "is-error");
+        appendProcessActionDetailRow(detail, "状态", statusLabel);
+        appendProcessActionDetailRow(detail, "来源", action && (action.source || (action.row && action.row.source)));
+        appendProcessActionDetailRow(detail, "事件", [action && action.eventType, action && action.itemType].filter(Boolean).join(" / "));
+        main.appendChild(detail);
+      }
+      node.appendChild(main);
+      if (itemTs) {
+        node.appendChild(el("span", {
+          class: "process-time process-action-node-time",
+          text: compactDateTime(itemTs),
+          title: zhDateTime(itemTs),
+        }));
+      }
+      return node;
+    }
+
     function renderRunProcessStepGroups(runId, processInfo, rerender) {
       const groups = getRunProcessStepGroups(processInfo);
       const list = el("div", { class: "process-list process-step-list" });
       groups.forEach((step, idx) => {
+        if (step && (step.kind === "action" || step.isActionNode)) {
+          list.appendChild(renderRunProcessActionNode(runId, step, idx, rerender));
+          return;
+        }
         const itemTs = String((step && step.at) || (step && step.row && step.row.at) || "").trim();
         const actions = Array.isArray(step && step.actions) ? step.actions : [];
         const expanded = actions.length > 0 && isProcessActionGroupExpanded(runId, step);
@@ -2009,12 +2101,15 @@
       const fb = String(fallback || "").trim();
       if (String(role || "") !== "assistant") return primary || fb;
       const runId = String((opts && opts.runId) || "").trim();
-      if (!runId) return primary || fb;
-      const d = PCONV.detailMap && PCONV.detailMap[runId];
+      const d = (opts && opts.detailMeta) || (runId && PCONV.detailMap && PCONV.detailMap[runId]) || null;
       const full = d && d.full ? d.full : null;
       const lastMessage = String((full && full.lastMessage) || "").trim();
       const partialMessage = String((full && full.partialMessage) || "").trim();
-      return lastMessage || partialMessage || primary || fb;
+      const text = lastMessage || partialMessage || primary || fb;
+      if (typeof safeCodeBuddyTextForDisplay === "function") {
+        return safeCodeBuddyTextForDisplay(text, runId, opts && opts.runMeta, d, opts);
+      }
+      return text;
     }
 
     function copyConversationBubbleText(role, content, fallback, opts = {}) {
@@ -2238,14 +2333,299 @@
       return card;
     }
 
+    function conversationMessageImagePreviewLimit() {
+      return 12;
+    }
+
+    function stripConversationBodyImagePathLineSuffix(raw) {
+      const src = String(raw || "").trim();
+      const match = src.match(/^(.*\.(?:png|jpe?g|webp|gif|svg|bmp)):(\d+)(?::(\d+))?$/i);
+      return match ? String(match[1] || "") : src;
+    }
+
+    function trimConversationBodyImageToken(raw) {
+      let src = String(raw || "").trim();
+      src = src.replace(/^<+|>+$/g, "").replace(/^["']+|["']+$/g, "");
+      src = src.replace(/[),.;:!?，。；：！？、」』】》〉]+$/g, "");
+      return stripConversationBodyImagePathLineSuffix(src);
+    }
+
+    function isConversationPreviewImagePathLike(value) {
+      const src = trimConversationBodyImageToken(value).toLowerCase();
+      return /\.(png|jpe?g|webp|gif|svg|bmp)(?:[?#].*)?$/.test(src);
+    }
+
+    function decodeConversationBodyImageToken(raw) {
+      let src = String(raw || "").trim();
+      if (!src || src.indexOf("%") < 0) return src;
+      for (let i = 0; i < 2; i += 1) {
+        try {
+          const next = decodeURIComponent(src);
+          if (!next || next === src) break;
+          src = next;
+        } catch (_) {
+          break;
+        }
+      }
+      return src;
+    }
+
+    function conversationBodyImageCaption(value) {
+      const src = trimConversationBodyImageToken(decodeConversationBodyImageToken(value)).replace(/[?#].*$/, "");
+      const name = String(src.split(/[\\/]/).pop() || "").trim();
+      return name || "图片";
+    }
+
+    function isConversationBodyImageChannelRelativeToken(value) {
+      const src = trimConversationBodyImageToken(decodeConversationBodyImageToken(value)).replace(/^\/+/, "");
+      if (!src) return false;
+      return /^(?:产出物(?:\/(?:材料|沉淀|证据|附件|图片|截图|文档|草稿|临时))?|(?:材料|沉淀|证据|附件|图片|截图|文档|草稿|临时)|(?:任务|问题|反馈|答复|讨论空间|已完成|暂缓|归档))(?:\/.+)+$/u.test(src);
+    }
+
+    function normalizeConversationBodyImageChannelRelativeToken(value) {
+      const src = trimConversationBodyImageToken(decodeConversationBodyImageToken(value)).replace(/^\/+/, "");
+      if (/^(?:材料|沉淀|证据|附件|图片|截图|文档|草稿|临时)(?:\/|$)/u.test(src)) {
+        return "产出物/" + src.replace(/^\/+/, "");
+      }
+      return src;
+    }
+
+    function conversationBodyImageSameOriginUrl(value) {
+      try {
+        const u = new URL(String(value || ""), location.origin);
+        return u.origin === location.origin ? u : null;
+      } catch (_) {
+        return null;
+      }
+    }
+
+    function conversationBodyRunAttachmentImageSrc(value) {
+      const token = trimConversationBodyImageToken(value);
+      if (!isConversationPreviewImagePathLike(token)) return "";
+      const sameOrigin = /^https?:\/\//i.test(token) ? conversationBodyImageSameOriginUrl(token) : null;
+      if (sameOrigin && /^\/\.runs\/.+\/attachments\//.test(sameOrigin.pathname || "")) {
+        return (sameOrigin.pathname || "") + (sameOrigin.search || "");
+      }
+      if (/^\/\.runs\/.+\/attachments\//.test(token)) return token;
+      if (/^\//.test(token)) {
+        const runtimeMatch = token.match(/\/\.runtime\/stable\/\.runs\/(.+\/attachments\/.+)$/);
+        if (runtimeMatch && runtimeMatch[1]) return "/.runs/" + runtimeMatch[1];
+        const runMatch = token.match(/\/\.runs\/(.+\/attachments\/.+)$/);
+        if (runMatch && runMatch[1]) return "/.runs/" + runMatch[1];
+      }
+      return "";
+    }
+
+    function resolveConversationBodyImageFsPath(value) {
+      const token = trimConversationBodyImageToken(value);
+      if (!token) return "";
+      if (typeof resolveMessageObjectPath === "function") {
+        try {
+          return String(resolveMessageObjectPath(token) || "").trim();
+        } catch (_) {}
+      }
+      if (/^\//.test(token)) return token;
+      if (isConversationBodyImageChannelRelativeToken(token) && typeof messageObjectChannelRootPath === "function") {
+        const root = String(messageObjectChannelRootPath() || "").replace(/\/+$/, "");
+        if (root) return root + "/" + normalizeConversationBodyImageChannelRelativeToken(token).replace(/^\/+/, "");
+      }
+      return token;
+    }
+
+    function isConversationBodyAllowedImageFsPath(path, sourceToken) {
+      const resolved = String(path || "").trim();
+      if (!resolved || !isConversationPreviewImagePathLike(resolved)) return false;
+      if (isConversationBodyImageChannelRelativeToken(sourceToken)) return true;
+      if (/\/\.runtime\/stable\/\.runs\/.+\/attachments\//.test(resolved)) return true;
+      if (/\/\.runs\/.+\/attachments\//.test(resolved)) return true;
+      if (typeof messageObjectChannelRootPath === "function") {
+        try {
+          const channelRoot = String(messageObjectChannelRootPath() || "").replace(/\/+$/, "");
+          if (channelRoot && (resolved === channelRoot || resolved.startsWith(channelRoot + "/"))) return true;
+        } catch (_) {}
+      }
+      return /\/任务规划\/[^/]+\/(?:产出物|任务|问题|反馈|答复|讨论空间|已完成|暂缓|归档)\//.test(resolved);
+    }
+
+    function conversationBodyImageFsOpenUrl(path) {
+      const resolved = String(path || "").trim();
+      if (!resolved || !/^\//.test(resolved)) return "";
+      return "/api/fs/open?path=" + encodeURIComponent(resolved);
+    }
+
+    function normalizeConversationImagePreviewKey(value) {
+      const src = String(value || "").trim();
+      if (!src) return "";
+      try {
+        const u = new URL(src, location.origin);
+        if (u.origin === location.origin && u.pathname === "/api/fs/open") {
+          const p = u.searchParams.get("path") || "";
+          return "fs:" + stripConversationBodyImagePathLineSuffix(p);
+        }
+        if (u.origin === location.origin) return "url:" + (u.pathname || "") + (u.search || "");
+        return "url:" + u.href;
+      } catch (_) {}
+      return "raw:" + stripConversationBodyImagePathLineSuffix(src);
+    }
+
+    function collectConversationMessageBodyImageCandidateTokens(text) {
+      const src = String(text || "");
+      if (!src) return [];
+      const out = [];
+      const pushToken = (raw) => {
+        const token = trimConversationBodyImageToken(raw);
+        if (!token || !isConversationPreviewImagePathLike(token)) return;
+        out.push(token);
+      };
+      src.replace(/!?\[[^\]]*]\(([^)]+)\)/g, (_m, href) => {
+        pushToken(href);
+        return _m;
+      });
+      const tokenRe = /(https?:\/\/[^\s<>"'`]+|\/\.runs\/[^\s<>"'`]+|\/(?:Users|Volumes|private|tmp|var|opt|Applications|Library|System)[^\n<>"'`]*?\.(?:png|jpe?g|webp|gif|svg|bmp)(?:[?#][^\s<>"'`]*)?|(?:\/?(?:产出物|材料|沉淀|证据|附件|图片|截图|文档|草稿|临时|任务|问题|反馈|答复|讨论空间|已完成|暂缓|归档))[^\n<>"'`]*?\.(?:png|jpe?g|webp|gif|svg|bmp)(?:[?#][^\s<>"'`]*)?)/ig;
+      let match;
+      while ((match = tokenRe.exec(src))) {
+        pushToken(match[0]);
+      }
+      return out;
+    }
+
+    function collectConversationMessageBodyImagePreviewItems(text) {
+      const out = [];
+      const seen = new Set();
+      collectConversationMessageBodyImageCandidateTokens(text).forEach((token) => {
+        if (!token || seen.has(token)) return;
+        seen.add(token);
+        const attachmentSrc = conversationBodyRunAttachmentImageSrc(token);
+        if (attachmentSrc) {
+          out.push({
+            src: attachmentSrc,
+            caption: conversationBodyImageCaption(token),
+          });
+          return;
+        }
+        if (/^https?:\/\//i.test(token)) return;
+        const path = resolveConversationBodyImageFsPath(token);
+        if (!isConversationBodyAllowedImageFsPath(path, token)) return;
+        const src = conversationBodyImageFsOpenUrl(path);
+        if (!src) return;
+        out.push({
+          src,
+          caption: conversationBodyImageCaption(path || token),
+          path,
+        });
+      });
+      return out;
+    }
+
+    function collectConversationMessageImagePreviewItems(attachments) {
+      const out = [];
+      const seen = new Set();
+      (Array.isArray(attachments) ? attachments : [])
+        .filter((att) => isImageAttachment(att) && resolveAttachmentUrl(att))
+        .forEach((att) => {
+          const src = resolveAttachmentUrl(att);
+          const key = normalizeConversationImagePreviewKey(src);
+          if (!key || seen.has(key)) return;
+          seen.add(key);
+          out.push({
+            src,
+            caption: att.originalName || att.filename || "图片",
+          });
+        });
+      return out;
+    }
+
+    function mergeConversationMessageImagePreviewItems(lists, opts = {}) {
+      const limit = Math.max(1, Number(opts.limit || conversationMessageImagePreviewLimit()) || conversationMessageImagePreviewLimit());
+      const all = [];
+      const seen = new Set();
+      (Array.isArray(lists) ? lists : []).forEach((list) => {
+        (Array.isArray(list) ? list : []).forEach((item) => {
+          if (!item || !item.src) return;
+          const key = normalizeConversationImagePreviewKey(item.path || item.src);
+          if (!key || seen.has(key)) return;
+          seen.add(key);
+          all.push(item);
+        });
+      });
+      return {
+        items: all.slice(0, limit),
+        overflowCount: Math.max(0, all.length - limit),
+        totalCount: all.length,
+      };
+    }
+
+    function renderConversationMessageImagePack(items, opts = {}) {
+      const rows = (Array.isArray(items) ? items : []).filter((item) => item && item.src);
+      if (!rows.length) return null;
+      const title = String(opts.title || (rows.length > 1 ? ("图片 " + rows.length + " 张") : "图片")).trim();
+      const wrap = el("div", { class: "msg-image-pack" });
+      const head = el("div", { class: "msg-image-pack-head" });
+      head.appendChild(el("div", { class: "msg-image-pack-title", text: title }));
+      if (rows.length > 1) {
+        head.appendChild(el("div", { class: "msg-image-pack-sub", text: "点击查看，支持左右方向键切换" }));
+      }
+      wrap.appendChild(head);
+      const grid = el("div", { class: "msg-image-pack-grid" });
+      rows.forEach((item, index) => {
+        const caption = String(item.caption || ("图片 " + (index + 1))).trim();
+        const btn = el("button", {
+          class: "msg-image-pack-card",
+          type: "button",
+          title: "点击放大预览",
+        });
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          openImagePreview(item.src, caption, rows, index);
+        });
+        btn.appendChild(el("img", {
+          class: "msg-image-pack-thumb",
+          src: item.src,
+          alt: caption,
+        }));
+        btn.appendChild(el("span", {
+          class: "msg-image-pack-name",
+          text: caption,
+        }));
+        grid.appendChild(btn);
+      });
+      wrap.appendChild(grid);
+      const overflowCount = Math.max(0, Number(opts.overflowCount || 0) || 0);
+      if (overflowCount > 0) {
+        wrap.appendChild(el("div", {
+          class: "msg-image-pack-more",
+          text: "更多图片 " + overflowCount + " 张未展示",
+        }));
+      }
+      return wrap;
+    }
+
     function appendConversationBubble(row, role, content, fallback, bubbleKey, opts = {}) {
       const txt = String(content || "");
+      const safeTxt = (String(role || "") === "assistant" && typeof safeCodeBuddyTextForDisplay === "function")
+        ? safeCodeBuddyTextForDisplay(
+            txt,
+            opts && opts.runId,
+            opts && opts.runMeta,
+            opts && opts.detailMeta,
+            opts
+          )
+        : txt;
+      const safeFallback = (String(role || "") === "assistant" && typeof safeCodeBuddyTextForDisplay === "function")
+        ? safeCodeBuddyTextForDisplay(
+            fallback || "",
+            opts && opts.runId,
+            opts && opts.runMeta,
+            opts && opts.detailMeta,
+            opts
+          )
+        : String(fallback || "");
       const attachments = filterConversationBubbleAttachments(role, opts.attachments || []);
       const replyQuote = renderConversationReplyQuote(opts.replyContext);
       if (replyQuote) row.appendChild(replyQuote);
       const bubble = el("div", { class: "mbubble md" });
       if (opts.bubbleClass) bubble.classList.add(String(opts.bubbleClass));
-      const foldable = shouldFoldBubble(txt || fallback || "", role);
+      const foldable = shouldFoldBubble(safeTxt || safeFallback || "", role);
       const bubbleKeyText = String(bubbleKey || "");
       const pendingExpandSet = PCONV.bubblePendingExpand instanceof Set
         ? PCONV.bubblePendingExpand
@@ -2293,11 +2673,11 @@
         renderConversationDetail();
       };
       if (expanded && runId && !detailMeta) ensureExpandedBubbleDetail();
-      setMarkdown(bubble, txt, fallback || "");
+      setMarkdown(bubble, safeTxt, safeFallback || "");
       enhanceMessageInteractiveObjects(bubble);
       const allowCopy = !!String(resolveConversationBubbleCopyText(role, content, fallback, opts) || "").trim();
       const allowReply = typeof opts.onReply === "function"
-        && !!String(txt || fallback || "").trim();
+        && !!String(safeTxt || safeFallback || "").trim();
       if (foldable && !expanded) bubble.classList.add("collapsed");
       if (foldable && !expanded) {
         const inlineBtn = el("button", {
@@ -2326,20 +2706,22 @@
         row.appendChild(foldRow);
       }
 
+      if (role === "user" || role === "assistant") {
+        const imagePreviewItems = collectConversationMessageImagePreviewItems(attachments);
+        const bodyImagePreviewItems = collectConversationMessageBodyImagePreviewItems(safeTxt || safeFallback || "");
+        const imagePreviewPack = mergeConversationMessageImagePreviewItems([imagePreviewItems, bodyImagePreviewItems]);
+        const imagePack = renderConversationMessageImagePack(imagePreviewPack.items, {
+          title: imagePreviewPack.totalCount > 1 ? ("图片 " + imagePreviewPack.totalCount + " 张") : "图片",
+          overflowCount: imagePreviewPack.overflowCount,
+        });
+        if (imagePack) row.appendChild(imagePack);
+      }
       if (attachments.length > 0 && (role === "user" || role === "assistant")) {
         const attachWrap = el("div", { class: "msg-attachments" });
         for (const att of attachments) {
           const src = resolveAttachmentUrl(att);
           if (!src) continue;
-          if (isImageAttachment(att)) {
-            const img = el("img", { class: "msg-img", src, alt: att.originalName || "attachment" });
-            img.addEventListener("click", (e) => {
-              e.stopPropagation();
-              openImagePreview(src, att.originalName || "图片");
-            });
-            attachWrap.appendChild(img);
-            continue;
-          }
+          if (isImageAttachment(att)) continue;
           const fileA = el("a", {
             class: "msg-file",
             href: src,
@@ -2369,7 +2751,7 @@
           try {
             opts.onReply({
               bubbleKey: String(bubbleKey || "").trim(),
-              text: String(txt || fallback || ""),
+              text: String(safeTxt || safeFallback || ""),
             });
           } catch (_) {}
         });
@@ -2735,6 +3117,7 @@
       const receiptProjection = payload.receiptProjection || null;
       const currentActiveRunId = String(payload.currentActiveRunId || "").trim();
       const currentQueuedRunId = String(payload.currentQueuedRunId || "").trim();
+      const currentLatestDoneRunId = String(payload.currentLatestDoneRunId || "").trim();
       const attachments = mergeConversationAttachmentLists([
         payload.attachments,
         d && d.full && d.full.run && d.full.run.attachments,
@@ -2769,13 +3152,18 @@
             openUrl: firstConversationGeneratedMediaAttachmentUrl(attachments),
           })
         : null;
-      const staleErrorWithActiveRun = st === "error" && currentActiveRunId && currentActiveRunId !== rid;
-      const staleErrorWithQueuedRun = st === "error" && !staleErrorWithActiveRun && currentQueuedRunId && currentQueuedRunId !== rid;
+      const staleProblemState = st === "error" || st === "interrupted";
+      const staleErrorWithActiveRun = staleProblemState && currentActiveRunId && currentActiveRunId !== rid;
+      const staleErrorWithQueuedRun = staleProblemState && !staleErrorWithActiveRun && currentQueuedRunId && currentQueuedRunId !== rid;
+      const staleErrorWithDoneRun = staleProblemState && !staleErrorWithActiveRun && !staleErrorWithQueuedRun && currentLatestDoneRunId && currentLatestDoneRunId !== rid;
+      const staleProblemText = st === "interrupted" ? "已中断" : "已失败";
       const staleErrorNote = staleErrorWithActiveRun
-        ? ("上一条 run 已失败；当前活跃 run " + shortId(currentActiveRunId) + " 仍在执行")
+        ? ("上一条 run " + staleProblemText + "；当前活跃 run " + shortId(currentActiveRunId) + " 仍在执行")
         : (staleErrorWithQueuedRun
-          ? "上一条 run 已失败；当前会话仍有排队消息待执行"
-          : "");
+          ? ("上一条 run " + staleProblemText + "；当前会话仍有排队消息待执行")
+          : (staleErrorWithDoneRun
+            ? ("上一条 run " + staleProblemText + "；最新 run " + shortId(currentLatestDoneRunId) + " 已完成")
+            : ""));
 
       const aiRow = el("div", { class: "msgrow assistant" });
       aiRow.__conversationFileMeta = {
@@ -2800,11 +3188,28 @@
       const activeDetailTab = getRunDetailDrawerTab(rid, { debugExpanded });
       const detailDrawerOpen = processExpanded || debugExpanded;
       const detailRefreshPolicy = conversationRunDetailRefreshPolicy(st, processInfo);
+      const codebuddyEmptyRefreshSet = PCONV.codebuddyEmptyProcessRefreshByRun instanceof Set
+        ? PCONV.codebuddyEmptyProcessRefreshByRun
+        : (PCONV.codebuddyEmptyProcessRefreshByRun = new Set());
+      const shouldForceCodeBuddyEmptyProcessRefresh = detailDrawerOpen
+        && activeDetailTab === "process"
+        && String(processInfo.cliType || "").trim().toLowerCase() === "codebuddy"
+        && !isRunWorking(st)
+        && Number(processInfo.count || 0) <= 0
+        && d && d.full && !d.loading
+        && !codebuddyEmptyRefreshSet.has(rid);
       // 只在用户真的展开“过程/调试”抽屉时再补拉详情。
       // 历史 run 若仅存在过程条数缺口，继续显示聚合计数即可，避免进入
       // “detail 返回 -> 整体重渲 -> 再次 force 拉 detail”的循环，导致选中会话后
       // 页面长时间抖动、点击看起来失效。
-      if (detailDrawerOpen && (!d || !d.loading) && !(detailRefreshPolicy.terminal && d && d.full)) {
+      if (shouldForceCodeBuddyEmptyProcessRefresh) {
+        codebuddyEmptyRefreshSet.add(rid);
+        ensureConversationRunDetail(rid, {
+          force: true,
+          maxAgeMs: 0,
+          terminalSyncStatus: String(st || "").toLowerCase(),
+        });
+      } else if (detailDrawerOpen && (!d || !d.loading) && !(detailRefreshPolicy.terminal && d && d.full)) {
         ensureConversationRunDetail(rid, {
           force: detailRefreshPolicy.force,
           maxAgeMs: detailRefreshPolicy.maxAgeMs,
@@ -2869,6 +3274,9 @@
             attachments: visibleGeneratedAttachments,
             opsContainer: bodyOps,
             keepOpsSize: true,
+            cliType: String(processInfo.cliType || r.cliType || r.cli_type || ""),
+            runMeta: r,
+            detailMeta: d,
             onReply: assistantBubbleText ? ({ bubbleKey, text }) => {
               queueConversationReply({
                 runId: rid,
@@ -2895,6 +3303,7 @@
         text: runStateHeadline(st || "idle", {
           timeout: timeoutLike,
           outcomeState: outcomeMeta && outcomeMeta.outcomeState,
+          providerHeadline: outcomeMeta && outcomeMeta.headline,
         }),
       }));
       const waitingText = retryWaitingRemainText(r);
@@ -2919,7 +3328,7 @@
         : (st === "error"
             ? (staleErrorNote || "可查看错误并继续处理")
             : (st === "interrupted"
-                ? "可查看过程并继续收口"
+                ? (staleErrorNote || "可查看过程并继续收口")
                 : (st === "done"
                     ? (processInfo.count > 0
                         ? "可查看正文与过程"
@@ -2964,7 +3373,7 @@
         class: "btn textbtn",
         text: (detailDrawerOpen && activeDetailTab === "process")
           ? "收起过程"
-          : (processInfo.count > 0 ? ("过程 " + processInfo.count) : "展开过程"),
+          : (processInfo.count > 0 ? ("过程 " + processInfo.count + " 条") : "展开过程"),
       });
       processBtn.addEventListener("click", () => {
         if (detailDrawerOpen && activeDetailTab === "process") {
@@ -3019,25 +3428,40 @@
       stateActions.appendChild(dbgBtn);
       if (stopBtn) stateActions.appendChild(stopBtn);
 
-      const allowRecoveryOps = st === "error" || (st === "interrupted" && outcomeMeta && outcomeMeta.outcomeState === "interrupted_infra");
+      const allowRecoveryOps = !staleErrorNote && (st === "error" || (st === "interrupted" && outcomeMeta && outcomeMeta.outcomeState === "interrupted_infra"));
       if (allowRecoveryOps) {
-        const recoverBtn = el("button", { class: "btn textbtn", text: "回收结果" });
+        const providerRecovery = !!(outcomeMeta && outcomeMeta.providerTransient);
+        const recoverBtn = el("button", { class: "btn textbtn", text: providerRecovery ? "补链恢复" : "回收结果" });
         recoverBtn.addEventListener("click", async () => {
           recoverBtn.disabled = true;
           try { await recoverRun(r); } finally { recoverBtn.disabled = false; }
         });
         stateActions.appendChild(recoverBtn);
 
-        const retryBtn = el("button", { class: "btn textbtn", text: "重试" });
-        retryBtn.addEventListener("click", async () => {
-          retryBtn.disabled = true;
-          try { await retryRun(r); } finally { retryBtn.disabled = false; }
-        });
-        stateActions.appendChild(retryBtn);
+        if (!providerRecovery) {
+          const retryBtn = el("button", { class: "btn textbtn", text: "重试" });
+          retryBtn.addEventListener("click", async () => {
+            retryBtn.disabled = true;
+            try { await retryRun(r); } finally { retryBtn.disabled = false; }
+          });
+          stateActions.appendChild(retryBtn);
+        }
       }
 
       stateBar.appendChild(stateActions);
       aiRow.appendChild(stateBar);
+
+      const showInlineProcessTimeline = isRunWorking(st)
+        && Array.isArray(processInfo.items)
+        && processInfo.items.length > 0
+        && !(detailDrawerOpen && activeDetailTab === "process");
+      if (showInlineProcessTimeline) {
+        const inlineProcessPanel = el("div", { class: "process-panel inline-live" });
+        inlineProcessPanel.appendChild(renderRunProcessStepGroups(rid, processInfo, () => {
+          rerenderConversationAssistantFamilyInPlace(aiRow, payload);
+        }));
+        aiRow.appendChild(inlineProcessPanel);
+      }
 
       if (detailDrawerOpen) {
         const detailDrawer = el("div", { class: "run-detail-drawer" });
@@ -3049,7 +3473,7 @@
         const drawerTabs = el("div", { class: "run-detail-tabs" });
         const processTabBtn = el("button", {
           class: "btn textbtn" + (activeDetailTab === "process" ? " active" : ""),
-          text: processInfo.count > 0 ? ("过程 " + processInfo.count) : "过程",
+          text: processInfo.count > 0 ? ("过程 " + processInfo.count + " 条") : "过程",
         });
         processTabBtn.addEventListener("click", () => {
           openRunDetailDrawer(rid, st, "process");
@@ -3113,6 +3537,18 @@
           }
           if (d && d.loading) meta.appendChild(chip("同步中", "warn"));
           processPanel.appendChild(meta);
+          const panelCliType = String(firstNonEmptyText([
+            r && r.cliType,
+            r && r.cli_type,
+            d && d.full && d.full.run && d.full.run.cliType,
+            d && d.full && d.full.run && d.full.run.cli_type,
+          ]) || "").trim().toLowerCase();
+          if (panelCliType === "codebuddy") {
+            processPanel.appendChild(el("div", {
+              class: "hint process-empty",
+              text: "CodeBuddy 过程仅展示工具调用和可公开步骤，思考内容不展示。",
+            }));
+          }
 
           if (processInfo.items.length > 0) {
             processPanel.appendChild(renderRunProcessStepGroups(rid, processInfo, () => {
@@ -3135,14 +3571,14 @@
         projection: receiptProjection,
       });
       if (receiptStack) aiRow.appendChild(receiptStack);
-      if (st === "error" || (st === "interrupted" && outcomeMeta && outcomeMeta.outcomeState === "interrupted_infra")) {
+      if (!staleErrorNote && (st === "error" || (st === "interrupted" && outcomeMeta && outcomeMeta.outcomeState === "interrupted_infra"))) {
         aiRow.appendChild(el("div", {
           class: "merr",
           text: outcomeMeta && outcomeMeta.outcomeState === "interrupted_infra"
             ? ("环境中断: " + (err || "执行被基础设施中断，可继续回收结果或重试"))
             : (staleErrorNote
                 ? ("上一条 run 失败: " + (err || "执行失败（未返回具体错误文本）"))
-                : ("error: " + (err || "执行失败（未返回具体错误文本）"))),
+                : runErrorDisplayText(err, outcomeMeta)),
         }));
         if (hint) aiRow.appendChild(el("div", { class: "hint", text: hint }));
       }

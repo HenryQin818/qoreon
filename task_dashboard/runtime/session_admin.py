@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Callable
 
+from task_dashboard.claude_permissions import normalize_claude_permission_mode
+from task_dashboard.codebuddy_permissions import normalize_codebuddy_permission_mode
 from task_dashboard.runtime.execution_profiles import normalize_execution_profile
 from task_dashboard.session_store import session_binding_is_available, session_binding_sort_key
 from task_dashboard.helpers import looks_like_session_id
@@ -66,13 +68,76 @@ def _session_process_busy_best_effort(session_id: str, cli_type: str = "codex") 
         return False
 
 
+def _cli_session_exists_for_attach(session_id: str, cli_type: str) -> bool:
+    cli = str(cli_type or "codex").strip().lower() or "codex"
+    sid = str(session_id or "").strip().lower()
+    if not sid:
+        return False
+    if cli != "claude":
+        return True
+    try:
+        from task_dashboard.adapters import get_adapter
+
+        adapter_cls = get_adapter(cli)
+        if adapter_cls is None:
+            return False
+        for row in adapter_cls.scan_sessions(after_ts=0.0):
+            found = str(getattr(row, "session_id", "") or "").strip().lower()
+            if found == sid:
+                return True
+    except Exception:
+        return False
+    return False
+
+
+def _payload_has_codebuddy_permission_mode(payload: dict[str, Any]) -> bool:
+    row = payload if isinstance(payload, dict) else {}
+    if str(row.get("cli_type") or row.get("cliType") or "").strip().lower() == "claude":
+        return False
+    if "_codebuddy_permission_mode_explicit" in row:
+        return bool(row.get("_codebuddy_permission_mode_explicit"))
+    return "codebuddy_permission_mode" in row or "codebuddyPermissionMode" in row
+
+
+def _payload_codebuddy_permission_mode(payload: dict[str, Any]) -> str:
+    row = payload if isinstance(payload, dict) else {}
+    raw = row.get("codebuddy_permission_mode") if "codebuddy_permission_mode" in row else row.get("codebuddyPermissionMode")
+    return normalize_codebuddy_permission_mode(raw)
+
+
+def _payload_has_claude_permission_mode(payload: dict[str, Any]) -> bool:
+    row = payload if isinstance(payload, dict) else {}
+    if "_claude_permission_mode_explicit" in row:
+        return bool(row.get("_claude_permission_mode_explicit"))
+    return (
+        "claude_permission_mode" in row
+        or "claudePermissionMode" in row
+        or (
+            str(row.get("cli_type") or row.get("cliType") or "").strip().lower() == "claude"
+            and ("permission_mode" in row or "permissionMode" in row)
+        )
+    )
+
+
+def _payload_claude_permission_mode(payload: dict[str, Any]) -> str:
+    row = payload if isinstance(payload, dict) else {}
+    raw = (
+        row.get("claude_permission_mode")
+        if "claude_permission_mode" in row
+        else (
+            row.get("claudePermissionMode")
+            if "claudePermissionMode" in row
+            else (row.get("permission_mode") if "permission_mode" in row else row.get("permissionMode"))
+        )
+    )
+    return normalize_claude_permission_mode(raw)
+
+
 def _pick_reusable_session(
     sessions: list[dict[str, Any]],
     *,
     environment: str,
     worktree_root: str,
-    workdir: str = "",
-    branch: str = "",
     cli_type: str,
 ) -> dict[str, Any] | None:
     available = [
@@ -88,26 +153,6 @@ def _pick_reusable_session(
         and str(row.get("worktree_root") or "").strip() == worktree_root
         and str(row.get("cli_type") or "codex").strip() == cli_type
     ]
-    requested_workdir = str(workdir or "").strip()
-    if requested_workdir:
-        exact_workdir = [
-            row for row in exact
-            if str(row.get("workdir") or "").strip() == requested_workdir
-        ]
-        if exact_workdir:
-            exact = exact_workdir
-        elif exact:
-            return None
-    requested_branch = str(branch or "").strip()
-    if requested_branch:
-        exact_branch = [
-            row for row in exact
-            if str(row.get("branch") or "").strip() == requested_branch
-        ]
-        if exact_branch:
-            exact = exact_branch
-        elif exact:
-            return None
     candidates = exact or available
     candidates.sort(key=session_binding_sort_key, reverse=True)
     return candidates[0] if candidates else None
@@ -128,6 +173,8 @@ def create_session_response(
     load_project_execution_context: Callable[..., dict[str, Any]] | None = None,
     project_exists: Callable[[str], bool],
     channel_exists: Callable[[str, str], bool],
+    resolve_channel_workdir: Callable[[str, str], Any] | None = None,
+    ensure_static_instruction_files: Callable[..., dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     project_id = str(payload.get("project_id") or "")
     channel_name = str(payload.get("channel_name") or "")
@@ -136,15 +183,23 @@ def create_session_response(
     cli_type = str(payload.get("cli_type") or "codex")
     model = str(payload.get("model") or "")
     reasoning_effort = str(payload.get("reasoning_effort") or "")
+    codebuddy_permission_mode_explicit = _payload_has_codebuddy_permission_mode(payload)
+    codebuddy_permission_mode = _payload_codebuddy_permission_mode(payload) if codebuddy_permission_mode_explicit else ""
+    claude_permission_mode_explicit = _payload_has_claude_permission_mode(payload)
+    claude_permission_mode = _payload_claude_permission_mode(payload) if claude_permission_mode_explicit else ""
     alias = str(payload.get("alias") or "")
-    environment = str(payload.get("environment") or environment_name or "stable").strip() or "stable"
-    requested_worktree_root = str(payload.get("worktree_root") or worktree_root or "").strip()
+    requested_environment = str(payload.get("environment") or "").strip()
+    environment = requested_environment or str(environment_name or "stable").strip() or "stable"
+    requested_worktree_root = str(payload.get("worktree_root") or "").strip()
     requested_workdir = str(payload.get("workdir") or "").strip()
     requested_branch = str(payload.get("branch") or "").strip()
     session_role = str(payload.get("session_role") or "").strip()
     purpose = str(payload.get("purpose") or "").strip()
     reuse_strategy = _normalize_reuse_strategy(payload.get("reuse_strategy"))
-    reuse_strategy_explicit = bool(payload.get("reuse_strategy_explicit"))
+    try:
+        create_timeout_s = max(10, int(payload.get("create_timeout_s") or 90))
+    except Exception:
+        create_timeout_s = 90
     set_as_primary = payload.get("set_as_primary")
     first_message = str(payload.get("first_message") or "")
     if not project_id or not channel_name:
@@ -153,11 +208,18 @@ def create_session_response(
         raise LookupError("project not found")
     if not channel_exists(project_id, channel_name):
         raise LookupError("channel not found")
+    static_instruction_files: dict[str, Any] = {}
+    if str(cli_type or "").strip().lower() == "codebuddy" and callable(ensure_static_instruction_files):
+        static_instruction_files = ensure_static_instruction_files(
+            project_id=project_id,
+            channel_name=channel_name,
+            cli_type=cli_type,
+        ) or {}
 
     requested_context_seed = {
         "project_id": project_id,
         "channel_name": channel_name,
-        "environment": environment,
+        "environment": requested_environment,
         "worktree_root": requested_worktree_root,
         "workdir": requested_workdir,
         "branch": requested_branch,
@@ -170,11 +232,19 @@ def create_session_response(
     )
     effective_environment = str(resolved_context_seed.get("environment") or environment or environment_name or "stable").strip() or "stable"
     effective_worktree_root = str(resolved_context_seed.get("worktree_root") or "").strip() or str(worktree_root or "")
-    resolved_workdir_text = (
-        _resolve_context_dir(requested_workdir, fallback_root=effective_worktree_root)
-        if requested_workdir
-        else str(resolved_context_seed.get("workdir") or "").strip()
-    )
+    resolved_workdir_text = ""
+    if requested_workdir:
+        resolved_workdir_text = _resolve_context_dir(requested_workdir, fallback_root=effective_worktree_root)
+    elif callable(resolve_channel_workdir):
+        try:
+            resolved_workdir_text = _resolve_context_dir(
+                resolve_channel_workdir(project_id, channel_name),
+                fallback_root=effective_worktree_root,
+            )
+        except Exception:
+            resolved_workdir_text = ""
+    if not resolved_workdir_text:
+        resolved_workdir_text = str(resolved_context_seed.get("workdir") or "").strip()
     if not resolved_workdir_text:
         resolved_workdir_text = str(resolve_project_workdir(project_id))
     project_workdir = Path(resolved_workdir_text)
@@ -216,6 +286,8 @@ def create_session_response(
             raise ValueError("invalid session_id")
         if _session_process_busy_best_effort(requested_session_id, cli_type=cli_type):
             raise ValueError("session is currently busy")
+        if not _cli_session_exists_for_attach(requested_session_id, cli_type):
+            raise ValueError("claude session_id not found; create a new ClaudeCode Agent or attach a real Claude conversation id")
         attached_session, imported = session_store.attach_existing_session(
             project_id=project_id,
             channel_name=channel_name,
@@ -224,6 +296,8 @@ def create_session_response(
             alias=alias,
             model=model,
             reasoning_effort=reasoning_effort,
+            codebuddy_permission_mode=codebuddy_permission_mode if codebuddy_permission_mode_explicit else "",
+            claude_permission_mode=claude_permission_mode if claude_permission_mode_explicit else "",
             environment=effective_environment,
             worktree_root=effective_worktree_root,
             workdir=str(project_workdir),
@@ -252,23 +326,14 @@ def create_session_response(
             "reused": False,
             "attached": True,
             "imported": bool(imported),
+            **({"static_instruction_files": static_instruction_files} if static_instruction_files else {}),
         }
-
-    if (
-        reuse_strategy == "reuse_active"
-        and not reuse_strategy_explicit
-        and set_as_primary is True
-        and session_role == "primary"
-    ):
-        reuse_strategy = "create_new"
 
     if reuse_strategy == "reuse_active":
         reusable = _pick_reusable_session(
             session_store.list_sessions(project_id, channel_name, include_deleted=True),
             environment=effective_environment,
             worktree_root=effective_worktree_root,
-            workdir=str(project_workdir),
-            branch=branch,
             cli_type=cli_type,
         )
         if reusable:
@@ -285,6 +350,10 @@ def create_session_response(
                 update_fields["model"] = model
             if reasoning_effort:
                 update_fields["reasoning_effort"] = reasoning_effort
+            if codebuddy_permission_mode_explicit:
+                update_fields["codebuddy_permission_mode"] = codebuddy_permission_mode
+            if claude_permission_mode_explicit:
+                update_fields["claude_permission_mode"] = claude_permission_mode
             if purpose:
                 update_fields["purpose"] = purpose
             if session_role:
@@ -317,21 +386,24 @@ def create_session_response(
                 "workdir": str(project_workdir),
                 "created": False,
                 "reused": True,
+                **({"static_instruction_files": static_instruction_files} if static_instruction_files else {}),
             }
 
     seed = build_session_seed_prompt(
         project_id=project_id,
         channel_name=channel_name,
         first_message=first_message,
+        cli_type=cli_type,
     )
     create_result = create_cli_session(
         seed_prompt=seed,
-        timeout_s=90,
+        timeout_s=create_timeout_s,
         cli_type=cli_type,
         workdir=project_workdir,
         model=model,
         reasoning_effort=reasoning_effort,
         execution_profile=execution_profile,
+        permission_mode=claude_permission_mode if str(cli_type or "").strip().lower() == "claude" else "",
     )
     timeout_recovered = False
     create_warning: dict[str, Any] = {}
@@ -358,6 +430,8 @@ def create_session_response(
         session_id=recovered_session_id,
         model=model,
         reasoning_effort=reasoning_effort,
+        codebuddy_permission_mode=codebuddy_permission_mode if codebuddy_permission_mode_explicit else "default",
+        claude_permission_mode=claude_permission_mode if claude_permission_mode_explicit else "",
         environment=effective_environment,
         worktree_root=effective_worktree_root,
         workdir=str(create_result.get("workdir", str(project_workdir)) or str(project_workdir)),
@@ -366,7 +440,7 @@ def create_session_response(
         purpose=purpose,
         reuse_strategy=reuse_strategy,
         schema_version="session.create.v2",
-        created_via="api.create_session_v2.timeout_recovered" if timeout_recovered else "api.create_session_v2",
+            created_via="api.create_session_v2.timeout_recovered" if timeout_recovered else "api.create_session_v2",
         context_binding_state=effective_binding_state,
         project_execution_context=context_meta,
         is_primary=effective_primary if isinstance(effective_primary, bool) else None,
@@ -387,6 +461,7 @@ def create_session_response(
         "timeout_recovered": timeout_recovered,
         "timeoutRecovered": timeout_recovered,
         "create_warning": create_warning,
+        **({"static_instruction_files": static_instruction_files} if static_instruction_files else {}),
     }
 
 

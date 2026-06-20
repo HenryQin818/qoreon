@@ -9,6 +9,7 @@ import time
 from typing import Any, Callable, Optional
 from urllib.parse import parse_qs
 
+from task_dashboard.adapters.codebuddy_output import sanitize_process_event_text
 from task_dashboard.runtime.project_execution_context import (
     build_project_execution_context,
     infer_project_execution_context_source,
@@ -17,12 +18,14 @@ from task_dashboard.runtime.run_detail_fields import (
     extract_agent_messages,
     extract_agent_messages_from_file,
     extract_business_refs_from_texts,
+    extract_process_events_from_file,
     extract_skills_used_from_texts,
     extract_terminal_message_from_file,
     extract_terminal_message_text,
     fallback_log_from_meta,
     normalize_business_refs_value,
     normalize_skills_used_value,
+    safe_terminal_visible_text,
 )
 
 _RUNS_LIST_CACHE_LOCK = threading.Lock()
@@ -460,7 +463,52 @@ def _latest_process_row_preview(process_rows: Any, max_len: int) -> str:
     return ""
 
 
-_TERMINAL_TEXT_CLIS = {"claude", "opencode"}
+def _normalize_standard_process_rows(rows: Any) -> list[dict[str, str]]:
+    out: list[dict[str, str]] = []
+    if not isinstance(rows, list):
+        return out
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        event_type = _safe_text(row.get("event_type"), 80).strip()
+        item_type = _safe_text(row.get("item_type"), 120).strip()
+        title = _safe_text(row.get("title"), 200).strip()
+        text = _safe_text(
+            sanitize_process_event_text(
+                row.get("text"),
+                title=title,
+                item_type=item_type,
+                event_type=event_type,
+            ),
+            3000,
+        ).strip()
+        if not text:
+            continue
+        item = {"text": text}
+        for key, value in (
+            ("event_type", event_type),
+            ("item_type", item_type),
+            ("title", title),
+        ):
+            if value:
+                item[key] = value
+        for key, max_len in (
+            ("at", 80),
+            ("path", 1000),
+            ("source", 1000),
+            ("raw_ref", 1000),
+            ("call_id", 1000),
+        ):
+            value = _safe_text(row.get(key), max_len).strip()
+            if value:
+                item[key] = value
+        out.append(item)
+    return out
+
+
+_TERMINAL_TEXT_CLIS = {"claude", "opencode", "gemini", "codebuddy"}
+_TERMINAL_TEXT_PROCESS_CLEAR_CLIS = {"opencode", "gemini"}
+_STANDARD_PROCESS_EVENT_CLIS = {"codebuddy", "claude"}
 
 
 def _normalize_terminal_text_row_fields(store: Any, run_id: str, row: dict[str, Any]) -> bool:
@@ -471,23 +519,45 @@ def _normalize_terminal_text_row_fields(store: Any, run_id: str, row: dict[str, 
     preview = str(row.get("lastPreview") or "").strip()
     if not preview:
         preview = _safe_text(extract_terminal_message_from_file(store._paths(run_id)["log"], cli_type=cli_type), 300)
+    if preview:
+        preview = _safe_text(safe_terminal_visible_text(preview, cli_type=cli_type), 300)
         if preview:
             row["lastPreview"] = preview
             changed = True
+    elif str(row.get("lastPreview") or "").strip():
+        row["lastPreview"] = ""
+        changed = True
     if int(row.get("agentMessagesCount") or 0) != 0:
         row["agentMessagesCount"] = 0
         changed = True
     if str(row.get("partialPreview") or "").strip():
         row["partialPreview"] = ""
         changed = True
-    process_rows = row.get("processRows")
-    if isinstance(process_rows, list) and process_rows:
-        row["processRows"] = []
-        changed = True
-    process_rows_alt = row.get("process_rows")
-    if isinstance(process_rows_alt, list) and process_rows_alt:
-        row["process_rows"] = []
-        changed = True
+    if cli_type in _TERMINAL_TEXT_PROCESS_CLEAR_CLIS:
+        process_rows = row.get("processRows")
+        if isinstance(process_rows, list) and process_rows:
+            row["processRows"] = []
+            changed = True
+        process_rows_alt = row.get("process_rows")
+        if isinstance(process_rows_alt, list) and process_rows_alt:
+            row["process_rows"] = []
+            changed = True
+    elif cli_type in _STANDARD_PROCESS_EVENT_CLIS:
+        standard_rows = row.get("processRows") or row.get("process_rows") or []
+        standard_events = row.get("process_events") or row.get("processEvents") or []
+        normalized_rows = _normalize_standard_process_rows(standard_rows)
+        normalized_events = _normalize_standard_process_rows(standard_events)
+        canonical = normalized_rows or normalized_events
+        if canonical:
+            if row.get("processRows") != canonical:
+                row["processRows"] = [dict(item) for item in canonical]
+                changed = True
+            if row.get("process_events") != canonical:
+                row["process_events"] = [dict(item) for item in canonical]
+                changed = True
+            if row.get("processEvents") != canonical:
+                row["processEvents"] = [dict(item) for item in canonical]
+                changed = True
     return changed
 
 
@@ -503,6 +573,7 @@ def _strip_runs_summary_fields(row: dict[str, Any]) -> None:
         "processRows",
         "process_rows",
         "process_events",
+        "processEvents",
     ):
         row.pop(key, None)
 
@@ -740,12 +811,15 @@ def get_run_detail_response(
     if not log_tail:
         log_tail = fallback_log_from_meta(meta)
     run_cli_type = str(meta.get("cliType") or "codex").strip() or "codex"
+    run_cli_key = run_cli_type.lower()
     if not str(last or "").strip():
-        last_file = extract_terminal_message_from_file(store._paths(run_id)["log"], cli_type=run_cli_type)
-        last_tail = extract_terminal_message_text(log_tail, cli_type=run_cli_type)
+        last_file = extract_terminal_message_from_file(store._paths(run_id)["log"], cli_type=run_cli_key)
+        last_tail = extract_terminal_message_text(log_tail, cli_type=run_cli_key)
         last = last_file if len(last_file) >= len(last_tail) else last_tail
-    agent_msgs_tail = extract_agent_messages(log_tail, max_items=200, cli_type=run_cli_type)
-    agent_msgs_file = extract_agent_messages_from_file(store._paths(run_id)["log"], max_items=200, cli_type=run_cli_type)
+    if run_cli_key == "codebuddy":
+        last = safe_terminal_visible_text(last, cli_type=run_cli_key)
+    agent_msgs_tail = extract_agent_messages(log_tail, max_items=200, cli_type=run_cli_key)
+    agent_msgs_file = extract_agent_messages_from_file(store._paths(run_id)["log"], max_items=200, cli_type=run_cli_key)
     agent_msgs = agent_msgs_file if len(agent_msgs_file) >= len(agent_msgs_tail) else agent_msgs_tail
     partial = agent_msgs[-1] if agent_msgs else ""
     log_preview = _safe_text(log_tail.replace("\r\n", "\n").strip(), 420) if log_tail else ""
@@ -753,7 +827,7 @@ def get_run_detail_response(
     if log_preview and log_preview != str(meta.get("logPreview") or ""):
         meta["logPreview"] = log_preview
         meta_changed = True
-    if run_cli_type in _TERMINAL_TEXT_CLIS:
+    if run_cli_key in _TERMINAL_TEXT_CLIS:
         normalized_last = _safe_text(last, 300)
         if normalized_last and normalized_last != str(meta.get("lastPreview") or "").strip():
             meta["lastPreview"] = normalized_last
@@ -764,20 +838,68 @@ def get_run_detail_response(
         if str(meta.get("partialPreview") or "").strip():
             meta["partialPreview"] = ""
             meta_changed = True
-        process_rows = meta.get("processRows")
-        if isinstance(process_rows, list) and process_rows:
-            meta["processRows"] = []
-            meta_changed = True
-        process_rows_alt = meta.get("process_rows")
-        if isinstance(process_rows_alt, list) and process_rows_alt:
-            meta["process_rows"] = []
-            meta_changed = True
-        process_events = meta.get("process_events")
-        if isinstance(process_events, list) and process_events:
-            meta["process_events"] = []
-            meta_changed = True
+        if run_cli_key in _TERMINAL_TEXT_PROCESS_CLEAR_CLIS:
+            process_rows = meta.get("processRows")
+            if isinstance(process_rows, list) and process_rows:
+                meta["processRows"] = []
+                meta_changed = True
+            process_rows_alt = meta.get("process_rows")
+            if isinstance(process_rows_alt, list) and process_rows_alt:
+                meta["process_rows"] = []
+                meta_changed = True
+            process_events = meta.get("process_events")
+            if isinstance(process_events, list) and process_events:
+                meta["process_events"] = []
+                meta_changed = True
+            process_events_alt = meta.get("processEvents")
+            if isinstance(process_events_alt, list) and process_events_alt:
+                meta["processEvents"] = []
+                meta_changed = True
         agent_msgs = []
         partial = ""
+    if run_cli_key in _STANDARD_PROCESS_EVENT_CLIS:
+        standard_rows = meta.get("processRows") or meta.get("process_rows") or []
+        standard_events = meta.get("process_events") or meta.get("processEvents") or []
+        has_rows = isinstance(standard_rows, list) and bool(standard_rows)
+        has_events = isinstance(standard_events, list) and bool(standard_events)
+        if not has_rows and not has_events:
+            recovered_events = extract_process_events_from_file(
+                store._paths(run_id)["log"],
+                max_items=240,
+                cli_type=run_cli_key,
+            )
+            if recovered_events:
+                recovered_rows = [dict(row) for row in recovered_events]
+                meta["processRows"] = recovered_rows
+                meta["process_events"] = [dict(row) for row in recovered_events]
+                meta["processEvents"] = [dict(row) for row in recovered_events]
+                meta_changed = True
+        elif has_rows and not has_events:
+            normalized_rows = _normalize_standard_process_rows(standard_rows)
+            if normalized_rows:
+                meta["process_events"] = normalized_rows
+                meta["processEvents"] = [dict(row) for row in normalized_rows]
+                meta_changed = True
+        elif has_events and not has_rows:
+            normalized_events = _normalize_standard_process_rows(standard_events)
+            if normalized_events:
+                meta["processRows"] = normalized_events
+                meta["process_events"] = [dict(row) for row in normalized_events]
+                meta["processEvents"] = [dict(row) for row in normalized_events]
+                meta_changed = True
+        elif has_events and has_rows:
+            normalized_events = _normalize_standard_process_rows(standard_events)
+            if normalized_events:
+                if meta.get("process_events") != normalized_events:
+                    meta["process_events"] = [dict(row) for row in normalized_events]
+                    meta_changed = True
+                if meta.get("processEvents") != normalized_events:
+                    meta["processEvents"] = [dict(row) for row in normalized_events]
+                    meta_changed = True
+            normalized_rows = _normalize_standard_process_rows(standard_rows)
+            if normalized_rows and meta.get("processRows") != normalized_rows:
+                meta["processRows"] = normalized_rows
+                meta_changed = True
     if agent_msgs:
         prev_count = int(meta.get("agentMessagesCount") or 0)
         if len(agent_msgs) != prev_count:
@@ -830,7 +952,7 @@ def get_run_detail_response(
     process_rows = meta.get("processRows") or meta.get("process_rows") or []
     if not isinstance(process_rows, list):
         process_rows = []
-    process_events = meta.get("process_events") or []
+    process_events = meta.get("process_events") or meta.get("processEvents") or []
     if not isinstance(process_events, list):
         process_events = []
     message_preview = _safe_text(message.replace("\r\n", "\n").strip(), 260) if message else ""
@@ -846,7 +968,10 @@ def get_run_detail_response(
     elif latest_process_preview and latest_process_preview != str(meta.get("partialPreview") or ""):
         meta["partialPreview"] = latest_process_preview
         meta_changed = True
-    effective_last_preview = _safe_text(last.replace("\r\n", "\n").strip(), 300) if last else ""
+    effective_last_preview = _safe_text(
+        safe_terminal_visible_text(last, cli_type=run_cli_key).replace("\r\n", "\n").strip(),
+        300,
+    ) if last else ""
     if not effective_last_preview:
         effective_last_preview = latest_process_preview
     if effective_last_preview and effective_last_preview != str(meta.get("lastPreview") or ""):
@@ -962,9 +1087,19 @@ def perform_run_action_response(
                         "url": str(att.get("url") or ""),
                     }
                 )
+        cancelled_at = now_iso()
         meta["hidden"] = True
         meta["cancelAction"] = "cancel_edit"
-        meta["cancelledAt"] = now_iso()
+        meta["cancelledAt"] = cancelled_at
+        meta["status"] = "interrupted"
+        meta["display_state"] = "interrupted"
+        meta["outcome_state"] = "interrupted_user"
+        meta["failure_class"] = "interrupted"
+        meta["error_class"] = "user_cancelled"
+        meta["recovery_required"] = False
+        meta["recovery_mode"] = ""
+        meta["finishedAt"] = str(meta.get("finishedAt") or "").strip() or cancelled_at
+        meta["error"] = str(meta.get("error") or "").strip() or "cancelled by user before start"
         store.save_meta(run_id, meta)
         audit_action(
             run_id=run_id,
@@ -1065,8 +1200,12 @@ def perform_run_action_response(
             return 409, {"error": "run is not interruptible", "status": status}
         meta2 = store.load_meta(run_id) or meta
         if str(meta2.get("status") or "").strip().lower() == "running":
-            meta2["interruptRequestedAt"] = now_iso()
+            requested_at = now_iso()
+            meta2["interruptRequestedAt"] = requested_at
             meta2["interruptRequestedBy"] = "user"
+            meta2["interrupt_origin"] = "user"
+            meta2["interrupt_requested_by"] = "user"
+            meta2["interrupt_requested_at"] = requested_at
             try:
                 store.save_meta(run_id, meta2)
             except Exception:
@@ -1077,6 +1216,11 @@ def perform_run_action_response(
                 meta2["status"] = "error"
                 meta2["error"] = "interrupted by user"
                 meta2["finishedAt"] = now_iso()
+                meta2["interrupt_origin"] = "user"
+                meta2["interrupt_requested_by"] = "user"
+                if not str(meta2.get("interrupt_requested_at") or "").strip():
+                    meta2["interrupt_requested_at"] = str(meta2.get("interruptRequestedAt") or "").strip() or now_iso()
+                meta2["chain_state"] = "cancelled_by_user"
                 store.save_meta(run_id, meta2)
                 try:
                     dispatch_terminal_callback_for_run(store, run_id, scheduler=scheduler, meta=meta2)

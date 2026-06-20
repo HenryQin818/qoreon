@@ -84,6 +84,74 @@
       }
     }
 
+    async function tryUpdateSessionCodeBuddyPermissionMode(sessionId, mode) {
+      const sid = String(sessionId || "").trim();
+      const normalized = typeof normalizeCodeBuddyPermissionMode === "function"
+        ? normalizeCodeBuddyPermissionMode(mode)
+        : String(mode || "default").trim();
+      if (!looksLikeSessionId(sid) || !normalized) return false;
+      try {
+        const r = await fetch("/api/sessions/" + encodeURIComponent(sid), {
+          method: "PUT",
+          headers: authHeaders({ "Content-Type": "application/json" }),
+          body: JSON.stringify({ codebuddy_permission_mode: normalized }),
+        });
+        if (!r || !r.ok) return false;
+        const payload = await r.json().catch(() => null);
+        const session = payload && typeof payload === "object" && payload.session && typeof payload.session === "object"
+          ? payload.session
+          : payload;
+        const echoed = session && typeof session === "object"
+          ? (Object.prototype.hasOwnProperty.call(session, "codebuddy_permission_mode")
+            ? session.codebuddy_permission_mode
+            : session.codebuddyPermissionMode)
+          : "";
+        const confirmed = typeof normalizeCodeBuddyPermissionMode === "function"
+          ? normalizeCodeBuddyPermissionMode(echoed)
+          : String(echoed || "default").trim();
+        return confirmed === normalized;
+      } catch (_) {
+        return false;
+      }
+    }
+
+    async function tryUpdateSessionClaudePermissionMode(sessionId, mode) {
+      const sid = String(sessionId || "").trim();
+      const normalized = typeof normalizeClaudePermissionMode === "function"
+        ? normalizeClaudePermissionMode(mode)
+        : String(mode || "bypassPermissions").trim();
+      if (!looksLikeSessionId(sid) || !normalized) return false;
+      try {
+        const r = await fetch("/api/sessions/" + encodeURIComponent(sid), {
+          method: "PUT",
+          headers: authHeaders({ "Content-Type": "application/json" }),
+          body: JSON.stringify({
+            claude_permission_mode: normalized,
+            permission_mode: normalized,
+          }),
+        });
+        if (!r || !r.ok) return false;
+        const payload = await r.json().catch(() => null);
+        const session = payload && typeof payload === "object" && payload.session && typeof payload.session === "object"
+          ? payload.session
+          : payload;
+        const echoed = session && typeof session === "object"
+          ? firstNonEmptyText([
+            session.claude_permission_mode,
+            session.claudePermissionMode,
+            session.permission_mode,
+            session.permissionMode,
+          ])
+          : "";
+        const confirmed = typeof normalizeClaudePermissionMode === "function"
+          ? normalizeClaudePermissionMode(echoed)
+          : String(echoed || "bypassPermissions").trim();
+        return confirmed === normalized;
+      } catch (_) {
+        return false;
+      }
+    }
+
     function sessionCreateChannelNotFound(resp, payload) {
       const body = (payload && typeof payload === "object") ? payload : {};
       const detail = (body && typeof body.detail === "object") ? body.detail : null;
@@ -226,6 +294,8 @@
 
     function conversationSessionHasRuntimeStateSource(session) {
       const sources = conversationSessionStateSources(session);
+      const s = (session && typeof session === "object") ? session : {};
+      if (s._state_sources && typeof s._state_sources === "object") return !!sources.runtime_state;
       if (sources.runtime_state) return true;
       const runtimeState = getSessionRuntimeState(session);
       return !!(
@@ -238,9 +308,12 @@
 
     function conversationSessionHasDisplayStateSource(session) {
       const sources = conversationSessionStateSources(session);
+      const hasSourceMeta = !!(session && typeof session === "object" && session._state_sources && typeof session._state_sources === "object");
+      if (hasSourceMeta) return !!sources.session_display_state;
       if (sources.session_display_state) return true;
       const s = (session && typeof session === "object") ? session : {};
-      return !!String(firstNonEmptyText([s.session_display_state, s.sessionDisplayState]) || "").trim();
+      const value = normalizeDisplayState(firstNonEmptyText([s.session_display_state, s.sessionDisplayState]) || "", "");
+      return !!(value && value !== "idle");
     }
 
     function isConversationActiveDisplayState(raw) {
@@ -299,6 +372,316 @@
         && !String(runtimeState.queued_run_id || "").trim()
         && Math.max(0, Number(runtimeState.queue_depth || 0) || 0) <= 0
       );
+    }
+
+    function preserveConversationActiveSessionStateFields(nextSession, previousSession) {
+      const next = (nextSession && typeof nextSession === "object") ? nextSession : {};
+      const prev = (previousSession && typeof previousSession === "object") ? previousSession : {};
+      if (!conversationShouldPreserveActiveSessionState(next, prev)) return nextSession;
+      const prevRuntime = getSessionRuntimeState(prev);
+      const displayState = normalizeDisplayState(
+        firstNonEmptyText([
+          prev.session_display_state,
+          prev.sessionDisplayState,
+          prevRuntime.display_state,
+          prev.lastStatus,
+        ]) || "idle",
+        "idle"
+      );
+      const latestRunSummary = prev.latest_run_summary || prev.latestRunSummary || next.latest_run_summary || next.latestRunSummary || null;
+      const latestEffectiveRunSummary = prev.latest_effective_run_summary || prev.latestEffectiveRunSummary || next.latest_effective_run_summary || next.latestEffectiveRunSummary || null;
+      const preserved = {
+        ...next,
+        runtime_state: prevRuntime,
+        session_display_state: displayState,
+        session_display_reason: String(firstNonEmptyText([
+          prev.session_display_reason,
+          prev.sessionDisplayReason,
+          next.session_display_reason,
+          next.sessionDisplayReason,
+        ]) || ""),
+        latest_run_summary: latestRunSummary,
+        lastStatus: displayState,
+        lastPreview: String(firstNonEmptyText([
+          latestEffectiveRunSummary && latestEffectiveRunSummary.preview,
+          latestRunSummary && latestRunSummary.preview,
+          prev.lastPreview,
+          next.lastPreview,
+        ]) || ""),
+        lastError: String(firstNonEmptyText([prev.lastError, prev.last_error, next.lastError, next.last_error]) || ""),
+        lastErrorHint: String(firstNonEmptyText([prev.lastErrorHint, prev.last_error_hint, next.lastErrorHint, next.last_error_hint]) || ""),
+        lastActiveAt: String(firstNonEmptyText([prev.lastActiveAt, prev.last_used_at, next.lastActiveAt, next.last_used_at]) || ""),
+        _state_sources: {
+          ...conversationSessionStateSources(next),
+          runtime_state: true,
+          session_display_state: true,
+          latest_run_summary: !!latestRunSummary,
+          latest_effective_run_summary: !!latestEffectiveRunSummary,
+        },
+      };
+      if (latestEffectiveRunSummary) preserved.latest_effective_run_summary = latestEffectiveRunSummary;
+      return preserved;
+    }
+
+    function conversationRunStatusForRuntimeOverlay(run) {
+      const row = (run && typeof run === "object") ? run : {};
+      return normalizeDisplayState(firstNonEmptyText([
+        row.display_state,
+        row.displayState,
+        row.status,
+      ]) || "", "idle");
+    }
+
+    function conversationRunIdForRuntimeOverlay(run) {
+      const row = (run && typeof run === "object") ? run : {};
+      return String(firstNonEmptyText([row.id, row.runId, row.run_id]) || "").trim();
+    }
+
+    function conversationRunIsTerminalForRuntimeOverlay(run) {
+      const row = (run && typeof run === "object") ? run : {};
+      const raw = String(firstNonEmptyText([
+        row.display_state,
+        row.displayState,
+        row.status,
+        row.state,
+      ]) || "").trim().toLowerCase();
+      return raw === "done" || raw === "error" || raw === "interrupted";
+    }
+
+    function conversationRunSessionIdForRuntimeOverlay(run) {
+      const row = (run && typeof run === "object") ? run : {};
+      return String(firstNonEmptyText([row.sessionId, row.session_id]) || "").trim();
+    }
+
+    function conversationRunUpdatedAtForRuntimeOverlay(run) {
+      const row = (run && typeof run === "object") ? run : {};
+      return String(firstNonEmptyText([
+        row.updatedAt,
+        row.updated_at,
+        row.lastProgressAt,
+        row.last_progress_at,
+        row.startedAt,
+        row.started_at,
+        row.createdAt,
+        row.created_at,
+      ]) || "").trim();
+    }
+
+    function conversationRunTimeForRuntimeOverlay(run) {
+      const text = conversationRunUpdatedAtForRuntimeOverlay(run);
+      if (!text) return -1;
+      const normalized = text.replace(/([+-]\d{2})(\d{2})$/, "$1:$2");
+      const parsed = Date.parse(normalized);
+      return Number.isFinite(parsed) ? parsed : -1;
+    }
+
+    function conversationLatestRunBySessionFromRuns(runs) {
+      const map = new Map();
+      const list = Array.isArray(runs) ? runs : [];
+      list.forEach((run) => {
+        const sid = conversationRunSessionIdForRuntimeOverlay(run);
+        if (!sid) return;
+        const time = conversationRunTimeForRuntimeOverlay(run);
+        const prev = map.get(sid);
+        if (!prev || time >= prev.time) {
+          map.set(sid, { run, time });
+        }
+      });
+      return map;
+    }
+
+    function conversationRuntimeOverlayBySessionFromRuns(runs) {
+      const map = new Map();
+      const list = Array.isArray(runs) ? runs : [];
+      list.forEach((run) => {
+        const sid = conversationRunSessionIdForRuntimeOverlay(run);
+        if (!sid) return;
+        const status = conversationRunStatusForRuntimeOverlay(run);
+        const activeLike = status === "running" || status === "retry_waiting" || status === "external_busy";
+        const queuedLike = status === "queued";
+        if (!activeLike && !queuedLike) return;
+        let entry = map.get(sid);
+        if (!entry) {
+          entry = {
+            activeRun: null,
+            activeTime: -1,
+            queuedRun: null,
+            queuedTime: -1,
+            queueDepth: 0,
+            updatedAt: "",
+            updatedTime: -1,
+          };
+          map.set(sid, entry);
+        }
+        const time = conversationRunTimeForRuntimeOverlay(run);
+        if (time > entry.updatedTime) {
+          entry.updatedTime = time;
+          entry.updatedAt = conversationRunUpdatedAtForRuntimeOverlay(run);
+        }
+        if (activeLike && time >= entry.activeTime) {
+          entry.activeRun = run;
+          entry.activeTime = time;
+        }
+        if (queuedLike) {
+          entry.queueDepth += 1;
+          if (time >= entry.queuedTime) {
+            entry.queuedRun = run;
+            entry.queuedTime = time;
+          }
+        }
+      });
+      return map;
+    }
+
+    function conversationRuntimeOverlayStateFromEntry(entry) {
+      const src = (entry && typeof entry === "object") ? entry : {};
+      const activeRun = src.activeRun || null;
+      const queuedRun = src.queuedRun || null;
+      const activeStatus = conversationRunStatusForRuntimeOverlay(activeRun);
+      const queuedStatus = conversationRunStatusForRuntimeOverlay(queuedRun);
+      const displayState = activeRun ? activeStatus : (queuedRun ? queuedStatus : "idle");
+      const latestRun = activeRun || queuedRun || null;
+      return {
+        runtime_state: {
+          internal_state: displayState,
+          external_busy: displayState === "external_busy",
+          display_state: displayState,
+          active_run_id: activeRun ? conversationRunIdForRuntimeOverlay(activeRun) : "",
+          queued_run_id: queuedRun ? conversationRunIdForRuntimeOverlay(queuedRun) : "",
+          queue_depth: Math.max(0, Number(src.queueDepth || 0) || 0),
+          updated_at: String(src.updatedAt || conversationRunUpdatedAtForRuntimeOverlay(latestRun) || ""),
+        },
+        latest_run_summary: {
+          run_id: latestRun ? conversationRunIdForRuntimeOverlay(latestRun) : "",
+          status: displayState,
+          updated_at: String(conversationRunUpdatedAtForRuntimeOverlay(latestRun) || src.updatedAt || ""),
+          preview: String(firstNonEmptyText([
+            latestRun && latestRun.lastPreview,
+            latestRun && latestRun.partialPreview,
+            latestRun && latestRun.messagePreview,
+            latestRun && latestRun.preview,
+          ]) || ""),
+          speaker: "assistant",
+          sender_type: String(firstNonEmptyText([latestRun && latestRun.sender_type, latestRun && latestRun.senderType]) || ""),
+          sender_name: String(firstNonEmptyText([latestRun && latestRun.sender_name, latestRun && latestRun.senderName]) || ""),
+          sender_source: String(firstNonEmptyText([latestRun && latestRun.sender_source, latestRun && latestRun.senderSource]) || ""),
+        },
+        display_state: displayState,
+      };
+    }
+
+    function conversationShouldClearRuntimeOverlayFromRun(session, run) {
+      if (!session || typeof session !== "object" || !run || typeof run !== "object") return false;
+      if (!conversationRunIsTerminalForRuntimeOverlay(run)) return false;
+      const runtimeState = getSessionRuntimeState(session);
+      const currentRunIds = new Set([
+        String(runtimeState.active_run_id || "").trim(),
+        String(runtimeState.queued_run_id || "").trim(),
+      ].filter(Boolean));
+      if (!currentRunIds.size) return false;
+      const runId = conversationRunIdForRuntimeOverlay(run);
+      return !!(runId && currentRunIds.has(runId));
+    }
+
+    function conversationClearedRuntimeOverlayStateFromRun(session, run) {
+      const s = (session && typeof session === "object") ? session : {};
+      const prevSources = conversationSessionStateSources(s);
+      const status = conversationRunStatusForRuntimeOverlay(run);
+      const updatedAt = String(conversationRunUpdatedAtForRuntimeOverlay(run) || "");
+      const runId = conversationRunIdForRuntimeOverlay(run);
+      const latestRunSummary = {
+        run_id: runId,
+        status,
+        updated_at: updatedAt,
+        preview: String(firstNonEmptyText([
+          run && run.lastPreview,
+          run && run.partialPreview,
+          run && run.messagePreview,
+          run && run.preview,
+        ]) || ""),
+        speaker: "assistant",
+        sender_type: String(firstNonEmptyText([run && run.sender_type, run && run.senderType]) || ""),
+        sender_name: String(firstNonEmptyText([run && run.sender_name, run && run.senderName]) || ""),
+        sender_source: String(firstNonEmptyText([run && run.sender_source, run && run.senderSource]) || ""),
+      };
+      return {
+        ...s,
+        runtime_state: {
+          internal_state: "idle",
+          external_busy: false,
+          display_state: "idle",
+          active_run_id: "",
+          queued_run_id: "",
+          queue_depth: 0,
+          updated_at: updatedAt,
+        },
+        session_display_state: "idle",
+        session_display_reason: "runs_overlay_terminal",
+        latest_run_summary: latestRunSummary,
+        lastStatus: "idle",
+        lastPreview: String(firstNonEmptyText([
+          latestRunSummary.preview,
+          s.lastPreview,
+        ]) || ""),
+        lastActiveAt: String(firstNonEmptyText([
+          updatedAt,
+          s.lastActiveAt,
+          s.last_used_at,
+        ]) || ""),
+        _state_sources: {
+          ...prevSources,
+          runtime_state: true,
+          session_display_state: true,
+          latest_run_summary: true,
+        },
+      };
+    }
+
+    function applyConversationRuntimeOverlayFromRuns(sessions, runs) {
+      const list = Array.isArray(sessions) ? sessions : [];
+      const overlayBySession = conversationRuntimeOverlayBySessionFromRuns(runs);
+      const latestRunBySession = conversationLatestRunBySessionFromRuns(runs);
+      if (!overlayBySession.size && !latestRunBySession.size) return list;
+      return list.map((session) => {
+        const s = (session && typeof session === "object") ? session : {};
+        const sid = String(firstNonEmptyText([s.sessionId, s.id, s.session_id]) || "").trim();
+        const entry = sid ? overlayBySession.get(sid) : null;
+        if (!entry) {
+          const latest = sid ? latestRunBySession.get(sid) : null;
+          const latestRun = latest && latest.run ? latest.run : null;
+          if (conversationShouldClearRuntimeOverlayFromRun(s, latestRun)) {
+            return conversationClearedRuntimeOverlayStateFromRun(s, latestRun);
+          }
+          return session;
+        }
+        const overlay = conversationRuntimeOverlayStateFromEntry(entry);
+        if (!isConversationActiveDisplayState(overlay.display_state)) return session;
+        const prevSources = conversationSessionStateSources(s);
+        const latestRunSummary = overlay.latest_run_summary || s.latest_run_summary || s.latestRunSummary || null;
+        return {
+          ...s,
+          runtime_state: overlay.runtime_state,
+          session_display_state: overlay.display_state,
+          session_display_reason: String(firstNonEmptyText([s.session_display_reason, s.sessionDisplayReason, "runs_overlay"]) || "runs_overlay"),
+          latest_run_summary: latestRunSummary,
+          lastStatus: overlay.display_state,
+          lastPreview: String(firstNonEmptyText([
+            latestRunSummary && latestRunSummary.preview,
+            s.lastPreview,
+          ]) || ""),
+          lastActiveAt: String(firstNonEmptyText([
+            overlay.runtime_state.updated_at,
+            s.lastActiveAt,
+            s.last_used_at,
+          ]) || ""),
+          _state_sources: {
+            ...prevSources,
+            runtime_state: true,
+            session_display_state: true,
+            latest_run_summary: !!latestRunSummary,
+          },
+        };
+      });
     }
 
     function normalizeConversationTaskOwner(raw) {
@@ -518,17 +901,16 @@
     }
 
     const CONVERSATION_SESSIONS_VISIBLE_POLL_TARGET_MS = 12000;
-    const CONVERSATION_SESSIONS_FRESHNESS_FLOOR_MS = 18000;
+    const CONVERSATION_SESSIONS_FRESHNESS_FLOOR_MS = 8000;
 
     function hasConversationOwnOption(opts, key) {
       return !!(opts && Object.prototype.hasOwnProperty.call(opts, key));
     }
 
-    function normalizeConversationVisiblePollIntervalMs(raw, fallback = 12000) {
-      const visibleTargetMs = 12000;
+    function normalizeConversationVisiblePollIntervalMs(raw, fallback = CONVERSATION_SESSIONS_VISIBLE_POLL_TARGET_MS) {
       return Math.min(
         normalizeConversationPollingNumber(raw, fallback),
-        visibleTargetMs
+        CONVERSATION_SESSIONS_VISIBLE_POLL_TARGET_MS
       );
     }
 
@@ -537,26 +919,23 @@
         enabled: true,
         cache_ttl_ms: 4000,
         inflight_wait_ms: 8000,
-        poll_interval_ms: 12000,
-        hidden_poll_interval_ms: 0,
+        poll_interval_ms: CONVERSATION_SESSIONS_VISIBLE_POLL_TARGET_MS,
+        hidden_poll_interval_ms: CONVERSATION_SESSIONS_VISIBLE_POLL_TARGET_MS,
         backoff_step_ms: 2000,
         backoff_max_ms: 15000,
-        pause_when_hidden: true,
-        cross_tab_dedupe_enabled: true,
+        pause_when_hidden: false,
+        cross_tab_dedupe_enabled: false,
       };
     }
 
     function normalizeConversationSessionsPollingHints(raw) {
       const src = (raw && typeof raw === "object") ? raw : {};
       const fallback = defaultConversationSessionsPollingHints();
-      const normalizeVisiblePollMs = (typeof normalizeConversationVisiblePollIntervalMs === "function")
-        ? normalizeConversationVisiblePollIntervalMs
-        : ((value, defaultValue = 12000) => Math.min(normalizeConversationPollingNumber(value, defaultValue), 12000));
       return {
         enabled: Object.prototype.hasOwnProperty.call(src, "enabled") ? !!src.enabled : fallback.enabled,
         cache_ttl_ms: normalizeConversationPollingNumber(src.cache_ttl_ms ?? src.cacheTtlMs, fallback.cache_ttl_ms),
         inflight_wait_ms: normalizeConversationPollingNumber(src.inflight_wait_ms ?? src.inflightWaitMs, fallback.inflight_wait_ms),
-        poll_interval_ms: normalizeVisiblePollMs(src.poll_interval_ms ?? src.pollIntervalMs, fallback.poll_interval_ms),
+        poll_interval_ms: normalizeConversationVisiblePollIntervalMs(src.poll_interval_ms ?? src.pollIntervalMs, fallback.poll_interval_ms),
         hidden_poll_interval_ms: normalizeConversationPollingNumber(src.hidden_poll_interval_ms ?? src.hiddenPollIntervalMs, fallback.hidden_poll_interval_ms),
         backoff_step_ms: normalizeConversationPollingNumber(src.backoff_step_ms ?? src.backoffStepMs, fallback.backoff_step_ms),
         backoff_max_ms: normalizeConversationPollingNumber(src.backoff_max_ms ?? src.backoffMaxMs, fallback.backoff_max_ms),
@@ -592,8 +971,9 @@
         enabled: true,
         cache_ttl_ms: readModel.cache_ttl_ms ?? readModel.cacheTtlMs,
         inflight_wait_ms: readModel.inflight_wait_ms ?? readModel.inflightWaitMs,
-        pause_when_hidden: true,
-        cross_tab_dedupe_enabled: true,
+        hidden_poll_interval_ms: readModel.hidden_poll_interval_ms ?? readModel.hiddenPollIntervalMs ?? CONVERSATION_SESSIONS_VISIBLE_POLL_TARGET_MS,
+        pause_when_hidden: false,
+        cross_tab_dedupe_enabled: false,
       } : null;
       const current = (PCONV.pollingMetaByProject && PCONV.pollingMetaByProject[pid]) || {};
       const nextSessions = sessionsRaw
@@ -642,37 +1022,62 @@
     function conversationProjectPollingCadenceMs(projectId, channelName = "", opts = {}) {
       const pid = String(projectId || "").trim();
       if (!pid || pid === "overview") return 0;
+      const visibleTargetMs = typeof CONVERSATION_SESSIONS_VISIBLE_POLL_TARGET_MS !== "undefined"
+        ? CONVERSATION_SESSIONS_VISIBLE_POLL_TARGET_MS
+        : 12000;
+      const normalizeNumber = typeof normalizeConversationPollingNumber === "function"
+        ? normalizeConversationPollingNumber
+        : ((raw, fallback = 0) => {
+          const num = Number(raw);
+          if (!Number.isFinite(num)) return Math.max(0, Number(fallback) || 0);
+          return Math.max(0, Math.round(num));
+        });
+      const normalizeVisibleInterval = typeof normalizeConversationVisiblePollIntervalMs === "function"
+        ? normalizeConversationVisiblePollIntervalMs
+        : ((raw, fallback = visibleTargetMs) => Math.min(normalizeNumber(raw, fallback), visibleTargetMs));
       const policy = typeof conversationProjectPollingHints === "function"
         ? conversationProjectPollingHints(pid)
         : null;
       const source = String((opts && opts.source) || "").trim().toLowerCase();
       if (policy && policy.enabled) {
         if (source === "poll" || source === "resume" || !String(channelName || "").trim()) {
-          return Math.min(normalizeConversationPollingNumber(policy.poll_interval_ms, 12000), 12000);
+          return normalizeVisibleInterval(policy.poll_interval_ms, visibleTargetMs);
         }
       }
-      return normalizeConversationPollingNumber((opts && opts.freshnessMs) || 0, 0);
+      return normalizeNumber((opts && opts.freshnessMs) || 0, 0);
     }
 
     function resolveConversationSessionsFreshnessMs(projectId, channelName = "", opts = {}) {
       if (shouldForceConversationSessionDirectoryLiveFetch(projectId, channelName, opts)) return 0;
-      const freshnessFloorMs = 18000;
+      const freshnessFloorMs = typeof CONVERSATION_SESSIONS_FRESHNESS_FLOOR_MS !== "undefined"
+        ? CONVERSATION_SESSIONS_FRESHNESS_FLOOR_MS
+        : 8000;
+      const visibleTargetMs = typeof CONVERSATION_SESSIONS_VISIBLE_POLL_TARGET_MS !== "undefined"
+        ? CONVERSATION_SESSIONS_VISIBLE_POLL_TARGET_MS
+        : 12000;
       const rawFreshnessMs = Number(opts && opts.freshnessMs);
-      const hasOwnOption = (typeof hasConversationOwnOption === "function")
+      const hasOwnOption = typeof hasConversationOwnOption === "function"
         ? hasConversationOwnOption
         : ((source, key) => !!(source && Object.prototype.hasOwnProperty.call(source, key)));
+      const normalizeNumber = typeof normalizeConversationPollingNumber === "function"
+        ? normalizeConversationPollingNumber
+        : ((raw, fallback = 0) => {
+          const num = Number(raw);
+          if (!Number.isFinite(num)) return Math.max(0, Number(fallback) || 0);
+          return Math.max(0, Math.round(num));
+        });
       const hasFreshnessOverride = hasOwnOption(opts, "freshnessMs")
         && Number.isFinite(rawFreshnessMs)
         && rawFreshnessMs >= 0;
       const freshnessMs = hasFreshnessOverride
-        ? normalizeConversationPollingNumber(rawFreshnessMs, 0)
+        ? normalizeNumber(rawFreshnessMs, 0)
         : freshnessFloorMs;
       const source = String((opts && opts.source) || "").trim().toLowerCase();
       if ((source === "poll" || source === "resume") && !String(channelName || "").trim()) {
-        return Math.max(freshnessMs, 18000);
+        return Math.max(freshnessMs, 18000, freshnessFloorMs);
       }
       const cadenceMs = conversationProjectPollingCadenceMs(projectId, channelName, opts);
-      return hasFreshnessOverride ? freshnessMs : Math.max(freshnessMs, Math.min(cadenceMs, 12000));
+      return hasFreshnessOverride ? freshnessMs : Math.max(freshnessMs, Math.min(cadenceMs, visibleTargetMs));
     }
 
     function shouldDeferConversationSessionDirectoryLiveLoad(opts = {}) {
@@ -717,6 +1122,12 @@
       if (!PCONV.sessionDetailErrorById || typeof PCONV.sessionDetailErrorById !== "object") {
         PCONV.sessionDetailErrorById = Object.create(null);
       }
+      if (!PCONV.sessionDetailDeferredTimerById || typeof PCONV.sessionDetailDeferredTimerById !== "object") {
+        PCONV.sessionDetailDeferredTimerById = Object.create(null);
+      }
+      if (!PCONV.sessionDetailDeferredReasonById || typeof PCONV.sessionDetailDeferredReasonById !== "object") {
+        PCONV.sessionDetailDeferredReasonById = Object.create(null);
+      }
     }
 
     function isConversationSessionDetailLoading(sessionId) {
@@ -733,6 +1144,66 @@
       return String(PCONV.sessionDetailErrorById[sid] || "").trim();
     }
 
+    function conversationSessionHasDetailPayload(session) {
+      const row = (session && typeof session === "object") ? session : {};
+      return !!(
+        hasConversationTaskTrackingData(row.task_tracking)
+        || row.project_execution_context
+        || row.projectExecutionContext
+      );
+    }
+
+    function conversationSessionDetailLoadedRecently(sessionId, maxAgeMs = 0) {
+      const sid = String(sessionId || "").trim();
+      if (!sid) return false;
+      ensureConversationSessionDetailStateMaps();
+      const loadedAt = Number(PCONV.sessionDetailLoadedAtById[sid] || 0);
+      if (!loadedAt) return false;
+      const ttl = Math.max(0, Number(maxAgeMs || 0) || 0);
+      return !ttl || (Date.now() - loadedAt) < ttl;
+    }
+
+    function conversationSessionDetailHydrationStatus(sessionId, session = null) {
+      const sid = String(sessionId || "").trim();
+      if (!sid) return { state: "idle", label: "", message: "", canRetry: false };
+      ensureConversationSessionDetailStateMaps();
+      if (isConversationSessionDetailLoading(sid)) {
+        return {
+          state: "loading",
+          label: "状态更新中",
+          message: "后台补全中：完整历史、上下文、任务跟踪和高级配置正在异步读取，不影响发送。",
+          canRetry: false,
+        };
+      }
+      const errorText = getConversationSessionDetailError(sid);
+      if (errorText) {
+        return {
+          state: "error",
+          label: "状态可能延迟",
+          message: "高级状态读取失败；列表和发送入口仍可用。",
+          errorText,
+          canRetry: true,
+        };
+      }
+      if (conversationSessionDetailLoadedRecently(sid, 60_000) || conversationSessionHasDetailPayload(session)) {
+        return { state: "ready", label: "", message: "", canRetry: false };
+      }
+      if (PCONV.sessionDetailDeferredTimerById && PCONV.sessionDetailDeferredTimerById[sid]) {
+        return {
+          state: "deferred",
+          label: "状态可能延迟",
+          message: "后台补全中：当前先使用最近已知状态，完整状态稍后自动补齐。",
+          canRetry: true,
+        };
+      }
+      return {
+        state: "stale",
+        label: "状态可能延迟",
+        message: "当前先使用最近已知状态；可点击重试状态读取完整详情。",
+        canRetry: true,
+      };
+    }
+
     function mergeConversationSessionDetailIntoStore(detail, sessionId = "") {
       const base = (detail && typeof detail === "object") ? detail : {};
       const sid = String(firstNonEmptyText([sessionId, base.sessionId, base.id]) || "").trim();
@@ -740,10 +1211,19 @@
       const prev = typeof findConversationSessionById === "function"
         ? findConversationSessionById(sid)
         : null;
-      const merged = normalizeConversationSession({
+      const projectId = String(firstNonEmptyText([
+        base.project_id,
+        base.projectId,
+        prev && prev.project_id,
+        prev && prev.projectId,
+        STATE && STATE.project,
+      ]) || "").trim();
+      let merged = normalizeConversationSession({
         ...(prev || {}),
         id: sid,
         sessionId: sid,
+        project_id: projectId,
+        projectId,
         alias: firstNonEmptyText([base.alias, prev && prev.alias]),
         channel_name: firstNonEmptyText([base.channel_name, prev && prev.channel_name, prev && prev.primaryChannel]),
         channels: Array.isArray(prev && prev.channels) ? prev.channels.slice() : [],
@@ -756,7 +1236,15 @@
         workdir: firstNonEmptyText([base.workdir, prev && prev.workdir]),
         branch: firstNonEmptyText([base.branch, prev && prev.branch]),
         cli_type: firstNonEmptyText([base.cli_type, prev && prev.cli_type], "codex"),
-        model: normalizeSessionModel(firstNonEmptyText([base.model, prev && prev.model])),
+        model: typeof mergeConversationSessionModelValue === "function"
+          ? mergeConversationSessionModelValue(base, prev)
+          : normalizeSessionModel(firstNonEmptyText([base.model, prev && prev.model])),
+        codebuddy_permission_mode: typeof mergeConversationSessionPermissionModeValue === "function"
+          ? mergeConversationSessionPermissionModeValue(base, prev)
+          : firstNonEmptyText([base.codebuddy_permission_mode, base.codebuddyPermissionMode, prev && prev.codebuddy_permission_mode, prev && prev.codebuddyPermissionMode], "default"),
+        codebuddyPermissionMode: typeof mergeConversationSessionPermissionModeValue === "function"
+          ? mergeConversationSessionPermissionModeValue(base, prev)
+          : firstNonEmptyText([base.codebuddy_permission_mode, base.codebuddyPermissionMode, prev && prev.codebuddy_permission_mode, prev && prev.codebuddyPermissionMode], "default"),
         reasoning_effort: normalizeReasoningEffort(firstNonEmptyText([base.reasoning_effort, prev && prev.reasoning_effort])),
         status: firstNonEmptyText([base.status, prev && prev.status], "active"),
         created_at: firstNonEmptyText([base.created_at, prev && prev.created_at]),
@@ -765,22 +1253,34 @@
           ? !!base.is_primary
           : !!(prev && prev.is_primary),
         source: firstNonEmptyText([base.source, prev && prev.source]),
+        session_display_state: firstNonEmptyText([base.session_display_state, base.sessionDisplayState, prev && prev.session_display_state, prev && prev.sessionDisplayState]),
+        session_display_reason: firstNonEmptyText([base.session_display_reason, base.sessionDisplayReason, prev && prev.session_display_reason, prev && prev.sessionDisplayReason]),
         runtime_state: base.runtime_state || (prev && prev.runtime_state) || null,
+        latest_run_summary: base.latest_run_summary || base.latestRunSummary || (prev && (prev.latest_run_summary || prev.latestRunSummary)) || null,
+        latest_effective_run_summary: base.latest_effective_run_summary || base.latestEffectiveRunSummary || (prev && (prev.latest_effective_run_summary || prev.latestEffectiveRunSummary)) || null,
         heartbeat_summary: base.heartbeat_summary || (prev && prev.heartbeat_summary) || null,
         project_execution_context: base.project_execution_context || (prev && prev.project_execution_context) || null,
         task_tracking: hasConversationTaskTrackingData(base.task_tracking)
           ? base.task_tracking
           : (prev && prev.task_tracking),
+        conversation_list_metrics: base.conversation_list_metrics || base.conversationListMetrics || (prev && (prev.conversation_list_metrics || prev.conversationListMetrics)) || null,
+        memo_summary: base.memo_summary || base.memoSummary || (prev && (prev.memo_summary || prev.memoSummary)) || null,
       });
       if (!merged) return null;
-      let replaced = false;
-      for (let i = 0; i < PCONV.sessions.length; i += 1) {
-        if (String(getSessionId(PCONV.sessions[i]) || "").trim() !== sid) continue;
-        PCONV.sessions[i] = merged;
-        replaced = true;
-        break;
-      }
-      if (!replaced) PCONV.sessions.push(merged);
+      const upsertSessionRow = (list) => {
+        const rows = Array.isArray(list) ? list.slice() : [];
+        for (let i = 0; i < rows.length; i += 1) {
+          if (String(getSessionId(rows[i]) || "").trim() !== sid) continue;
+          const nextRow = preserveConversationSessionDetailFields(merged, rows[i]) || merged;
+          rows[i] = nextRow;
+          return { rows, merged: nextRow };
+        }
+        rows.push(merged);
+        return { rows, merged };
+      };
+      const sessionResult = upsertSessionRow(PCONV.sessions);
+      PCONV.sessions = sessionResult.rows;
+      merged = sessionResult.merged;
       ensureConversationSessionDetailStateMaps();
       PCONV.sessionDetailLoadedAtById[sid] = Date.now();
       delete PCONV.sessionDetailErrorById[sid];
@@ -823,6 +1323,9 @@
             : normalizeConversationSessionDetail(payload, fallback);
           const merged = mergeConversationSessionDetailIntoStore(normalized, sid);
           if (String(STATE.selectedSessionId || "").trim() === sid && typeof renderConversationDetail === "function") {
+            if (typeof buildConversationMainList === "function" && typeof document !== "undefined") {
+              buildConversationMainList(document.getElementById("fileList"));
+            }
             renderConversationDetail(false);
           }
           return merged;
@@ -834,6 +1337,51 @@
         }
       })();
       return PCONV.sessionDetailPromiseById[sid];
+    }
+
+    function clearConversationSessionDetailHydrationTimer(sessionId) {
+      const sid = String(sessionId || "").trim();
+      if (!sid) return;
+      ensureConversationSessionDetailStateMaps();
+      const timer = PCONV.sessionDetailDeferredTimerById[sid];
+      if (timer) {
+        clearTimeout(timer);
+        delete PCONV.sessionDetailDeferredTimerById[sid];
+      }
+      delete PCONV.sessionDetailDeferredReasonById[sid];
+    }
+
+    async function requestConversationSessionDetailHydration(sessionId, opts = {}) {
+      const sid = String(sessionId || "").trim();
+      if (!looksLikeSessionId(sid)) return null;
+      clearConversationSessionDetailHydrationTimer(sid);
+      ensureConversationSessionDetailStateMaps();
+      return ensureConversationSessionDetailLoaded(sid, {
+        ...(opts || {}),
+        force: !!(opts && opts.force),
+      });
+    }
+
+    function scheduleConversationSessionDetailHydration(sessionId, opts = {}) {
+      const sid = String(sessionId || "").trim();
+      if (!looksLikeSessionId(sid)) return false;
+      ensureConversationSessionDetailStateMaps();
+      const maxAgeMs = Math.max(0, Number((opts && opts.maxAgeMs) || 0) || 0);
+      if (conversationSessionDetailLoadedRecently(sid, maxAgeMs)) return false;
+      if (PCONV.sessionDetailPromiseById[sid]) return false;
+      if (PCONV.sessionDetailDeferredTimerById[sid]) return false;
+      const delayMs = Math.max(0, Number((opts && opts.delayMs) || 0) || 0);
+      PCONV.sessionDetailDeferredReasonById[sid] = String((opts && opts.reason) || "background");
+      PCONV.sessionDetailDeferredTimerById[sid] = setTimeout(() => {
+        delete PCONV.sessionDetailDeferredTimerById[sid];
+        delete PCONV.sessionDetailDeferredReasonById[sid];
+        requestConversationSessionDetailHydration(sid, {
+          maxAgeMs,
+          force: false,
+          reason: String((opts && opts.reason) || "background"),
+        }).catch(() => {});
+      }, delayMs);
+      return true;
     }
 
     function markConversationSessionDirectoryMeta(projectId, extra = {}) {
@@ -858,11 +1406,22 @@
       return (Array.isArray(sessions) ? sessions : []).map((s) => {
         const sid = firstNonEmptyText([s.id, s.session_id, s.sessionId]);
         const channelName = String(s.channel_name || "");
+        const stateSources = {
+          runtime_state: !!(s.runtime_state || s.runtimeState),
+          session_display_state: Object.prototype.hasOwnProperty.call(s, "session_display_state")
+            || Object.prototype.hasOwnProperty.call(s, "sessionDisplayState"),
+          latest_run_summary: !!(s.latest_run_summary || s.latestRunSummary),
+          latest_effective_run_summary: !!(s.latest_effective_run_summary || s.latestEffectiveRunSummary),
+          communication_status_summary: !!(s.communication_status_summary || s.communicationStatusSummary),
+        };
         const presentation = resolveConversationSessionPresentation(s, channelName, sid);
         const runtimeState = normalizeRuntimeState(s.runtime_state || s.runtimeState || null);
         const latestRunSummary = normalizeLatestRunSummary(s.latest_run_summary || s.latestRunSummary || null);
         const latestEffectiveRunSummary = normalizeLatestEffectiveRunSummary(
           s.latest_effective_run_summary || s.latestEffectiveRunSummary || null
+        );
+        const communicationStatusSummary = normalizeCommunicationStatusSummaryClient(
+          s.communication_status_summary || s.communicationStatusSummary || null
         );
         const sessionHealthState = normalizeSessionHealthState(
           firstNonEmptyText([s.session_health_state, s.sessionHealthState]),
@@ -880,6 +1439,12 @@
           latest_run_summary: latestRunSummary,
           latest_effective_run_summary: latestEffectiveRunSummary,
         }, latestEffectiveRunSummary.preview || "");
+        const permissionModePresent = Object.prototype.hasOwnProperty.call(s, "codebuddy_permission_mode")
+          || Object.prototype.hasOwnProperty.call(s, "codebuddyPermissionMode");
+        const claudePermissionModePresent = Object.prototype.hasOwnProperty.call(s, "claude_permission_mode")
+          || Object.prototype.hasOwnProperty.call(s, "claudePermissionMode")
+          || Object.prototype.hasOwnProperty.call(s, "permission_mode")
+          || Object.prototype.hasOwnProperty.call(s, "permissionMode");
         const baseSession = {
           sessionId: String(sid || ""),
           id: String(sid || ""),
@@ -898,6 +1463,20 @@
           codexTitle: String(s.codex_title || ""),
           cli_type: String(s.cli_type || "codex"),
           model: normalizeSessionModel(s.model),
+          codebuddy_permission_mode: typeof normalizeCodeBuddyPermissionMode === "function"
+            ? normalizeCodeBuddyPermissionMode(permissionModePresent ? (s.codebuddy_permission_mode || s.codebuddyPermissionMode) : "")
+            : String((permissionModePresent ? (s.codebuddy_permission_mode || s.codebuddyPermissionMode) : "") || "default"),
+          codebuddyPermissionMode: typeof normalizeCodeBuddyPermissionMode === "function"
+            ? normalizeCodeBuddyPermissionMode(permissionModePresent ? (s.codebuddy_permission_mode || s.codebuddyPermissionMode) : "")
+            : String((permissionModePresent ? (s.codebuddy_permission_mode || s.codebuddyPermissionMode) : "") || "default"),
+          _codebuddy_permission_mode_present: permissionModePresent,
+          claude_permission_mode: claudePermissionModePresent && typeof normalizeClaudePermissionMode === "function"
+            ? normalizeClaudePermissionMode(firstNonEmptyText([s.claude_permission_mode, s.claudePermissionMode, s.permission_mode, s.permissionMode]))
+            : (claudePermissionModePresent ? String(firstNonEmptyText([s.claude_permission_mode, s.claudePermissionMode, s.permission_mode, s.permissionMode]) || "bypassPermissions") : ""),
+          claudePermissionMode: claudePermissionModePresent && typeof normalizeClaudePermissionMode === "function"
+            ? normalizeClaudePermissionMode(firstNonEmptyText([s.claude_permission_mode, s.claudePermissionMode, s.permission_mode, s.permissionMode]))
+            : (claudePermissionModePresent ? String(firstNonEmptyText([s.claude_permission_mode, s.claudePermissionMode, s.permission_mode, s.permissionMode]) || "bypassPermissions") : ""),
+          _claude_permission_mode_present: claudePermissionModePresent,
           reasoning_effort: normalizeReasoningEffort(s.reasoning_effort || s.reasoningEffort),
           status: String(s.status || "active"),
           created_at: String(s.created_at || ""),
@@ -925,10 +1504,11 @@
           session_display_reason: String(firstNonEmptyText([s.session_display_reason, s.sessionDisplayReason]) || ""),
           latest_run_summary: latestRunSummary,
           latest_effective_run_summary: latestEffectiveRunSummary,
+          communication_status_summary: communicationStatusSummary,
           runtime_state: runtimeState,
           heartbeat_summary: heartbeatSummary,
-          conversation_list_metrics: normalizeConversationListMetricsClient(s.conversation_list_metrics || s.conversationListMetrics || null),
           task_tracking: normalizeTaskTrackingClient(s.task_tracking || s.taskTracking || null),
+          _state_sources: stateSources,
         };
         baseSession.lastStatus = getSessionDisplayState(baseSession);
         return baseSession;
@@ -1012,6 +1592,10 @@
       if (channelName) qs.set("channel_name", String(channelName));
       const payloadMode = normalizeConversationSessionsPayloadMode(opts && (opts.payloadMode || opts.payload_mode || opts.queryMode || opts.query_mode));
       qs.set("payloadMode", payloadMode);
+      const allowStale = hasConversationOwnOption(opts, "allowStale")
+        ? !!opts.allowStale
+        : (hasConversationOwnOption(opts, "allow_stale") ? !!opts.allow_stale : payloadMode === "summary" || payloadMode === "light");
+      if (allowStale && (payloadMode === "summary" || payloadMode === "light")) qs.set("allow_stale", "1");
       const task = (async () => {
         const r = await fetch("/api/sessions?" + qs.toString(), { cache: "no-store" });
         if (!r.ok) {
@@ -1059,7 +1643,18 @@
       }
       const task = (async () => {
         try {
-          const serverSessions = await fetchConversationSessionsFromApi(pid, "", { force });
+          const existingById = new Map();
+          existing.forEach((row) => {
+            const normalized = normalizeConversationSession(row);
+            if (!normalized) return;
+            existingById.set(normalized.sessionId, normalized);
+          });
+          const serverSessions = (await fetchConversationSessionsFromApi(pid, "", { force }))
+            .map((row) => preserveConversationSessionDetailFields(
+              row,
+              existingById.get(String((row && (row.sessionId || row.id || row.session_id)) || "").trim()) || null
+            ))
+            .filter(Boolean);
           const merged = mergeConversationSessions(configuredProjectConversations(pid), serverSessions);
           PCONV.sessionDirectoryByProject[pid] = merged.slice();
           markConversationSessionDirectoryMeta(pid, {
@@ -1144,6 +1739,7 @@
       const createBtn = document.getElementById("newConvCreateBtn");
       const sidInput = document.getElementById("newConvSessionId");
       const modelInput = document.getElementById("newConvModel");
+      const codeBuddyModelSelect = document.getElementById("newConvCodeBuddyModel");
       const purposeInput = document.getElementById("newConvPurpose");
       const aliasInput = document.getElementById("newConvAlias");
       const sessionRoleInput = document.getElementById("newConvSessionRole");
@@ -1159,7 +1755,10 @@
       const cli = String((cliSelect && cliSelect.value) || "codex");
       const mode = normalizeNewConvMode(NEW_CONV_UI.mode);
       const sidFromInput = String((sidInput && sidInput.value) || "").trim();
-      const model = normalizeSessionModel(modelInput && modelInput.value);
+      const codeBuddyModel = String((codeBuddyModelSelect && codeBuddyModelSelect.value) || "").trim();
+      const model = String(cli || "").trim().toLowerCase() === "codebuddy"
+        ? (codeBuddyModel || normalizeSessionModel(modelInput && modelInput.value) || "deepseek-v4-pro")
+        : normalizeSessionModel(modelInput && modelInput.value);
       const purpose = String((purposeInput && purposeInput.value) || "").trim();
       const alias = String((aliasInput && aliasInput.value) || "").trim();
       const sessionRole = String((sessionRoleInput && sessionRoleInput.value) || "child").trim() || "child";
@@ -1340,7 +1939,7 @@
             ? "已完成 timeout-recovered 补登记并绑定。"
             : (j && j.reused ? "已复用并绑定现有对话。" : "已创建并绑定新对话。");
           if (initMessage) {
-            if (createBtn) createBtn.textContent = "首发中...";
+            if (createBtn) createBtn.textContent = "发送中...";
             const bootstrapMode = /^\s*--bootstrap-message\s*$/i.test(initMessage);
             if (bootstrapMode) {
               const msgs = buildBootstrapVisibleMessages(ch);
@@ -1349,16 +1948,16 @@
                 ? await sendNewConversationInitMessage(pid, ch, sid, effectiveCli, msgs[1], model)
                 : { ok: false };
               if (sendA.ok && sendB.ok) {
-                tip = (timeoutRecovered ? "已完成 timeout-recovered 补登记并绑定，" : "已创建并绑定新对话，") + "并自动发送两条标准首发消息。";
+                tip = (timeoutRecovered ? "已完成 timeout-recovered 补登记并绑定，" : "已创建并绑定新对话，") + "并发送两条标准首发消息。";
               } else {
                 tip = (timeoutRecovered ? "已完成 timeout-recovered 补登记并绑定，" : "已创建并绑定新对话，") + "但标准首发消息发送不完整，请手动补发。";
               }
             } else {
               const sendRet = await sendNewConversationInitMessage(pid, ch, sid, effectiveCli, initMessage, model);
               if (sendRet.ok) {
-                tip = (timeoutRecovered ? "已完成 timeout-recovered 补登记并绑定，" : "已创建并绑定新对话，") + "并自动发送初始化消息。";
+                tip = (timeoutRecovered ? "已完成 timeout-recovered 补登记并绑定，" : "已创建并绑定新对话，") + "并发送一次性启动消息。";
               } else {
-                tip = (timeoutRecovered ? "已完成 timeout-recovered 补登记并绑定，" : "已创建并绑定新对话，") + "但初始化消息发送失败，请手动发送。";
+                tip = (timeoutRecovered ? "已完成 timeout-recovered 补登记并绑定，" : "已创建并绑定新对话，") + "但一次性启动消息发送失败，请手动发送。";
               }
             }
           }
@@ -1443,6 +2042,19 @@
       if (!raw) return null;
       const sid = String(raw.sessionId || raw.id || raw.session_id || "").trim();
       if (!looksLikeSessionId(sid)) return null;
+      const rawStateSources = (raw._state_sources && typeof raw._state_sources === "object") ? raw._state_sources : null;
+      const stateSources = rawStateSources ? {
+        runtime_state: !!rawStateSources.runtime_state,
+        session_display_state: !!rawStateSources.session_display_state,
+        latest_run_summary: !!rawStateSources.latest_run_summary,
+        latest_effective_run_summary: !!rawStateSources.latest_effective_run_summary,
+      } : {
+        runtime_state: !!(raw.runtime_state || raw.runtimeState),
+        session_display_state: Object.prototype.hasOwnProperty.call(raw, "session_display_state")
+          || Object.prototype.hasOwnProperty.call(raw, "sessionDisplayState"),
+        latest_run_summary: !!(raw.latest_run_summary || raw.latestRunSummary),
+        latest_effective_run_summary: !!(raw.latest_effective_run_summary || raw.latestEffectiveRunSummary),
+      };
       const projectId = String(raw.project_id || raw.projectId || STATE.project || "").trim();
       const channelName = String(
         raw.channel_name || raw.primaryChannel || raw.name ||
@@ -1461,20 +2073,16 @@
         raw.heartbeat_summary || raw.heartbeatSummary || rawHeartbeat.summary || {},
         heartbeatItems
       );
-      const normalizeListMetrics = (typeof normalizeConversationListMetricsClient === "function")
-        ? normalizeConversationListMetricsClient
-        : ((value) => {
-          const src = (value && typeof value === "object") ? value : null;
-          if (!src) return null;
-          return {
-            task_counts: (src.task_counts && typeof src.task_counts === "object") ? { ...src.task_counts } : {},
-            current_task_summary: (src.current_task_summary && typeof src.current_task_summary === "object") ? { ...src.current_task_summary } : null,
-            memo_summary: (src.memo_summary && typeof src.memo_summary === "object") ? { ...src.memo_summary } : null,
-            status_badges: Array.isArray(src.status_badges) ? src.status_badges.map((item) => ({ ...(item || {}) })) : [],
-            detail_hydration: (src.detail_hydration && typeof src.detail_hydration === "object") ? { ...src.detail_hydration } : {},
-          };
-        });
-      const normalizedConversationListMetrics = normalizeListMetrics(raw.conversation_list_metrics || raw.conversationListMetrics || null);
+      const normalizedConversationListMetrics = typeof normalizeConversationListMetricsClient === "function"
+        ? normalizeConversationListMetricsClient(raw.conversation_list_metrics || raw.conversationListMetrics || null)
+        : (((raw.conversation_list_metrics || raw.conversationListMetrics) && typeof (raw.conversation_list_metrics || raw.conversationListMetrics) === "object")
+          ? { ...(raw.conversation_list_metrics || raw.conversationListMetrics) }
+          : null);
+      const normalizedCommunicationStatusSummary = typeof normalizeCommunicationStatusSummaryClient === "function"
+        ? normalizeCommunicationStatusSummaryClient(raw.communication_status_summary || raw.communicationStatusSummary || null)
+        : (((raw.communication_status_summary || raw.communicationStatusSummary) && typeof (raw.communication_status_summary || raw.communicationStatusSummary) === "object")
+          ? { ...(raw.communication_status_summary || raw.communicationStatusSummary) }
+          : null);
       const memoSummary = (raw.memo_summary && typeof raw.memo_summary === "object")
         ? { ...raw.memo_summary }
         : ((raw.memoSummary && typeof raw.memoSummary === "object")
@@ -1482,6 +2090,32 @@
           : ((normalizedConversationListMetrics && normalizedConversationListMetrics.memo_summary && typeof normalizedConversationListMetrics.memo_summary === "object")
             ? { ...normalizedConversationListMetrics.memo_summary }
             : null));
+      const hasCodeBuddyPermissionMode = typeof conversationSessionHasPermissionMode === "function"
+        ? conversationSessionHasPermissionMode(raw)
+        : (
+          Object.prototype.hasOwnProperty.call(raw, "codebuddy_permission_mode")
+          || Object.prototype.hasOwnProperty.call(raw, "codebuddyPermissionMode")
+        );
+      const rawCodeBuddyPermissionMode = hasCodeBuddyPermissionMode
+        ? (raw.codebuddy_permission_mode || raw.codebuddyPermissionMode)
+        : "";
+      const normalizedCodeBuddyPermissionMode = typeof normalizeCodeBuddyPermissionMode === "function"
+        ? normalizeCodeBuddyPermissionMode(rawCodeBuddyPermissionMode)
+        : String(rawCodeBuddyPermissionMode || "default");
+      const hasClaudePermissionMode = typeof conversationSessionHasClaudePermissionMode === "function"
+        ? conversationSessionHasClaudePermissionMode(raw)
+        : (
+          Object.prototype.hasOwnProperty.call(raw, "claude_permission_mode")
+          || Object.prototype.hasOwnProperty.call(raw, "claudePermissionMode")
+          || Object.prototype.hasOwnProperty.call(raw, "permission_mode")
+          || Object.prototype.hasOwnProperty.call(raw, "permissionMode")
+        );
+      const rawClaudePermissionMode = hasClaudePermissionMode
+        ? firstNonEmptyText([raw.claude_permission_mode, raw.claudePermissionMode, raw.permission_mode, raw.permissionMode])
+        : "";
+      const normalizedClaudePermissionMode = hasClaudePermissionMode && typeof normalizeClaudePermissionMode === "function"
+        ? normalizeClaudePermissionMode(rawClaudePermissionMode)
+        : (hasClaudePermissionMode ? String(rawClaudePermissionMode || "bypassPermissions") : "");
 
       return {
         sessionId: sid,
@@ -1502,6 +2136,14 @@
         branch: String(raw.branch || ""),
         cli_type: String(raw.cli_type || raw.cliType || "codex"),
         model: normalizeSessionModel(raw.model),
+        codebuddy_permission_mode: normalizedCodeBuddyPermissionMode,
+        codebuddyPermissionMode: normalizedCodeBuddyPermissionMode,
+        _codebuddy_permission_mode_present: hasCodeBuddyPermissionMode,
+        codebuddy_permission_mode_source: firstNonEmptyText([raw.codebuddy_permission_mode_source, raw.codebuddyPermissionModeSource, raw.source]),
+        claude_permission_mode: normalizedClaudePermissionMode,
+        claudePermissionMode: normalizedClaudePermissionMode,
+        _claude_permission_mode_present: hasClaudePermissionMode,
+        claude_permission_mode_source: firstNonEmptyText([raw.claude_permission_mode_source, raw.claudePermissionModeSource, raw.source]),
         reasoning_effort: normalizeReasoningEffort(raw.reasoning_effort || raw.reasoningEffort),
         status: String(raw.status || "active"),
         created_at: String(raw.created_at || ""),
@@ -1544,6 +2186,8 @@
         ),
         session_display_reason: String(firstNonEmptyText([raw.session_display_reason, raw.sessionDisplayReason]) || ""),
         latest_run_summary: normalizeLatestRunSummary(raw.latest_run_summary || raw.latestRunSummary || null),
+        latest_effective_run_summary: normalizeLatestEffectiveRunSummary(raw.latest_effective_run_summary || raw.latestEffectiveRunSummary || null),
+        communication_status_summary: normalizedCommunicationStatusSummary,
         runtime_state: normalizeRuntimeState(raw.runtime_state || raw.runtimeState || null),
         heartbeat_summary: heartbeatSummary,
         project_execution_context: normalizeProjectExecutionContext(
@@ -1553,7 +2197,114 @@
         conversation_list_metrics: normalizedConversationListMetrics,
         memo_summary: memoSummary,
         memoSummary: memoSummary,
+        _state_sources: stateSources,
       };
+    }
+
+    function codeBuddySessionDefaultModelValue() {
+      if (typeof codeBuddyDefaultModel === "function") return normalizeSessionModel(codeBuddyDefaultModel());
+      return "deepseek-v4-pro";
+    }
+
+    function codeBuddySessionDefaultPermissionModeValue() {
+      if (typeof codeBuddyDefaultPermissionMode === "function") {
+        return typeof normalizeCodeBuddyPermissionMode === "function"
+          ? normalizeCodeBuddyPermissionMode(codeBuddyDefaultPermissionMode())
+          : String(codeBuddyDefaultPermissionMode() || "default");
+      }
+      return "default";
+    }
+
+    function normalizeConversationCodeBuddyPermissionMode(raw) {
+      if (typeof normalizeCodeBuddyPermissionMode === "function") return normalizeCodeBuddyPermissionMode(raw);
+      return String(raw || "").trim() === "bypassPermissions" ? "bypassPermissions" : "default";
+    }
+
+    function conversationSessionModelMergeSource(row) {
+      const src = (row && typeof row === "object") ? row : {};
+      return String(src.source || src.model_source || src.modelSource || "").trim().toLowerCase();
+    }
+
+    function conversationSessionPermissionModeMergeSource(row) {
+      const src = (row && typeof row === "object") ? row : {};
+      return String(src.source || src.codebuddy_permission_mode_source || src.codebuddyPermissionModeSource || "").trim().toLowerCase();
+    }
+
+    function conversationSessionModelMergeCliType(next, prev) {
+      return String(firstNonEmptyText([
+        next && next.cli_type,
+        next && next.cliType,
+        prev && prev.cli_type,
+        prev && prev.cliType,
+      ]) || "").trim().toLowerCase();
+    }
+
+    function conversationSessionHasPermissionMode(row) {
+      const src = (row && typeof row === "object") ? row : {};
+      if (src._codebuddy_permission_mode_present === true || src.codebuddyPermissionModePresent === true) return true;
+      return Object.prototype.hasOwnProperty.call(src, "codebuddy_permission_mode")
+        || Object.prototype.hasOwnProperty.call(src, "codebuddyPermissionMode");
+    }
+
+    function conversationSessionHasClaudePermissionMode(row) {
+      const src = (row && typeof row === "object") ? row : {};
+      if (src._claude_permission_mode_present === true || src.claudePermissionModePresent === true) return true;
+      return Object.prototype.hasOwnProperty.call(src, "claude_permission_mode")
+        || Object.prototype.hasOwnProperty.call(src, "claudePermissionMode")
+        || Object.prototype.hasOwnProperty.call(src, "permission_mode")
+        || Object.prototype.hasOwnProperty.call(src, "permissionMode");
+    }
+
+    function conversationSessionModelMergeIsExplicit(row) {
+      const source = conversationSessionModelMergeSource(row);
+      if (!source) return false;
+      return /(?:composer-model-switch|session-info|session-detail|model-save|manual|user|edit|detail)/i.test(source);
+    }
+
+    function conversationSessionPermissionModeMergeIsExplicit(row) {
+      const source = conversationSessionPermissionModeMergeSource(row);
+      if (!source) return false;
+      return /(?:composer-permission-switch|session-info|session-detail|permission-save|manual|user|edit|detail)/i.test(source);
+    }
+
+    function mergeConversationSessionModelValue(nextRaw, prevRaw) {
+      const next = (nextRaw && typeof nextRaw === "object") ? nextRaw : {};
+      const prev = (prevRaw && typeof prevRaw === "object") ? prevRaw : {};
+      const nextModel = normalizeSessionModel(next.model);
+      const prevModel = normalizeSessionModel(prev.model);
+      if (!prevModel) return nextModel;
+      if (!nextModel) return prevModel;
+      const cliType = conversationSessionModelMergeCliType(next, prev);
+      if (isCodeBuddyCliType(cliType)) {
+        const defaultModel = codeBuddySessionDefaultModelValue();
+        const nextIsDefault = nextModel === defaultModel;
+        const prevIsNonDefault = prevModel && prevModel !== defaultModel;
+        if (nextIsDefault && prevIsNonDefault && !conversationSessionModelMergeIsExplicit(next)) {
+          return prevModel;
+        }
+      }
+      return nextModel;
+    }
+
+    function mergeConversationSessionPermissionModeValue(nextRaw, prevRaw) {
+      const next = (nextRaw && typeof nextRaw === "object") ? nextRaw : {};
+      const prev = (prevRaw && typeof prevRaw === "object") ? prevRaw : {};
+      const nextHasMode = conversationSessionHasPermissionMode(next);
+      const nextMode = normalizeConversationCodeBuddyPermissionMode(
+        nextHasMode ? (next.codebuddy_permission_mode || next.codebuddyPermissionMode) : ""
+      );
+      const prevMode = normalizeConversationCodeBuddyPermissionMode(prev.codebuddy_permission_mode || prev.codebuddyPermissionMode);
+      if (!nextHasMode) return prevMode || codeBuddySessionDefaultPermissionModeValue();
+      const cliType = conversationSessionModelMergeCliType(next, prev);
+      if (isCodeBuddyCliType(cliType)) {
+        const defaultMode = codeBuddySessionDefaultPermissionModeValue();
+        const nextIsDefault = nextMode === defaultMode;
+        const prevIsNonDefault = prevMode && prevMode !== defaultMode;
+        if (nextIsDefault && prevIsNonDefault && !conversationSessionPermissionModeMergeIsExplicit(next)) {
+          return prevMode;
+        }
+      }
+      return nextMode || codeBuddySessionDefaultPermissionModeValue();
     }
 
     function preserveConversationSessionDetailFields(nextRaw, prevRaw) {
@@ -1563,7 +2314,7 @@
       if (!prev || prev.sessionId !== next.sessionId) return next;
       const nextExecContext = buildProjectExecutionContextMeta(next.project_execution_context || null);
       const prevExecContext = buildProjectExecutionContextMeta(prev.project_execution_context || null);
-      return {
+      const merged = {
         ...next,
         project_execution_context: nextExecContext.available
           ? next.project_execution_context
@@ -1574,34 +2325,54 @@
         conversation_list_metrics: hasConversationListMetricsClientData(next.conversation_list_metrics)
           ? next.conversation_list_metrics
           : (hasConversationListMetricsClientData(prev.conversation_list_metrics) ? prev.conversation_list_metrics : next.conversation_list_metrics),
+        communication_status_summary: hasCommunicationStatusSummaryClientData(next.communication_status_summary)
+          ? next.communication_status_summary
+          : (hasCommunicationStatusSummaryClientData(prev.communication_status_summary) ? prev.communication_status_summary : next.communication_status_summary),
+        model: mergeConversationSessionModelValue(nextRaw, prevRaw),
+        codebuddy_permission_mode: mergeConversationSessionPermissionModeValue(nextRaw, prevRaw),
+        codebuddyPermissionMode: mergeConversationSessionPermissionModeValue(nextRaw, prevRaw),
+        claude_permission_mode: firstNonEmptyText([
+          next.claude_permission_mode,
+          next.claudePermissionMode,
+          next.permission_mode,
+          next.permissionMode,
+          prev.claude_permission_mode,
+          prev.claudePermissionMode,
+          prev.permission_mode,
+          prev.permissionMode,
+        ]),
+        claudePermissionMode: firstNonEmptyText([
+          next.claude_permission_mode,
+          next.claudePermissionMode,
+          next.permission_mode,
+          next.permissionMode,
+          prev.claude_permission_mode,
+          prev.claudePermissionMode,
+          prev.permission_mode,
+          prev.permissionMode,
+        ]),
         memo_summary: next.memo_summary || next.memoSummary || prev.memo_summary || prev.memoSummary || null,
         memoSummary: next.memoSummary || next.memo_summary || prev.memoSummary || prev.memo_summary || null,
       };
+      return preserveConversationActiveSessionStateFields(merged, prev);
     }
 
     function mergeConversationSessions(localSessions, serverSessions) {
       const map = new Map();
       const serverChannelSessions = new Map();
-      const hiddenServerSessionIds = new Set();
-      const isVisibleSession = (session) => {
-        if (typeof isVisibleConversationSession === "function") return !!isVisibleConversationSession(session);
-        const deleted = typeof isDeletedSession === "function"
-          ? isDeletedSession(session)
-          : ["1", "true", "yes", "y"].includes(String((session && (session.is_deleted || session.isDeleted)) || "").trim().toLowerCase());
-        if (deleted) return false;
-        const inactive = typeof isInactiveSession === "function"
-          ? isInactiveSession(session)
-          : String((session && (session.status || session.session_status || session.sessionStatus)) || "").trim().toLowerCase() === "inactive";
-        return !inactive;
+      const visibleSession = (session) => {
+        if (!session) return false;
+        if (typeof isVisibleConversationSession === "function") return isVisibleConversationSession(session);
+        const deleted = typeof boolLike === "function"
+          ? boolLike(session.is_deleted || session.isDeleted)
+          : ["1", "true", "yes", "y"].includes(String(session.is_deleted || session.isDeleted || "").trim().toLowerCase());
+        const inactive = String(session.status || session.session_status || session.sessionStatus || "").trim().toLowerCase() === "inactive";
+        return !deleted && !inactive;
       };
 
       for (const raw of (Array.isArray(serverSessions) ? serverSessions : [])) {
         const n = normalizeConversationSession(raw);
         if (!n) continue;
-        if (!isVisibleSession(n)) {
-          hiddenServerSessionIds.add(n.sessionId);
-          continue;
-        }
         const channelKey = String(n.channel_name || n.primaryChannel || "").trim();
         if (channelKey) {
           let bucket = serverChannelSessions.get(channelKey);
@@ -1616,7 +2387,7 @@
       for (const raw of (Array.isArray(localSessions) ? localSessions : [])) {
         const n = normalizeConversationSession(raw);
         if (!n) continue;
-        if (hiddenServerSessionIds.has(n.sessionId) || !isVisibleSession(n)) continue;
+        if (!visibleSession(n)) continue;
         const channelKey = String(n.channel_name || n.primaryChannel || "").trim();
         const channelBucket = channelKey ? serverChannelSessions.get(channelKey) : null;
         if (channelBucket && channelBucket.size && !channelBucket.has(n.sessionId)) continue;
@@ -1625,7 +2396,7 @@
       for (const raw of (Array.isArray(serverSessions) ? serverSessions : [])) {
         const n = normalizeConversationSession(raw);
         if (!n) continue;
-        if (!isVisibleSession(n)) {
+        if (!visibleSession(n)) {
           map.delete(n.sessionId);
           continue;
         }
@@ -1654,7 +2425,7 @@
           displayName: n.displayName || prev.displayName || "",
           display_name_source: n.displayNameSource || prev.displayNameSource || "",
         }, mergedChannelName, n.sessionId);
-        map.set(n.sessionId, {
+        const merged = {
           ...prev,
           ...n,
           channels,
@@ -1666,7 +2437,33 @@
           codexTitle: n.codexTitle || prev.codexTitle,
           alias: mergedAlias,
           cli_type: n.cli_type || prev.cli_type,
-          model: normalizeSessionModel(n.model || prev.model),
+          model: mergeConversationSessionModelValue(n, prev),
+          codebuddy_permission_mode: typeof mergeConversationSessionPermissionModeValue === "function"
+            ? mergeConversationSessionPermissionModeValue(n, prev)
+            : firstNonEmptyText([n.codebuddy_permission_mode, n.codebuddyPermissionMode, prev.codebuddy_permission_mode, prev.codebuddyPermissionMode], "default"),
+          codebuddyPermissionMode: typeof mergeConversationSessionPermissionModeValue === "function"
+            ? mergeConversationSessionPermissionModeValue(n, prev)
+            : firstNonEmptyText([n.codebuddy_permission_mode, n.codebuddyPermissionMode, prev.codebuddy_permission_mode, prev.codebuddyPermissionMode], "default"),
+          claude_permission_mode: firstNonEmptyText([
+            n.claude_permission_mode,
+            n.claudePermissionMode,
+            n.permission_mode,
+            n.permissionMode,
+            prev.claude_permission_mode,
+            prev.claudePermissionMode,
+            prev.permission_mode,
+            prev.permissionMode,
+          ]),
+          claudePermissionMode: firstNonEmptyText([
+            n.claude_permission_mode,
+            n.claudePermissionMode,
+            n.permission_mode,
+            n.permissionMode,
+            prev.claude_permission_mode,
+            prev.claudePermissionMode,
+            prev.permission_mode,
+            prev.permissionMode,
+          ]),
           reasoning_effort: normalizeReasoningEffort(n.reasoning_effort || prev.reasoning_effort),
           // Prefer server-provided primary flag when present, avoid stale local cache elevating old sessions to primary.
           is_primary: String(n.source || "").trim()
@@ -1680,6 +2477,7 @@
           session_display_state: nextDisplayState,
           session_display_reason: firstNonEmptyText([n.session_display_reason, prev.session_display_reason]),
           latest_run_summary: n.latest_run_summary || prev.latest_run_summary || normalizeLatestRunSummary(null),
+          latest_effective_run_summary: n.latest_effective_run_summary || prev.latest_effective_run_summary || normalizeLatestEffectiveRunSummary(null),
           lastStatus: nextDisplayState,
           lastPreview: String(getSessionPrimaryPreviewText(n) || getSessionPrimaryPreviewText(prev) || n.lastPreview || prev.lastPreview || ""),
           lastError: String(n.lastError || prev.lastError || ""),
@@ -1699,11 +2497,16 @@
             prev.conversation_list_metrics || null,
             n.conversation_list_metrics || null
           ),
+          communication_status_summary: mergeCommunicationStatusSummaryClient(
+            prev.communication_status_summary || null,
+            n.communication_status_summary || null
+          ),
           project_execution_context: nextExecContext.available
             ? n.project_execution_context
             : (prevExecContext.available ? prev.project_execution_context : n.project_execution_context),
           task_tracking: nextTaskTracking,
-        });
+        };
+        map.set(n.sessionId, preserveConversationActiveSessionStateFields(merged, prev));
       }
 
       return Array.from(map.values());
@@ -1722,4 +2525,5 @@
       agentLoading: false,
       agentError: "",
       agentMenuOpen: false,
+      agentsMdDirty: false,
     };

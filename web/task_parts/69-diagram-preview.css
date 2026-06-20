@@ -271,6 +271,88 @@
       font-family: inherit;
       color: inherit;
     }
+    .flow-diagram-card .seq-diagram-toolbar {
+      background:
+        radial-gradient(circle at 0 0, rgba(14, 165, 233, 0.14), transparent 30%),
+        rgba(255,255,255,0.84);
+    }
+    .flow-diagram-scroll {
+      overflow-x: auto;
+      overflow-y: hidden;
+      padding: 14px;
+      background:
+        linear-gradient(90deg, rgba(148, 163, 184, 0.10) 1px, transparent 1px),
+        linear-gradient(180deg, rgba(148, 163, 184, 0.10) 1px, transparent 1px),
+        rgba(248, 250, 252, 0.76);
+      background-size: 28px 28px;
+    }
+    .flow-diagram-svg {
+      display: block;
+      width: max-content;
+      max-width: none;
+      height: auto;
+    }
+    .flow-diagram-group-box {
+      fill: rgba(255, 255, 255, 0.72);
+      stroke: rgba(15, 23, 42, 0.12);
+      stroke-width: 1;
+      filter: drop-shadow(0 12px 22px rgba(15, 23, 42, 0.06));
+    }
+    .flow-diagram-group.is-implicit .flow-diagram-group-box {
+      fill: rgba(241, 245, 249, 0.72);
+      stroke-dasharray: 6 5;
+    }
+    .flow-diagram-group-title {
+      fill: rgba(15, 23, 42, 0.82);
+      font-size: 13px;
+      font-weight: 900;
+      font-family: var(--font);
+    }
+    .flow-diagram-edge {
+      fill: none;
+      stroke: rgba(37, 99, 235, 0.44);
+      stroke-width: 2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+    .flow-diagram-edge.is-dashed {
+      stroke-dasharray: 8 7;
+      stroke: rgba(245, 158, 11, 0.62);
+    }
+    .flow-diagram-arrow-head {
+      fill: rgba(37, 99, 235, 0.62);
+    }
+    .flow-diagram-edge-label {
+      fill: rgba(30, 64, 175, 0.92);
+      paint-order: stroke;
+      stroke: rgba(255, 255, 255, 0.96);
+      stroke-width: 5px;
+      stroke-linejoin: round;
+      font-size: 11px;
+      font-weight: 900;
+      font-family: var(--font);
+      text-anchor: middle;
+    }
+    .flow-diagram-node-box {
+      fill: rgba(255, 255, 255, 0.96);
+      stroke: rgba(37, 99, 235, 0.20);
+      stroke-width: 1;
+      filter: drop-shadow(0 8px 16px rgba(15, 23, 42, 0.08));
+    }
+    .flow-diagram-node-id {
+      fill: rgba(37, 99, 235, 0.82);
+      font-size: 10px;
+      font-weight: 900;
+      font-family: var(--mono);
+      letter-spacing: 0.02em;
+    }
+    .flow-diagram-node-label {
+      fill: rgba(15, 23, 42, 0.88);
+      font-size: 12px;
+      font-weight: 800;
+      font-family: var(--font);
+      line-height: 1.35;
+    }
     @media (max-width: 720px) {
       .seq-diagram-toolbar {
         display: grid;
@@ -290,5 +372,8 @@
       .seq-diagram-message-label {
         max-width: 88%;
         font-size: 11px;
+      }
+      .flow-diagram-scroll {
+        padding: 10px;
       }
     }

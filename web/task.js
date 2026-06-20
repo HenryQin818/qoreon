@@ -1289,6 +1289,43 @@
     const DONE_STATUSES = new Set(["已完成", "已验收通过", "已消费", "已解决", "已关闭", "已停止", "已合并", "完成", "已归档"]);
     const PAUSE_STATUSES = new Set(["已暂停", "暂缓"]);
     const STATUS_ORDER = ["督办", "进行中", "待开始", "待处理", "待验收", "待消费", "其他", "已暂停", "已完成"];
+    const CHANNEL_RENAME_MAP_BY_PROJECT = {
+      qoreon_v2: {
+        "子级01-Go后端平台（API-索引-服务控制面）": "研发01-Go后端平台（API-索引-服务控制面）",
+        "子级02-CCB与多CLI运行时（Legacy Connector-队列-CLI适配）": "研发02-CCB与多CLI运行时（Legacy Connector-队列-CLI适配）",
+        "子级03-Vue前端工作台（平台首页-Agent控制台-项目工作台）": "研发03-前端工作台（平台首页-Agent控制台-项目工作台）",
+        "子级03-前端工作台（平台首页-Agent控制台-项目工作台）": "研发03-前端工作台（平台首页-Agent控制台-项目工作台）",
+        "子级04-数据与知识治理（对象映射-迁移-知识沉淀）": "研发04-数据与知识治理（对象映射-迁移-知识沉淀）",
+        "子级05-测试与验收（性能-功能-迁移-回归）": "测试01-测试与验收（性能-功能-迁移-回归）",
+        "辅助04-产品与原型（IA-原型-业务规格）": "产品00-产品原型总控（IA-业务规格-原型门禁）",
+        "辅助04-原型设计与Demo可视化（静态数据填充-业务规格确认）": "产品00-产品原型总控（IA-业务规格-原型门禁）",
+        "辅助06-运维与远程访问（部署-健康-安全-远程访问）": "运维01-运维与远程访问（部署-健康-安全-远程访问）",
+        "辅助06-项目运维（运行巡检-异常告警-会话修复）": "运维01-运维与远程访问（部署-健康-安全-远程访问）",
+      },
+    };
+
+    function isQoreonV2Project(projectId) {
+      return String(projectId || "").trim() === "qoreon_v2";
+    }
+
+    function canonicalChannelName(projectId, channelName) {
+      const raw = String(channelName || "").trim();
+      if (!raw) return "";
+      const map = CHANNEL_RENAME_MAP_BY_PROJECT[String(projectId || "").trim()];
+      return (map && map[raw]) ? map[raw] : raw;
+    }
+
+    function currentChannelNameSet(projectId) {
+      const set = new Set();
+      const proj = projectById(projectId);
+      const add = (name) => {
+        const ch = canonicalChannelName(projectId, name);
+        if (ch) set.add(ch);
+      };
+      if (proj && Array.isArray(proj.channels)) for (const c of proj.channels) if (c && c.name) add(c.name);
+      if (proj && Array.isArray(proj.channel_sessions)) for (const cs of proj.channel_sessions) if (cs && cs.name) add(cs.name);
+      return set;
+    }
     const PRIMARY_TASK_STATUSES = ["待办", "进行中", "待验收", "已完成", "暂缓"];
     function loadSessionScopedMap(storageKey) {
       try {
@@ -1888,6 +1925,126 @@
       return String(raw || "").trim();
     }
 
+    const NEW_CHANNEL_AGENT_ROLE_TEMPLATES = {
+      coordinator: {
+        label: "总控",
+        summary: "负责目标拆解、任务分派、回执合并、验收收口。",
+        focus: [
+          "先确认目标、范围、责任位和验收口径，再安排执行。",
+          "跨 Agent 协作默认要求回执，回执保留当前结论、是否放行、阻塞、证据和下一步。",
+          "发现服务、会话、真实消息或写入动作时，先确认授权边界，不绕过门禁。",
+        ],
+      },
+      planner: {
+        label: "业务/规划",
+        summary: "负责业务澄清、方案收敛、规格说明和用户视角验收。",
+        focus: [
+          "优先用业务语言说明要解决的问题、用户收益和不做项。",
+          "输出方案时同步写清输入、输出、状态、风险和验收方式。",
+          "不把草稿、预览、待授权或 QA 结果误写成已生效结论。",
+        ],
+      },
+      developer: {
+        label: "执行/研发",
+        summary: "负责工程实现、接口对接、代码验证和技术风险收口。",
+        focus: [
+          "先读现有实现和契约，再做最小必要改动。",
+          "新增或修改 API 时同步更新契约文档，并补相关测试。",
+          "不直接执行服务启动、重启、发布、service monitor 写入或真实消息动作。",
+        ],
+      },
+      tester: {
+        label: "检查/测试",
+        summary: "负责验收矩阵、测试用例、回归风险和失败证据整理。",
+        focus: [
+          "把用户可见状态、边界状态、缺失态和错误态都纳入验收。",
+          "测试通过只代表本轮验证通过，不代表真实初始化、真实送达或写入授权已完成。",
+          "失败时给出复现条件、证据路径、影响范围和建议停止线。",
+        ],
+      },
+      general: {
+        label: "通用协作",
+        summary: "适合暂未细分职责的新通道，保留通用协作和安全边界。",
+        focus: [
+          "优先理解本通道职责，再推进任务。",
+          "涉及其他通道时使用正式消息链路协作，并要求回执。",
+          "不把运行态、临时授权或历史消息结论写成长期规则。",
+        ],
+      },
+    };
+
+    function normalizeNewChannelAgentRole(raw) {
+      const value = String(raw || "").trim().toLowerCase().replace(/-/g, "_");
+      return Object.prototype.hasOwnProperty.call(NEW_CHANNEL_AGENT_ROLE_TEMPLATES, value) ? value : "general";
+    }
+
+    function renderChannelAgentsMdTemplate(role, channelName, channelDesc) {
+      const roleId = normalizeNewChannelAgentRole(role);
+      const tpl = NEW_CHANNEL_AGENT_ROLE_TEMPLATES[roleId] || NEW_CHANNEL_AGENT_ROLE_TEMPLATES.general;
+      const name = String(channelName || "新通道").trim() || "新通道";
+      const desc = String(channelDesc || "").trim() || "请在通道编辑页补充本通道的长期职责、边界和协作方式。";
+      const focus = (Array.isArray(tpl.focus) ? tpl.focus : []).map((item) => "- " + item).join("\n");
+      return [
+        "# AGENTS.md - " + name,
+        "",
+        "## 通道定位",
+        "",
+        "- 通道名称：" + name,
+        "- 通道说明：" + desc,
+        "- 标准角色：" + tpl.label + "（" + tpl.summary + "）",
+        "",
+        "## 协作快速上手",
+        "",
+        "1. 先读规则：进入通道目录后先阅读本文件，再结合当前任务文件、用户消息和项目契约行动。",
+        "2. 任务规则：任务以 `任务/` 目录和文件名状态为准，执行前确认责任位、阶段门禁和验收口径。",
+        "3. 消息规则：跨通道协作使用正式消息入口，完成、阻塞或失败都要回执给来源方。",
+        "4. 证据规则：送达证据只认 `announce_run_id + target_session_id一致 + visible_in_channel_chat=true`。",
+        "5. 生效规则：已写入不等于已生效；旧会话不会自动刷新 AGENTS.md，只影响后续进入该通道目录的 Agent。",
+        "6. 写入规则：本文件只保存长期协作规则，不批量覆盖既有通道 AGENTS.md，不写临时运行信息。",
+        "7. 服务边界：服务启动、重启、注册、发布、service monitor 写入、会话创建或轮换都必须另批 action_scope。",
+        "8. Skills 入口：skill 是触发入口和执行口径，不等于自动授权；命中 skill 后仍要遵守任务和服务门禁。",
+        "",
+        "## 角色工作方式",
+        "",
+        focus,
+        "",
+        "## 协作与消息",
+        "",
+        "- 最短入口：`python3 -m task_dashboard.message_cli send|receipt --wait-verify --json`。",
+        "- 常用模式：`dialog_now` 用于快速讨论，`task_with_receipt` 用于要求处理后回执，`notify_only` 用于只通知不阻塞。",
+        "- 需要跨通道协作时，优先使用正式消息 CLI 或看板消息入口，并要求对方回执。",
+        "- 回执建议使用最小结构：当前结论 / 是否通过或放行 / 唯一阻塞 / 关键路径或 run_id / 下一步动作。",
+        "- `--wait-verify` 只代表送达证据，不代表对方业务已经完成；送达不等于业务完成。",
+        "- 目标会话缺失、耗尽、不可用或多候选时，转 SessionStore/会话治理，不手工绕过。",
+        "",
+        "## 任务与文件",
+        "",
+        "- 本通道任务优先放入 `任务/`，完成后按项目规则归档到 `已完成/` 或其他状态目录。",
+        "- 产出材料放入 `产出物/材料/`，可复用规范和经验放入 `产出物/沉淀/`。",
+        "- 创建或评审任务时优先使用标准任务链路；需要校验时可运行 `python3 -m task_dashboard.task_cli validate --stage review --mode strict <任务路径>`。",
+        "- 修改项应尽量保持最小范围；涉及接口契约、测试或服务边界时同步说明验证结果。",
+        "- 任务指标、测试通过、消息送达、保存成功都不能互相替代，必须分别说明证据。",
+        "",
+        "## 常用 skills 入口",
+        "",
+        "- `collab-message-send`：正式消息发送、回执和送达证据链。",
+        "- `codex-agent-collaboration` / `webtag-ccb-bridge`：跨 Agent 协作口径、消息字段和搬运边界。",
+        "- `task-workflow-create-validate`：任务文件创建、责任位和 task_cli 校验。",
+        "- `assist04-requirement-intake-gate` / `prototype-requirement-planning-flow`：需求接收、方案梳理和任务拆解。",
+        "- `project-startup-blueprint-gate` / `project-startup-collab-suite`：新项目启动蓝图、CCR 和首批 Agent 协作初始化。",
+        "- `agent-init-training-playbook` / `agent-session-rotation-handoff`：新 Agent 培训和会话轮换接力。",
+        "- `codex-session-health-inspector` / `heartbeat-task-control`：会话健康查询和心跳任务配置。",
+        "",
+        "## 安全边界",
+        "",
+        "- 本文件只保存长期协作规则，不写入 token、PID、端口、run_id、临时 session、一次性授权、瞬时 health 或历史消息结论。",
+        "- 不通过本文件授予服务启动、重启、注册、发布、service monitor 写入、会话创建、真实初始化消息或 AGENTS 批量迁移权限。",
+        "- 涉及真实写入、真实消息、会话动作或服务动作时，必须另行确认 action_scope、回滚方式和验收口径。",
+        "- 找不到规则时，先回单一阻塞或转对应主负责位，不把猜测写成已完成结论。",
+        "",
+      ].join("\n");
+    }
+
     function normalizeNewChannelAgentText(raw) {
       return String(raw || "").trim();
     }
@@ -1932,9 +2089,30 @@
         channelIndex: normalizeNewChannelIndex(newChannelFieldValue("newChannelIndex")),
         channelName: normalizeNewChannelNamePart(newChannelFieldValue("newChannelName")),
         channelDesc: normalizeNewChannelText(newChannelFieldValue("newChannelDesc")),
+        agentRole: (
+          typeof resolveNewChannelTypeTemplate === "function"
+            ? resolveNewChannelTypeTemplate(resolvedKind).agentRole
+            : normalizeNewChannelAgentRole(newChannelFieldValue("newChannelAgentRole"))
+        ) || "general",
+        createAgentsMd: !!(document.getElementById("newChannelCreateAgentsMd") && document.getElementById("newChannelCreateAgentsMd").checked),
+        agentsMdContent: String(newChannelFieldValue("newChannelAgentsMdContent") || ""),
         requirement: normalizeNewChannelText(newChannelFieldValue("newChannelRequirement")),
         selectedAgentSessionId: String(NEW_CHANNEL_UI.selectedAgentSessionId || "").trim(),
       };
+    }
+
+    function syncNewChannelAgentsMdTemplate(force = false) {
+      const contentEl = document.getElementById("newChannelAgentsMdContent");
+      if (!contentEl) return;
+      if (!force && NEW_CHANNEL_UI.agentsMdDirty) return;
+      const form = getNewChannelWorkflowForm();
+      contentEl.value = typeof renderNewChannelTypeAgentsMdTemplate === "function"
+        ? renderNewChannelTypeAgentsMdTemplate({ ...form, channelFullName: buildNewChannelName(form) })
+        : renderChannelAgentsMdTemplate(
+          form.agentRole,
+          buildNewChannelName(form),
+          form.channelDesc || form.channelName
+        );
     }
 
     function getNewChannelResultBody() {
@@ -1974,7 +2152,9 @@
         appendNewChannelResultRow(body, "结果", framework.created ? "已创建空通道框架" : "创建处理中", {});
         appendNewChannelResultRow(body, "通道目录", framework.channelRootPath || payload && payload.resultPath, { code: true });
         appendNewChannelResultRow(body, "README", framework.readmePath, { code: true });
-        appendNewChannelResultRow(body, "沟通-收件箱", framework.inboxPath, { code: true });
+        if (framework.agentsMdPath) {
+          appendNewChannelResultRow(body, "AGENTS.md", framework.agentsMdPath, { code: true });
+        }
       } else {
         const dispatch = (payload && payload.dispatch) || {};
         const targetSession = (payload && payload.targetSession) || {};
@@ -1983,6 +2163,10 @@
         appendNewChannelResultRow(body, "目标Agent", extra.agentDisplayName || targetSession.alias || targetSession.channelName || targetSession.sessionId || "-", { code: true });
         appendNewChannelResultRow(body, "目标会话ID", extra.agentSessionId || targetSession.sessionId || "-", { code: true });
         appendNewChannelResultRow(body, "派发 run", [extra.runId || dispatch.runId || "", dispatch.runStatus || ""].filter(Boolean).join(" / "), { code: true });
+        const agentsMdPath = ((payload && payload.framework) || {}).agentsMdPath;
+        if (agentsMdPath) {
+          appendNewChannelResultRow(body, "AGENTS.md", agentsMdPath, { code: true });
+        }
         appendNewChannelResultRow(body, "结果", dispatch.runId ? "已创建空通道框架并正式派发 Agent 辅助任务" : "派发处理中", {});
       }
 
@@ -2085,8 +2269,13 @@
       const descEl = document.getElementById("newChannelPreviewDirectItems");
       const skipEl = document.getElementById("newChannelPreviewDirectSkip");
       if (nameEl) nameEl.textContent = preview.channelName || "-";
-      if (descEl) descEl.textContent = "空通道框架 / README / 沟通-收件箱 / 基础目录";
-      if (skipEl) skipEl.textContent = "主任务 / 主对话 / Agent";
+      const createAgentsMd = !!(form && form.createAgentsMd);
+      if (descEl) descEl.textContent = createAgentsMd
+        ? "空通道框架 / README / AGENTS.md / 基础目录"
+        : "空通道框架 / README / 基础目录";
+      if (skipEl) skipEl.textContent = createAgentsMd
+        ? "主任务 / 主对话 / Agent / 真实初始化消息"
+        : "AGENTS.md / 主任务 / 主对话 / Agent / 真实初始化消息";
     }
 
     function renderNewChannelAgentPicker() {
@@ -2350,8 +2539,16 @@
       renderNewChannelModeUi();
       const form = getNewChannelWorkflowForm();
       renderNewChannelKindUi(form);
+      if (typeof syncNewChannelTypeTemplateUi === "function") {
+        syncNewChannelTypeTemplateUi(form);
+      }
       renderNewChannelDirectPreview(form);
       renderNewChannelAgentPicker();
+      const agentsTextarea = document.getElementById("newChannelAgentsMdContent");
+      if (agentsTextarea) {
+        agentsTextarea.disabled = !form.createAgentsMd;
+        agentsTextarea.setAttribute("aria-disabled", form.createAgentsMd ? "false" : "true");
+      }
       const result = document.getElementById("newChannelResult");
       if (result && NEW_CHANNEL_UI.phase === "form") {
         result.style.display = "none";
@@ -2360,18 +2557,22 @@
 
     function resetNewChannelFormForOpen() {
       const defaults = {
-        newChannelKind: "业务",
+        newChannelKind: "产品",
         newChannelKindCustom: "",
         newChannelIndex: "",
         newChannelName: "",
         newChannelDesc: "",
+        newChannelAgentRole: "planner",
         newChannelRequirement: "",
       };
       for (const [id, value] of Object.entries(defaults)) {
         const node = document.getElementById(id);
         if (node) node.value = value;
       }
+      const createAgents = document.getElementById("newChannelCreateAgentsMd");
+      if (createAgents) createAgents.checked = true;
       NEW_CHANNEL_UI.mode = "direct";
+      NEW_CHANNEL_UI.agentsMdDirty = false;
       NEW_CHANNEL_UI.selectedAgentSessionId = "";
       NEW_CHANNEL_UI.selectedAgent = null;
       NEW_CHANNEL_UI.agentCandidates = [];
@@ -2386,6 +2587,7 @@
       if (menu) menu.innerHTML = "";
       if (picker) picker.classList.remove("open");
       if (card) card.setAttribute("aria-expanded", "false");
+      syncNewChannelAgentsMdTemplate(true);
     }
 
     function resetNewChannelUiState() {
@@ -2397,8 +2599,17 @@
       renderNewChannelWorkflowUi();
     }
 
-    function handleNewChannelFormFieldChange() {
+    function handleNewChannelFormFieldChange(event = null) {
       if (!NEW_CHANNEL_UI.open) return;
+      const targetId = String(event && event.target && event.target.id || "");
+      if (targetId === "newChannelAgentsMdContent") {
+        NEW_CHANNEL_UI.agentsMdDirty = true;
+      } else if (targetId === "newChannelKind" || targetId === "newChannelAgentRole") {
+        NEW_CHANNEL_UI.agentsMdDirty = false;
+        syncNewChannelAgentsMdTemplate(true);
+      } else if (targetId !== "newChannelCreateAgentsMd") {
+        syncNewChannelAgentsMdTemplate(false);
+      }
       renderNewChannelWorkflowUi();
       if (NEW_CHANNEL_UI.phase !== "form") {
         NEW_CHANNEL_UI.phase = "form";
@@ -2423,7 +2634,7 @@
         });
       }
 
-      const ids = ["newChannelKind", "newChannelKindCustom", "newChannelIndex", "newChannelName", "newChannelDesc", "newChannelRequirement"];
+      const ids = ["newChannelKind", "newChannelKindCustom", "newChannelIndex", "newChannelName", "newChannelDesc", "newChannelCreateAgentsMd", "newChannelAgentsMdContent", "newChannelRequirement"];
       for (const id of ids) {
         const node = document.getElementById(id);
         if (!node) continue;
@@ -2489,6 +2700,7 @@
       if (!actualKind) missing.push(form.channelKindMode === "custom" ? "自定义类型名称" : "通道类型");
       if (!form.channelIndex) missing.push("通道编号");
       if (!form.channelName) missing.push("业务主题");
+      if (form.createAgentsMd && !String(form.agentsMdContent || "").trim()) missing.push("AGENTS.md 内容");
       if (form.mode === "agent_assist") {
         if (!form.requirement) missing.push("业务要求说明");
         if (!String(form.selectedAgentSessionId || "").trim()) missing.push("处理Agent");
@@ -2548,6 +2760,9 @@
           channelIndex: form.channelIndex,
           channelName: form.channelName,
           channelDesc: form.channelDesc || "",
+          agentRole: form.agentRole || "general",
+          createAgentsMd: !!form.createAgentsMd,
+          agentsMdContent: form.createAgentsMd ? String(form.agentsMdContent || "") : "",
           sourceSessionId: String(source.sessionId || "").trim(),
           sourceChannelName: String(source.channelName || STATE.channel || "").trim(),
           sourceAgentName: "任务看板",
@@ -3398,6 +3613,16 @@
         queued_run_id: String(firstNonEmptyText([src.queued_run_id, src.queuedRunId]) || "").trim(),
         queue_depth: Math.max(0, Number(firstNonEmptyText([src.queue_depth, src.queueDepth, 0])) || 0),
         updated_at: String(firstNonEmptyText([src.updated_at, src.updatedAt]) || "").trim(),
+        busy_source: String(firstNonEmptyText([src.busy_source, src.busySource]) || "").trim().toLowerCase(),
+        display_secondary_state: String(firstNonEmptyText([src.display_secondary_state, src.displaySecondaryState]) || "").trim().toLowerCase(),
+        external_busy_reason: String(firstNonEmptyText([src.external_busy_reason, src.externalBusyReason]) || "").trim(),
+        active_run_message_kind: String(firstNonEmptyText([src.active_run_message_kind, src.activeRunMessageKind]) || "").trim().toLowerCase(),
+        active_run_sender_type: String(firstNonEmptyText([src.active_run_sender_type, src.activeRunSenderType]) || "").trim().toLowerCase(),
+        active_run_trigger_type: String(firstNonEmptyText([src.active_run_trigger_type, src.activeRunTriggerType]) || "").trim().toLowerCase(),
+        active_run_visibility: String(firstNonEmptyText([src.active_run_visibility, src.activeRunVisibility]) || "").trim().toLowerCase(),
+        active_run_projection_reason: String(firstNonEmptyText([src.active_run_projection_reason, src.activeRunProjectionReason]) || "").trim().toLowerCase(),
+        degraded: boolLike(src.degraded),
+        degraded_reason: String(firstNonEmptyText([src.degraded_reason, src.degradedReason]) || "").trim(),
       };
     }
 
@@ -4112,10 +4337,13 @@
       const titleWrap = el("div", { class: "conv-card-titlewrap" });
       const titleRow = el("div", { class: "conv-title" });
       const displayName = conversationAgentName(session);
+      const displayTitle = typeof agentDisplayTooltip === "function"
+        ? agentDisplayTooltip(session, displayName)
+        : displayName;
       titleRow.appendChild(el("span", {
         class: "conv-name",
         text: displayName,
-        title: displayName,
+        title: displayTitle,
       }));
       titleWrap.appendChild(titleRow);
       const metaRow = el("div", { class: "conv-card-submeta" });
@@ -4251,8 +4479,22 @@
       const runtimeState = getSessionRuntimeState(s);
       const effectiveStatus = getSessionStatus(s);
       const sessionHealthState = getSessionHealthState(s);
-      const latestRunSummary = getSessionLatestRunSummary(s);
-      const latestEffectiveRunSummary = getSessionLatestEffectiveRunSummary(s);
+      const latestRunSummary = (() => {
+        const summary = getSessionLatestRunSummary(s);
+        if (summary && typeof summary === "object" && Object.keys(summary).length) return summary;
+        const raw = (s.latest_run_summary && typeof s.latest_run_summary === "object")
+          ? s.latest_run_summary
+          : (s.latestRunSummary && typeof s.latestRunSummary === "object" ? s.latestRunSummary : {});
+        return raw && typeof raw === "object" ? raw : {};
+      })();
+      const latestEffectiveRunSummary = (() => {
+        const summary = getSessionLatestEffectiveRunSummary(s);
+        if (summary && typeof summary === "object" && Object.keys(summary).length) return summary;
+        const raw = (s.latest_effective_run_summary && typeof s.latest_effective_run_summary === "object")
+          ? s.latest_effective_run_summary
+          : (s.latestEffectiveRunSummary && typeof s.latestEffectiveRunSummary === "object" ? s.latestEffectiveRunSummary : {});
+        return raw && typeof raw === "object" ? raw : {};
+      })();
       const latestEffectiveOutcomeState = normalizeRunOutcomeState(
         latestEffectiveRunSummary && latestEffectiveRunSummary.outcome_state,
         ""
@@ -4266,7 +4508,26 @@
         latestRunSummary && latestRunSummary.run_id,
         latestRunSummary && latestRunSummary.runId,
       ]) || "").trim();
+      const latestSummaryFailureClass = String(firstNonEmptyText([
+        latestRunSummary && latestRunSummary.failure_class,
+        latestRunSummary && latestRunSummary.failureClass,
+      ]) || "").trim().toLowerCase();
+      const latestSummaryProviderError = (latestRunSummary && latestRunSummary.provider_error && typeof latestRunSummary.provider_error === "object")
+        ? latestRunSummary.provider_error
+        : {};
+      const latestSummaryProviderKind = String(firstNonEmptyText([
+        latestSummaryProviderError.kind,
+        latestSummaryProviderError.error_kind,
+        latestSummaryProviderError.errorKind,
+      ]) || "").trim().toLowerCase();
+      const latestSummaryProviderRetryable = !!latestSummaryProviderError.retryable;
       const timeoutLike = effectiveStatus === "error" && sessionHasTimeoutState(s);
+      const providerTransientLike = effectiveStatus === "error"
+        && (
+          latestEffectiveOutcomeState === "provider_transient_failed"
+          || latestSummaryFailureClass === "provider_transient"
+          || (latestSummaryProviderRetryable && !!latestSummaryProviderKind)
+        );
       if (effectiveStatus === "running" || effectiveStatus === "queued" || effectiveStatus === "retry_waiting" || effectiveStatus === "external_busy") {
         const tone = effectiveStatus === "running"
           ? "running"
@@ -4278,6 +4539,9 @@
         if (runtimeState.active_run_id) titleParts.push("活跃run: " + shortId(runtimeState.active_run_id));
         if (runtimeState.queued_run_id) titleParts.push("排队run: " + shortId(runtimeState.queued_run_id));
         if (runtimeState.updated_at) titleParts.push("更新: " + compactDateTime(runtimeState.updated_at));
+        if (runtimeState.busy_source) titleParts.push("忙态来源: " + runtimeState.busy_source);
+        if (runtimeState.display_secondary_state) titleParts.push("副状态: " + runtimeState.display_secondary_state);
+        if (runtimeState.active_run_projection_reason) titleParts.push("投影原因: " + runtimeState.active_run_projection_reason);
         if (runtimeState.external_busy && effectiveStatus !== "external_busy") titleParts.push("外部占用");
         if (latestRunSummary.run_id && !runtimeState.active_run_id && !runtimeState.queued_run_id) {
           titleParts.push("最近run: " + shortId(latestRunSummary.run_id));
@@ -4304,16 +4568,25 @@
           source: "runtime_state",
         };
       }
-      if (listMetricStatusMeta && listMetricStatusMeta.text) {
-        const metaRow = {
-          text: listMetricStatusMeta.text,
-          tone: listMetricStatusMeta.tone || "info",
-          title: listMetricStatusMeta.title || "",
-          source: "conversation_list_metrics",
+      if (providerTransientLike) {
+        const terminalHint = String(latestRunSummary.error || s.lastError || s.error || "").trim();
+        const providerLabel = {
+          high_demand: "模型服务高负载",
+          model_capacity: "模型容量不足",
+          rate_limit: "模型服务限流",
+          server_error: "模型服务 5xx",
+          network_timeout: "网络超时",
+          network_reset: "网络中断",
+          upstream_unavailable: "上游不可用",
+        }[latestSummaryProviderKind] || "模型服务临时不可用";
+        const transientTitleParts = [providerLabel, "这不是业务处理失败，可能已有部分动作完成，需要补链恢复。"];
+        if (terminalHint) transientTitleParts.push(terminalHint);
+        return {
+          text: "临时失败",
+          tone: "warn",
+          title: transientTitleParts.join("\n"),
+          source: "runtime_state",
         };
-        return typeof appendConversationListMetricSubchips === "function"
-          ? appendConversationListMetricSubchips(metaRow, session)
-          : metaRow;
       }
       if (timeoutLike) {
         const timeoutTitle = sessionTimeoutHint(s);
@@ -4378,6 +4651,17 @@
           source: "runtime_state",
         };
       }
+      if (listMetricStatusMeta && listMetricStatusMeta.text) {
+        const metaRow = {
+          text: listMetricStatusMeta.text,
+          tone: listMetricStatusMeta.tone || "info",
+          title: listMetricStatusMeta.title || "",
+          source: "conversation_list_metrics",
+        };
+        return typeof appendConversationListMetricSubchips === "function"
+          ? appendConversationListMetricSubchips(metaRow, session)
+          : metaRow;
+      }
       return null;
     }
 
@@ -4429,13 +4713,14 @@
       const sid = String(getSessionId(s) || "").trim();
       const projectId = String((opts && opts.projectId) || STATE.project || "").trim();
       const showUnread = !!(opts && opts.showUnread);
+      const includeDraft = !(opts && opts.includeDraft === false);
       const wrap = el("div", { class: "conv-counts" });
       let hasAny = false;
       const draftMeta = conversationDraftMetaBySession(projectId, sid);
-      if (draftMeta.hasDraft) {
+      if (includeDraft && draftMeta.hasDraft) {
         wrap.appendChild(el("span", {
           class: "conv-count-dot draft",
-          text: "草稿",
+          text: "草",
           title: conversationDraftTitle(draftMeta),
         }));
         hasAny = true;
@@ -4469,6 +4754,19 @@
         }
       }
       return hasAny ? wrap : null;
+    }
+
+    function buildConversationListActivityOverlay(statusBadge, auxBadges, countBadges) {
+      if (arguments.length < 3) {
+        countBadges = auxBadges;
+        auxBadges = null;
+      }
+      if (!statusBadge && !auxBadges && !countBadges) return null;
+      const wrap = el("div", { class: "conv-card-activity-overlay" });
+      if (statusBadge) wrap.appendChild(statusBadge);
+      if (auxBadges) wrap.appendChild(auxBadges);
+      if (countBadges) wrap.appendChild(countBadges);
+      return wrap;
     }
 
     function normalizeConversationSort(raw) {
@@ -5079,9 +5377,11 @@
       const showCountDots = !!(opts && opts.showCountDots);
       const projectId = String((opts && opts.projectId) || STATE.project || "").trim();
       const displayName = conversationAgentName(session);
+      const displayTitle = typeof agentDisplayTooltip === "function"
+        ? agentDisplayTooltip(session, displayName)
+        : displayName;
       const previewText = conversationPreviewLine(session);
       const previewLine = String(previewText || "").trim() || "暂无消息记录";
-      const secondaryParts = conversationSecondaryMeta(session);
       const statusMeta = conversationStatusMeta(session);
       const heatMeta = conversationHeatMeta(session);
       const statusBadge = statusMeta && statusMeta.text
@@ -5094,9 +5394,13 @@
       const countBadges = buildConversationCountBadges(session, {
         projectId,
         showUnread: showCountDots,
+        includeDraft: true,
       });
+      const auxBadges = typeof buildConversationAuxStatusBadges === "function"
+        ? buildConversationAuxStatusBadges(session)
+        : null;
       const row = el("div", {
-        class: "rowbtn conv-row"
+        class: "rowbtn conv-row is-compact-two-line"
           + (isActive ? " active" : "")
           + (heatMeta && heatMeta.tier ? (" is-heat-" + String(heatMeta.tier || "")) : "")
           + (statusMeta && statusMeta.tone ? (" is-status-" + String(statusMeta.tone || "")) : ""),
@@ -5115,33 +5419,13 @@
       const headRow = el("div", { class: "conv-card-head" });
       const titleWrap = el("div", { class: "conv-card-titlewrap" });
       const titleRow = el("div", { class: "conv-title" });
-      titleRow.appendChild(el("span", { class: "conv-name", text: displayName, title: displayName }));
+      titleRow.appendChild(el("span", { class: "conv-name", text: displayName, title: displayTitle }));
+      titleRow.appendChild(buildConversationRoleBadge(session));
+      titleRow.appendChild(buildConversationCliBadge(session));
       titleWrap.appendChild(titleRow);
-      const contextStatusBadge = buildConversationContextStatusBadge(session, { compact: true });
-      const execSourceChip = buildProjectExecutionContextCompactChip(
-        session && (session.project_execution_context || session.projectExecutionContext || null)
-      );
-      const heartbeatBadge = buildConversationHeartbeatBadges(session);
-      let metaRow = null;
-      if (secondaryParts.length || heartbeatBadge || contextStatusBadge || execSourceChip) {
-        metaRow = el("div", { class: "conv-card-submeta" });
-        metaRow.appendChild(buildConversationRoleBadge(session));
-        metaRow.appendChild(buildConversationCliBadge(session));
-        if (contextStatusBadge) metaRow.appendChild(contextStatusBadge);
-        if (execSourceChip) metaRow.appendChild(execSourceChip);
-        secondaryParts.forEach((part) => {
-          metaRow.appendChild(el("span", {
-            class: "conv-subchip " + String((part && part.kind) || "").trim(),
-            text: String((part && part.text) || "").trim(),
-          }));
-        });
-        if (heartbeatBadge) metaRow.appendChild(heartbeatBadge);
-      }
       headRow.appendChild(titleWrap);
       const headSide = el("div", { class: "conv-card-side" });
-      if (statusBadge) headSide.appendChild(statusBadge);
       headRow.appendChild(headSide);
-      if (metaRow) headRow.appendChild(metaRow);
       mainDiv.appendChild(headRow);
 
       const footRow = el("div", { class: "conv-card-foot" });
@@ -5151,7 +5435,8 @@
       }
       previewMeta.appendChild(el("div", { class: "conv-preview", text: previewLine, title: previewLine }));
       footRow.appendChild(previewMeta);
-      if (countBadges) footRow.appendChild(countBadges);
+      const activityOverlay = buildConversationListActivityOverlay(statusBadge, auxBadges, countBadges);
+      if (activityOverlay) footRow.appendChild(activityOverlay);
       mainDiv.appendChild(footRow);
 
       row.appendChild(mainDiv);
@@ -5414,10 +5699,23 @@
       return null;
     }
 
+    function pages() {
+      const out = [];
+      for (const p of (DATA.projects || [])) out.push({ id: p.id, name: p.name, color: p.color || "#2f6fed" });
+      const implicit = buildImplicitProjectPage(resolveImplicitProjectPageId());
+      if (implicit && !out.some((p) => String(p.id || "") === implicit.id)) out.push(implicit);
+      return out;
+    }
+
+    function projectById(id) {
+      const pid = String(id || "").trim();
+      if (!pid) return null;
+      return (DATA.projects || []).find(x => String(x.id || "") === pid) || buildImplicitProjectPage(pid);
+    }
+
     function explicitProjectIdFromHash() {
       try {
-        const h = String(location.hash || "").replace(/^#/, "");
-        const params = new URLSearchParams(h || "");
+        const params = new URLSearchParams(String(location && location.hash || "").replace(/^#/, ""));
         return String(params.get("p") || "").trim();
       } catch (_) {
         return "";
@@ -5425,27 +5723,19 @@
     }
 
     function resolveImplicitProjectPageId() {
-      const pid = explicitProjectIdFromHash();
-      if (!pid) return "";
-      return (DATA.projects || []).some((item) => String(item && item.id || "") === pid) ? "" : pid;
+      const explicit = explicitProjectIdFromHash();
+      if (!explicit) return "";
+      const exists = (DATA.projects || []).some((p) => String(p && p.id || "") === explicit);
+      return exists ? "" : explicit;
     }
 
-    function buildImplicitProjectPage(id) {
-      const pid = String(id || "").trim();
+    function buildImplicitProjectPage(projectId) {
+      const pid = String(projectId || "").trim();
       if (!pid) return null;
-      return { id: pid, name: pid, color: "#2f6fed", implicit: true };
-    }
-
-    function pages() {
-      const out = [];
-      for (const p of (DATA.projects || [])) out.push({ id: p.id, name: p.name, color: p.color || "#2f6fed" });
-      const implicit = buildImplicitProjectPage(resolveImplicitProjectPageId());
-      if (implicit && !out.some((item) => item.id === implicit.id)) out.push(implicit);
-      return out;
-    }
-
-    function projectById(id) {
-      return pages().find(x => x.id === id) || null;
+      if (pid !== resolveImplicitProjectPageId()) return null;
+      const known = (DATA.projects || []).find((p) => String(p && p.id || "") === pid);
+      if (known) return null;
+      return { id: pid, name: pid, color: "#64748b", implicit: true };
     }
 
     const ITEM_INDEX = {
@@ -5702,11 +5992,15 @@
     }
 
     function unionChannelNames(projectId) {
-      const s = new Set();
-      const proj = projectById(projectId);
-      if (proj && Array.isArray(proj.channels)) for (const c of proj.channels) if (c && c.name) s.add(String(c.name));
-      if (proj && Array.isArray(proj.channel_sessions)) for (const cs of proj.channel_sessions) if (cs && cs.name) s.add(String(cs.name));
-      for (const it of itemsForProject(projectId)) if (it && it.channel) s.add(String(it.channel));
+      const s = currentChannelNameSet(projectId);
+      const filterHistorical = isQoreonV2Project(projectId);
+      for (const it of itemsForProject(projectId)) {
+        if (!it || !it.channel) continue;
+        const ch = canonicalChannelName(projectId, it.channel);
+        if (!ch) continue;
+        if (filterHistorical && s.size && !s.has(ch)) continue;
+        s.add(ch);
+      }
       return Array.from(s).sort((a,b) => a.localeCompare(b, "zh-Hans-CN"));
     }
 
@@ -5730,6 +6024,7 @@
         ? conversationRuntimeSessionsForProject(pid)
         : (Array.isArray(PCONV.sessions) ? PCONV.sessions : []);
       const runtimeHit = runtimeList.find((s) => {
+        if (!isVisibleRow(s)) return false;
         const ch = String((s && (s.channel_name || s.primaryChannel || ((Array.isArray(s.channels) && s.channels[0]) || ""))) || "");
         const sid = String((s && (s.sessionId || s.id || "")) || "").trim();
         return ch === String(channelName) && looksLikeSessionId(sid);
@@ -6011,14 +6306,12 @@
         const lastPid = String(PCONV.lastProjectId || "").trim();
         return src.filter((session) => {
           const row = (session && typeof session === "object") ? session : {};
+          if (typeof isVisibleConversationSession === "function" && !isVisibleConversationSession(row)) return false;
           const deleted = typeof isDeletedSession === "function"
             ? isDeletedSession(row)
             : ["1", "true", "yes", "y"].includes(String(row.is_deleted || row.isDeleted || "").trim().toLowerCase());
-          if (deleted) return false;
-          const inactive = typeof isInactiveSession === "function"
-            ? isInactiveSession(row)
-            : String(row.status || row.session_status || row.sessionStatus || "").trim().toLowerCase() === "inactive";
-          if (inactive) return false;
+          const inactive = String(row.status || row.session_status || row.sessionStatus || "").trim().toLowerCase() === "inactive";
+          if (deleted || inactive) return false;
           const rowProjectId = String(row.project_id || row.projectId || "").trim();
           if (rowProjectId) return rowProjectId === currentPid;
           return lastPid === currentPid;
@@ -6034,14 +6327,12 @@
         const src = Array.isArray(list) ? list : [];
         return src.filter((session) => {
           const row = (session && typeof session === "object") ? session : {};
+          if (typeof isVisibleConversationSession === "function" && !isVisibleConversationSession(row)) return false;
           const deleted = typeof isDeletedSession === "function"
             ? isDeletedSession(row)
             : ["1", "true", "yes", "y"].includes(String(row.is_deleted || row.isDeleted || "").trim().toLowerCase());
-          if (deleted) return false;
-          const inactive = typeof isInactiveSession === "function"
-            ? isInactiveSession(row)
-            : String(row.status || row.session_status || row.sessionStatus || "").trim().toLowerCase() === "inactive";
-          if (inactive) return false;
+          const inactive = String(row.status || row.session_status || row.sessionStatus || "").trim().toLowerCase() === "inactive";
+          if (deleted || inactive) return false;
           const rowProjectId = String(row.project_id || row.projectId || "").trim();
           return !rowProjectId || rowProjectId === pid;
         });

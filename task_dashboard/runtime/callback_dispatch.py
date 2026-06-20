@@ -102,20 +102,22 @@ def apply_callback_dispatch_views(
     route_mismatch: bool,
     route_resolution: dict[str, Any],
     build_callback_communication_view: Any,
+    receipt_route_state: str = "",
+    dispatch_status: str = "",
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     callback_id = str(callback_run_id or "").strip()
     out_callback_meta = dict(callback_meta if isinstance(callback_meta, dict) else {})
     out_source_meta = dict(source_meta if isinstance(source_meta, dict) else {})
-    out_callback_meta["communication_view"] = dict(
-        out_callback_meta.get("communication_view") or {},
-        dispatch_run_id=callback_id,
-    )
-    out_source_meta["communication_view"] = build_callback_communication_view(
+    communication_view = build_callback_communication_view(
         out_source_meta,
         event_reason=str(event_reason or "").strip(),
         dispatch_state=str(dispatch_state or "").strip(),
         dispatch_run_id=callback_id,
         route_mismatch=bool(route_mismatch),
         route_resolution=route_resolution,
+        receipt_route_state=str(receipt_route_state or "").strip(),
+        dispatch_status=str(dispatch_status or "").strip(),
     )
+    out_callback_meta["communication_view"] = dict(communication_view)
+    out_source_meta["communication_view"] = communication_view
     return out_callback_meta, out_source_meta

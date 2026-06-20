@@ -33,7 +33,7 @@ class TestNetworkRetryHelpers(unittest.TestCase):
         self.assertTrue(server._is_auth_error(msg))
 
     def test_is_auth_error_ignores_run_id_like_date(self) -> None:
-        msg = "run_id=sample-network-retry"
+        msg = "run_id=20260401-114605-b3b7bfeb"
         self.assertFalse(server._is_auth_error(msg))
 
     def test_error_hint_network(self) -> None:
@@ -42,7 +42,7 @@ class TestNetworkRetryHelpers(unittest.TestCase):
         self.assertIn("自动重试", hint)
 
     def test_error_hint_missing_cli_bin_guides_to_system_settings(self) -> None:
-        msg = "[Errno 2] No such file or directory: '/home/example/.local/bin/codex'"
+        msg = "[Errno 2] No such file or directory: '/tmp/qoreon-demo/.npm-global/bin/codex'"
         hint = server._error_hint(msg)
         self.assertIn("codex 启动路径无效", hint)
         self.assertIn("系统设置", hint)
@@ -51,7 +51,7 @@ class TestNetworkRetryHelpers(unittest.TestCase):
 
     def test_error_hint_external_directory_permission_denied(self) -> None:
         msg = (
-            "permission requested: external_directory (/home/example/workspace/project/*); auto-rejecting\n"
+            "permission requested: external_directory (/tmp/qoreon-demo/workspace/project/*); auto-rejecting\n"
             "Error: The user rejected permission to use this specific tool call."
         )
         hint = server._error_hint(msg)
@@ -94,7 +94,7 @@ class TestNetworkRetryHelpers(unittest.TestCase):
         self.assertIsNone(server._default_run_no_progress_timeout_s(cli_type="claude"))
 
     def test_default_no_progress_timeout_codex_keeps_default(self) -> None:
-        self.assertEqual(server._default_run_no_progress_timeout_s(cli_type="codex"), 30 * 60)
+        self.assertEqual(server._default_run_no_progress_timeout_s(cli_type="codex"), 4000)
 
     def test_profile_fallback_retry_returncode_zero_marks_done(self) -> None:
         class _Retry:
@@ -309,6 +309,171 @@ class TestNetworkRetryHelpers(unittest.TestCase):
             self.assertNotEqual(meta.get("errorType"), "auth_error")
             self.assertEqual(fake_proc.terminate_called, 0)
 
+    def test_claude_permission_denied_with_final_text_exit_zero_keeps_done(self) -> None:
+        class _FakeAdapter:
+            @classmethod
+            def supports_model(cls) -> bool:
+                return False
+
+            @classmethod
+            def build_resume_command(
+                cls,
+                session_id: str,
+                message: str,
+                output_path,
+                profile_label: str = "",
+                model: str = "",
+                reasoning_effort: str = "",
+            ) -> list[str]:
+                return ["fake-cli", "resume", session_id, message]
+
+        class _ImmediateThread:
+            def __init__(self, target=None, args=(), daemon=None):
+                self._target = target
+                self._args = args
+
+            def start(self) -> None:
+                if self._target:
+                    self._target(*self._args)
+
+            def join(self, timeout=None) -> None:
+                return
+
+        class _FakeStream:
+            def __init__(self, lines: list[str]) -> None:
+                self._lines = [line + "\n" for line in lines]
+                self._idx = 0
+
+            def readline(self) -> str:
+                if self._idx >= len(self._lines):
+                    return ""
+                s = self._lines[self._idx]
+                self._idx += 1
+                return s
+
+            def close(self) -> None:
+                return
+
+        class _FakeProc:
+            def __init__(self) -> None:
+                self.returncode = 0
+                self.stdout = _FakeStream(["任务已完成，这是 ClaudeCode 最终正文。"])
+                self.stderr = _FakeStream(
+                    [
+                        "permission requested: external_directory (/tmp/qoreon-demo/workspace/project/*); auto-rejecting",
+                        "Error: The user rejected permission to use this specific tool call.",
+                    ]
+                )
+
+            def poll(self):
+                return self.returncode
+
+            def terminate(self) -> None:
+                self.returncode = 1
+
+            def kill(self) -> None:
+                self.returncode = 1
+
+        with tempfile.TemporaryDirectory() as td:
+            runs_dir = server.Path(td)
+            store = server.RunStore(runs_dir=runs_dir)
+            run = store.create_run("p", "c", "ses_test_claude_done", "m1", cli_type="claude")
+            run_id = str(run["id"])
+
+            with patch.object(server, "get_adapter", return_value=_FakeAdapter):
+                with patch.object(server.subprocess, "Popen", return_value=_FakeProc()):
+                    with patch.object(server.threading, "Thread", _ImmediateThread):
+                        with patch.object(server.time, "sleep", return_value=None):
+                            server.run_cli_exec(store, run_id, timeout_s=10, cli_type="claude", scheduler=None)
+
+            meta = store.load_meta(run_id) or {}
+            self.assertEqual(meta.get("status"), "done")
+            self.assertEqual(str(meta.get("error") or ""), "")
+            self.assertNotEqual(meta.get("errorType"), "permission_denied")
+            self.assertIn("ClaudeCode 最终正文", str(meta.get("lastPreview") or ""))
+
+    def test_claude_permission_denied_without_final_text_exit_zero_marks_error(self) -> None:
+        class _FakeAdapter:
+            @classmethod
+            def supports_model(cls) -> bool:
+                return False
+
+            @classmethod
+            def build_resume_command(
+                cls,
+                session_id: str,
+                message: str,
+                output_path,
+                profile_label: str = "",
+                model: str = "",
+                reasoning_effort: str = "",
+            ) -> list[str]:
+                return ["fake-cli", "resume", session_id, message]
+
+        class _ImmediateThread:
+            def __init__(self, target=None, args=(), daemon=None):
+                self._target = target
+                self._args = args
+
+            def start(self) -> None:
+                if self._target:
+                    self._target(*self._args)
+
+            def join(self, timeout=None) -> None:
+                return
+
+        class _FakeStream:
+            def __init__(self, lines: list[str]) -> None:
+                self._lines = [line + "\n" for line in lines]
+                self._idx = 0
+
+            def readline(self) -> str:
+                if self._idx >= len(self._lines):
+                    return ""
+                s = self._lines[self._idx]
+                self._idx += 1
+                return s
+
+            def close(self) -> None:
+                return
+
+        class _FakeProc:
+            def __init__(self) -> None:
+                self.returncode = 0
+                self.stdout = _FakeStream([])
+                self.stderr = _FakeStream(
+                    [
+                        "permission requested: external_directory (/tmp/qoreon-demo/workspace/project/*); auto-rejecting",
+                        "Error: The user rejected permission to use this specific tool call.",
+                    ]
+                )
+
+            def poll(self):
+                return self.returncode
+
+            def terminate(self) -> None:
+                self.returncode = 1
+
+            def kill(self) -> None:
+                self.returncode = 1
+
+        with tempfile.TemporaryDirectory() as td:
+            runs_dir = server.Path(td)
+            store = server.RunStore(runs_dir=runs_dir)
+            run = store.create_run("p", "c", "ses_test_claude_error", "m1", cli_type="claude")
+            run_id = str(run["id"])
+
+            with patch.object(server, "get_adapter", return_value=_FakeAdapter):
+                with patch.object(server.subprocess, "Popen", return_value=_FakeProc()):
+                    with patch.object(server.threading, "Thread", _ImmediateThread):
+                        with patch.object(server.time, "sleep", return_value=None):
+                            server.run_cli_exec(store, run_id, timeout_s=10, cli_type="claude", scheduler=None)
+
+            meta = store.load_meta(run_id) or {}
+            self.assertEqual(meta.get("status"), "error")
+            self.assertIn("external_directory permission denied", str(meta.get("error") or ""))
+            self.assertEqual(meta.get("errorType"), "permission_denied")
+
     def test_terminal_text_cli_permission_denied_exit_zero_marks_error(self) -> None:
         class _FakeAdapter:
             @classmethod
@@ -360,7 +525,7 @@ class TestNetworkRetryHelpers(unittest.TestCase):
                 self.stdout = _FakeStream(["我来深入分析这两个项目的结构和模式。"])
                 self.stderr = _FakeStream(
                     [
-                        "permission requested: external_directory (/home/example/workspace/project/*); auto-rejecting",
+                        "permission requested: external_directory (/tmp/qoreon-demo/workspace/project/*); auto-rejecting",
                         "✗ read failed",
                         "Error: The user rejected permission to use this specific tool call.",
                     ]
@@ -896,6 +1061,9 @@ class TestNetworkRetryHelpers(unittest.TestCase):
             after = store.load_meta(run_id) or {}
             self.assertEqual(after.get("status"), "error")
             self.assertEqual(after.get("error"), "interrupted by user")
+            self.assertEqual(after.get("interrupt_origin"), "user")
+            self.assertEqual(after.get("interrupt_requested_by"), "user")
+            self.assertEqual(after.get("chain_state"), "cancelled_by_user")
 
     def test_interrupt_requested_with_completion_evidence_keeps_done(self) -> None:
         class _FakeAdapter:

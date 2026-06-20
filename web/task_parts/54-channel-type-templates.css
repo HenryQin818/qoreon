@@ -1,0 +1,65 @@
+    .new-channel-type-card {
+      display: grid;
+      gap: 10px;
+      padding: 14px;
+      border: 1px solid rgba(60, 71, 88, 0.10);
+      border-radius: 16px;
+      background:
+        linear-gradient(135deg, rgba(243, 248, 245, 0.96), rgba(255, 255, 255, 0.94));
+    }
+    .new-channel-type-card-title {
+      font-size: 13px;
+      font-weight: 900;
+      color: rgba(31, 37, 48, 0.92);
+    }
+    .new-channel-type-grid {
+      display: grid;
+      gap: 8px;
+    }
+    .new-channel-type-kv {
+      display: grid;
+      grid-template-columns: 86px minmax(0, 1fr);
+      gap: 10px;
+      align-items: start;
+      padding: 8px 10px;
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.78);
+      border: 1px solid rgba(60, 71, 88, 0.07);
+    }
+    .new-channel-type-kv .k {
+      font-size: 11px;
+      font-weight: 900;
+      color: rgba(102, 113, 130, 0.94);
+    }
+    .new-channel-type-kv .v {
+      min-width: 0;
+      font-size: 12px;
+      line-height: 1.55;
+      color: rgba(31, 37, 48, 0.90);
+      overflow-wrap: anywhere;
+    }
+    .newconv-inherit-summary {
+      padding: 10px 12px;
+      border-radius: 14px;
+      border: 1px solid rgba(60, 71, 88, 0.10);
+      background: rgba(243, 248, 245, 0.78);
+      color: rgba(31, 37, 48, 0.82);
+      font-size: 12px;
+      line-height: 1.55;
+    }
+    .newconv-static-instruction-hint {
+      margin-top: 8px;
+      padding: 9px 11px;
+      border-radius: 12px;
+      border: 1px solid rgba(15, 118, 110, 0.16);
+      background: rgba(240, 253, 250, 0.92);
+      color: rgba(17, 94, 89, 0.94);
+      font-size: 12px;
+      line-height: 1.55;
+    }
+    @media (max-width: 720px) {
+      .new-channel-type-kv {
+        grid-template-columns: 1fr;
+        gap: 4px;
+      }
+    }

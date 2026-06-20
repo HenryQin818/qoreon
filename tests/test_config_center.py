@@ -122,12 +122,20 @@ prompt_template = "巡查"
 
     def test_set_runtime_cli_bins_in_config_text_insert(self) -> None:
         raw = "version = 1\n\n[dashboard]\ntitle = \"x\"\n"
-        out = set_runtime_cli_bins_in_config_text(raw, {"codex": "/usr/local/bin/codex", "trae": "/usr/local/bin/trae-cli"})
+        out = set_runtime_cli_bins_in_config_text(
+            raw,
+            {
+                "codex": "/usr/local/bin/codex",
+                "trae": "/usr/local/bin/trae-cli",
+                "codebuddy": "/tmp/qoreon-user/.local/bin/codebuddy",
+            },
+        )
         parsed = tomllib.loads(out)
         runtime = parsed.get("runtime") or {}
         cli_bins = runtime.get("cli_bins") if isinstance(runtime, dict) else {}
         self.assertEqual((cli_bins or {}).get("codex"), "/usr/local/bin/codex")
         self.assertEqual((cli_bins or {}).get("trae_cli"), "/usr/local/bin/trae-cli")
+        self.assertEqual((cli_bins or {}).get("codebuddy"), "/tmp/qoreon-user/.local/bin/codebuddy")
 
     def test_set_runtime_cli_bins_in_config_text_remove_section_when_cleared(self) -> None:
         raw = """

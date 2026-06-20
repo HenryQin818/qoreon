@@ -11,11 +11,12 @@ from urllib import parse as urllib_parse
 from urllib import request as urllib_request
 
 from .session_store import SessionStore
+from .task_identity import extract_task_identity_from_file, normalize_task_path
 from .utils import iter_channel_dirs
 
 IN_PROGRESS_TASK_PATTERN = "【进行中】【任务】*.md"
 UPDATED_AT_RE = re.compile(r"^\s*更新时间[：:]\s*(.+?)\s*$", re.MULTILINE)
-_ALLOWED_CLI_TYPES = {"codex", "claude", "opencode", "gemini"}
+_ALLOWED_CLI_TYPES = {"codex", "claude", "opencode", "gemini", "trae", "codebuddy"}
 
 
 def _now_local_iso() -> str:
@@ -27,6 +28,13 @@ def _read_text(path: Path) -> str:
         return path.read_text(encoding="utf-8", errors="ignore")
     except Exception:
         return ""
+
+
+def _reminder_task_identity_key(task_path: Any, task_id: Any = "") -> str:
+    normalized_task_id = str(task_id or "").strip()
+    if normalized_task_id:
+        return f"task_id::{normalized_task_id}"
+    return str(task_path or "").strip()
 
 
 def _normalize_cli_type(raw: Any, *, default: str = "codex") -> str:
@@ -107,9 +115,15 @@ def scan_in_progress_tasks(
             age_minutes = max(0, int((now_dt - updated_dt).total_seconds() // 60))
             stale = age_minutes >= max(0, int(stale_after_minutes or 0))
             escalated_candidate = age_minutes >= max(0, int(escalate_after_minutes or 0))
+            identity = extract_task_identity_from_file(path)
+            task_id = str(identity.get("task_id") or "").strip()
+            parent_task_id = str(identity.get("parent_task_id") or "").strip()
             rows.append(
                 {
                     "task_path": str(path),
+                    "task_id": task_id,
+                    "parent_task_id": parent_task_id,
+                    "_task_identity_key": _reminder_task_identity_key(path, task_id),
                     "channel_name": channel_name,
                     "updated_at": updated_dt.strftime("%Y-%m-%d %H:%M:%S %z"),
                     "age_minutes": age_minutes,
@@ -191,10 +205,11 @@ class ReminderEscalationState:
         for ref in task_refs:
             row = dict(ref)
             task_path = str(row.get("task_path") or "").strip()
-            if not task_path:
+            task_id = str(row.get("task_id") or "").strip()
+            key = str(row.get("_task_identity_key") or "").strip() or _reminder_task_identity_key(task_path, task_id)
+            if not key:
                 out.append(row)
                 continue
-            key = task_path
             active_keys.add(key)
             entry = tasks_state.get(key)
             if not isinstance(entry, dict):
@@ -204,6 +219,8 @@ class ReminderEscalationState:
                     "last_reminded_at": "",
                     "last_escalated_at": "",
                     "escalated": False,
+                    "task_path": task_path,
+                    "task_id": task_id,
                 }
             else:
                 entry["last_seen_at"] = now_iso
@@ -211,6 +228,10 @@ class ReminderEscalationState:
                 entry.setdefault("last_reminded_at", "")
                 entry.setdefault("last_escalated_at", "")
                 entry.setdefault("escalated", False)
+            if task_path:
+                entry["task_path"] = task_path
+            if task_id:
+                entry["task_id"] = task_id
 
             first_stale_dt = _parse_datetime(str(entry.get("first_stale_at") or "")) or now_dt
             stale_minutes = max(0, int((now_dt - first_stale_dt).total_seconds() // 60))
@@ -220,6 +241,7 @@ class ReminderEscalationState:
             entry["escalated"] = bool(should_escalate)
             tasks_state[key] = entry
 
+            row["_task_identity_key"] = key
             row["stale_since_at"] = str(entry.get("first_stale_at") or "")
             row["stale_duration_minutes"] = stale_minutes
             row["escalated"] = bool(entry.get("escalated"))
@@ -235,12 +257,21 @@ class ReminderEscalationState:
 
     def mark_reminded(self, *, task_paths: Iterable[str], reminded_at_iso: str) -> None:
         tasks_state = self._state.setdefault("tasks", {})
-        for task_path in task_paths:
-            key = str(task_path or "").strip()
-            if not key:
-                continue
-            entry = tasks_state.get(key)
+        targets = {str(task_path or "").strip() for task_path in task_paths if str(task_path or "").strip()}
+        if not targets:
+            self.save()
+            return
+        normalized_targets = {normalize_task_path(path) for path in targets if normalize_task_path(path)}
+        for key, entry in list(tasks_state.items()):
             if not isinstance(entry, dict):
+                continue
+            entry_path = str(entry.get("task_path") or "").strip()
+            normalized_entry_path = normalize_task_path(entry_path)
+            if (
+                str(key or "").strip() not in targets
+                and entry_path not in targets
+                and normalized_entry_path not in normalized_targets
+            ):
                 continue
             entry["last_reminded_at"] = reminded_at_iso
             entry["last_seen_at"] = reminded_at_iso
@@ -328,6 +359,8 @@ def build_in_progress_reminder_events(
         task_refs = [
             {
                 "task_path": str(r.get("task_path") or ""),
+                "task_id": str(r.get("task_id") or ""),
+                "parent_task_id": str(r.get("parent_task_id") or ""),
                 "channel_name": channel_name,
                 "updated_at": str(r.get("updated_at") or ""),
                 "age_minutes": int(r.get("age_minutes") or 0),

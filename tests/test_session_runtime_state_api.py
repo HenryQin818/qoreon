@@ -17,6 +17,62 @@ from task_dashboard.task_identity import render_task_front_matter
 
 
 class SessionRuntimeStateApiTests(unittest.TestCase):
+    def test_attach_runtime_state_allow_stale_uses_cached_index_without_scan(self) -> None:
+        pid = "task_dashboard"
+        sid = "019d231a-7de7-71d2-8af1-130329e4f530"
+        with server._SESSION_RUNTIME_INDEX_CACHE_LOCK:
+            server._SESSION_RUNTIME_INDEX_CACHE.clear()
+            server._SESSION_RUNTIME_INDEX_INFLIGHT.clear()
+            server._SESSION_RUNTIME_INDEX_INVALIDATED_AT.clear()
+            server._SESSION_RUNTIME_INDEX_CACHE[pid] = {
+                "checked_at_mono": time.monotonic() - 3600,
+                "build_started_at_mono": time.monotonic() - 3600,
+                "index": {
+                    sid: {
+                        "running_ids": [(1.0, "run-active")],
+                        "queued_ids": [],
+                        "retry_waiting_ids": [],
+                        "external_busy": False,
+                        "latest_run_id": "run-active",
+                        "latest_status": "running",
+                        "updated_at": "2026-05-14T11:40:00+0800",
+                        "last_preview": "正在处理",
+                        "last_speaker": "assistant",
+                        "last_sender_type": "",
+                        "last_sender_name": "",
+                        "last_sender_source": "",
+                        "latest_user_msg": "请处理",
+                        "latest_ai_msg": "正在处理",
+                        "last_error": "",
+                        "run_count": 1,
+                        "session_health_state": "busy",
+                        "latest_effective_run_summary": {},
+                    }
+                },
+            }
+
+        class _NoScanStore:
+            def list_runs(self, *_args, **_kwargs):
+                raise AssertionError("allow_stale runtime attach should not synchronously scan runs")
+
+        rows = server._attach_runtime_state_to_sessions(
+            _NoScanStore(),
+            [{"id": sid, "project_id": pid, "cli_type": "codex"}],
+            project_id=pid,
+            runtime_index_wait_for_inflight=False,
+            runtime_index_allow_stale=True,
+            probe_external_when_idle=False,
+        )
+
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        self.assertEqual((row.get("runtime_state") or {}).get("display_state"), "running")
+        self.assertEqual((row.get("runtime_state") or {}).get("active_run_id"), "run-active")
+        self.assertEqual(row.get("session_display_state"), "running")
+        latest = row.get("latest_run_summary") or {}
+        self.assertEqual(latest.get("run_id"), "run-active")
+        self.assertEqual(latest.get("status"), "running")
+
     def test_external_busy_probe_ignores_session_id_inside_message_text(self) -> None:
         with server._SESSION_EXTERNAL_BUSY_CACHE_LOCK:
             server._SESSION_EXTERNAL_BUSY_CACHE.clear()
@@ -447,7 +503,357 @@ class SessionRuntimeStateApiTests(unittest.TestCase):
                 latest_raw = healthy_row.get("latest_run_summary") or {}
                 self.assertEqual(str(latest_raw.get("run_id") or ""), recovery_id)
                 self.assertEqual(str(blocked_row.get("session_health_state") or ""), "blocked")
-                self.assertFalse(bool(blocked_row.get("latest_effective_run_summary")))
+                blocked_raw = blocked_row.get("latest_run_summary") or {}
+                self.assertEqual(str(blocked_raw.get("error_class") or ""), "session_binding")
+                blocked_effective = blocked_row.get("latest_effective_run_summary") or {}
+                self.assertEqual(str(blocked_effective.get("run_id") or ""), blocked_id)
+                self.assertEqual(str(blocked_effective.get("outcome_state") or ""), "failed_config")
+                self.assertEqual(str(blocked_effective.get("error_class") or ""), "session_binding")
+                self.assertEqual(str(blocked_effective.get("failure_class") or ""), "business")
+            finally:
+                httpd.shutdown()
+                t.join(timeout=2)
+                httpd.server_close()
+
+    def test_get_sessions_full_includes_failure_retry_and_communication_summaries(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            httpd, store, session_store = self._start_server(base)
+            pid = "task_dashboard"
+            channel_name = "子级02-CCB运行时（server-并发-安全-启动）"
+            provider_sid = "019e1000-0000-7000-8000-000000000001"
+            business_sid = "019e1000-0000-7000-8000-000000000002"
+            interrupted_sid = "019e1000-0000-7000-8000-000000000003"
+            exhausted_sid = "019e1000-0000-7000-8000-000000000004"
+            receipt_sid = "019e1000-0000-7000-8000-000000000005"
+            for sid in (provider_sid, business_sid, interrupted_sid, exhausted_sid, receipt_sid):
+                session_store.create_session(pid, channel_name, cli_type="codex", session_id=sid)
+
+            provider_id = self._create_run(
+                store,
+                project_id=pid,
+                channel_name=channel_name,
+                session_id=provider_sid,
+                status="error",
+            )
+            provider_meta = store.load_meta(provider_id) or {}
+            provider_meta["error"] = "OpenAI request failed with HTTP 429 Too Many Requests"
+            store.save_meta(provider_id, provider_meta)
+
+            business_id = self._create_run(
+                store,
+                project_id=pid,
+                channel_name=channel_name,
+                session_id=business_sid,
+                status="error",
+            )
+            business_meta = store.load_meta(business_id) or {}
+            business_meta["error"] = "业务校验失败：任务路径不存在"
+            store.save_meta(business_id, business_meta)
+
+            interrupted_id = self._create_run(
+                store,
+                project_id=pid,
+                channel_name=channel_name,
+                session_id=interrupted_sid,
+                status="error",
+            )
+            interrupted_meta = store.load_meta(interrupted_id) or {}
+            interrupted_meta["error"] = "run interrupted (server restarted or process exited)"
+            store.save_meta(interrupted_id, interrupted_meta)
+
+            exhausted_id = self._create_run(
+                store,
+                project_id=pid,
+                channel_name=channel_name,
+                session_id=exhausted_sid,
+                status="error",
+            )
+            exhausted_meta = store.load_meta(exhausted_id) or {}
+            exhausted_meta["error"] = "provider returned HTTP 503 service unavailable"
+            exhausted_meta["retry_exhausted"] = True
+            store.save_meta(exhausted_id, exhausted_meta)
+
+            receipt_id = self._create_run(
+                store,
+                project_id=pid,
+                channel_name=channel_name,
+                session_id=receipt_sid,
+                status="done",
+            )
+            receipt_meta = store.load_meta(receipt_id) or {}
+            receipt_meta["interaction_mode"] = "task_with_receipt"
+            receipt_meta["receipt_required"] = True
+            receipt_meta["visible_in_channel_chat"] = True
+            receipt_meta["communication_view"] = {
+                "dispatch_state": "resolved",
+                "event_reason": "success",
+                "dispatch_run_id": "callback-run-1",
+            }
+            receipt_meta["receipt_items"] = [
+                {
+                    "source_run_id": receipt_id,
+                    "callback_run_id": "callback-run-1",
+                    "event_type": "done",
+                    "dispatch_status": "sent",
+                }
+            ]
+            receipt_meta["receipt_rollup"] = {"total_count": 1}
+            store.save_meta(receipt_id, receipt_meta)
+
+            t = threading.Thread(target=httpd.serve_forever, daemon=True)
+            t.start()
+            port = int(httpd.server_address[1])
+            try:
+                with mock.patch(
+                    "task_dashboard.runtime.heartbeat_registry._probe_external_session_busy_batch_cached",
+                    return_value={},
+                ):
+                    with url_request.urlopen(
+                        f"http://127.0.0.1:{port}/api/sessions?project_id={pid}",
+                        timeout=3,
+                    ) as resp:
+                        self.assertEqual(resp.status, 200)
+                        body = json.loads(resp.read().decode("utf-8"))
+                rows = {str(row.get("id") or ""): row for row in (body.get("sessions") or [])}
+
+                provider_latest = rows[provider_sid].get("latest_run_summary") or {}
+                self.assertEqual(provider_latest.get("failure_class"), "provider_transient")
+                self.assertEqual((provider_latest.get("provider_error") or {}).get("kind"), "rate_limit")
+                self.assertEqual(provider_latest.get("side_effect_risk"), "none")
+                self.assertEqual(provider_latest.get("recovery_mode"), "auto_retry")
+                self.assertFalse(bool(provider_latest.get("recovery_required")))
+                self.assertFalse(bool(provider_latest.get("retry_exhausted")))
+                provider_effective = rows[provider_sid].get("latest_effective_run_summary") or {}
+                self.assertEqual(provider_effective.get("outcome_state"), "provider_transient_failed")
+                self.assertEqual(provider_effective.get("failure_class"), "provider_transient")
+
+                business_effective = rows[business_sid].get("latest_effective_run_summary") or {}
+                self.assertEqual(business_effective.get("outcome_state"), "failed_business")
+                self.assertEqual(business_effective.get("failure_class"), "business")
+
+                interrupted_effective = rows[interrupted_sid].get("latest_effective_run_summary") or {}
+                self.assertEqual(interrupted_effective.get("outcome_state"), "interrupted_infra")
+                self.assertEqual(interrupted_effective.get("failure_class"), "interrupted")
+
+                exhausted_latest = rows[exhausted_sid].get("latest_run_summary") or {}
+                self.assertTrue(bool(exhausted_latest.get("retry_exhausted")))
+                self.assertEqual(exhausted_latest.get("recovery_mode"), "manual_recovery")
+                self.assertTrue(bool(exhausted_latest.get("recovery_required")))
+                exhausted_effective = rows[exhausted_sid].get("latest_effective_run_summary") or {}
+                self.assertTrue(bool(exhausted_effective.get("retry_exhausted")))
+
+                communication = rows[receipt_sid].get("communication_status_summary") or {}
+                self.assertEqual(communication.get("delivery_state"), "delivered")
+                self.assertEqual(communication.get("receipt_state"), "received")
+                self.assertTrue(bool(communication.get("receipt_required")))
+                self.assertEqual(communication.get("source_run_id"), receipt_id)
+                self.assertFalse(bool(communication.get("degraded")))
+            finally:
+                httpd.shutdown()
+                t.join(timeout=2)
+                httpd.server_close()
+
+    def test_get_sessions_includes_runtime_projection_explainers(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            httpd, store, session_store = self._start_server(base)
+            pid = "task_dashboard"
+            channel_name = "子级02-CCB运行时（server-并发-安全-启动）"
+            standard_sid = "019e2000-0000-7000-8000-000000000001"
+            legacy_sid = "019e2000-0000-7000-8000-000000000002"
+            system_sid = "019e2000-0000-7000-8000-000000000003"
+            external_sid = "019e2000-0000-7000-8000-000000000004"
+            provider_sid = "019e2000-0000-7000-8000-000000000005"
+            hidden_sid = "019e2000-0000-7000-8000-000000000006"
+            queued_sid = "019e2000-0000-7000-8000-000000000007"
+            for sid in (
+                standard_sid,
+                legacy_sid,
+                system_sid,
+                external_sid,
+                provider_sid,
+                hidden_sid,
+                queued_sid,
+            ):
+                session_store.create_session(pid, channel_name, cli_type="codex", session_id=sid)
+
+            standard_id = self._create_run(
+                store,
+                project_id=pid,
+                channel_name=channel_name,
+                session_id=standard_sid,
+                status="running",
+            )
+            standard_meta = store.load_meta(standard_id) or {}
+            standard_meta.update(
+                {
+                    "message_kind": "collab_update",
+                    "interaction_mode": "task_with_receipt",
+                    "source_ref": {"project_id": pid, "session_id": "source-sid"},
+                    "callback_to": {"session_id": "source-sid"},
+                    "visible_in_channel_chat": True,
+                }
+            )
+            store.save_meta(standard_id, standard_meta)
+
+            legacy_id = self._create_run(
+                store,
+                project_id=pid,
+                channel_name=channel_name,
+                session_id=legacy_sid,
+                status="running",
+            )
+            legacy_meta = store.load_meta(legacy_id) or {}
+            legacy_meta["sender_type"] = "legacy"
+            legacy_meta["visible_in_channel_chat"] = True
+            store.save_meta(legacy_id, legacy_meta)
+
+            system_id = self._create_run(
+                store,
+                project_id=pid,
+                channel_name=channel_name,
+                session_id=system_sid,
+                status="running",
+            )
+            system_meta = store.load_meta(system_id) or {}
+            system_meta.update(
+                {
+                    "sender_type": "system",
+                    "message_kind": "system_callback",
+                    "trigger_type": "callback_auto",
+                    "source_run_id": "source-run-1",
+                    "visible_in_channel_chat": True,
+                }
+            )
+            store.save_meta(system_id, system_meta)
+
+            provider_id = self._create_run(
+                store,
+                project_id=pid,
+                channel_name=channel_name,
+                session_id=provider_sid,
+                status="error",
+            )
+            provider_meta = store.load_meta(provider_id) or {}
+            provider_meta.update(
+                {
+                    "error": "OpenAI request failed with HTTP 429 Too Many Requests",
+                    "message_kind": "collab_update",
+                    "interaction_mode": "task_with_receipt",
+                    "source_ref": {"project_id": pid, "session_id": "source-sid"},
+                    "callback_to": {"session_id": "source-sid"},
+                    "visible_in_channel_chat": True,
+                }
+            )
+            store.save_meta(provider_id, provider_meta)
+
+            hidden_id = self._create_run(
+                store,
+                project_id=pid,
+                channel_name=channel_name,
+                session_id=hidden_sid,
+                status="running",
+            )
+            hidden_meta = store.load_meta(hidden_id) or {}
+            hidden_meta.update(
+                {
+                    "message_kind": "collab_update",
+                    "interaction_mode": "task_with_receipt",
+                    "source_ref": {"project_id": pid, "session_id": "source-sid"},
+                    "callback_to": {"session_id": "source-sid"},
+                    "visible_in_channel_chat": False,
+                }
+            )
+            store.save_meta(hidden_id, hidden_meta)
+
+            queued_id = self._create_run(
+                store,
+                project_id=pid,
+                channel_name=channel_name,
+                session_id=queued_sid,
+                status="queued",
+            )
+            queued_meta = store.load_meta(queued_id) or {}
+            queued_meta.update(
+                {
+                    "message_kind": "collab_update",
+                    "interaction_mode": "task_with_receipt",
+                    "source_ref": {"project_id": pid, "session_id": "source-sid"},
+                    "callback_to": {"session_id": "source-sid"},
+                    "visible_in_channel_chat": True,
+                }
+            )
+            store.save_meta(queued_id, queued_meta)
+
+            t = threading.Thread(target=httpd.serve_forever, daemon=True)
+            t.start()
+            port = int(httpd.server_address[1])
+            try:
+                with mock.patch(
+                    "task_dashboard.runtime.heartbeat_registry._probe_external_session_busy_batch_cached",
+                    return_value={f"{external_sid}|codex": (True, "2026-05-22T12:00:00+0800")},
+                ):
+                    with url_request.urlopen(
+                        f"http://127.0.0.1:{port}/api/sessions?project_id={pid}",
+                        timeout=3,
+                    ) as resp:
+                        self.assertEqual(resp.status, 200)
+                        body = json.loads(resp.read().decode("utf-8"))
+                rows = {str(row.get("id") or ""): row for row in (body.get("sessions") or [])}
+
+                standard_runtime = rows[standard_sid].get("runtime_state") or {}
+                standard_projection = (rows[standard_sid].get("communication_status_summary") or {}).get("projection_summary") or {}
+                self.assertEqual(standard_runtime.get("busy_source"), "internal_run")
+                self.assertEqual(standard_runtime.get("active_run_visibility"), "projectable")
+                self.assertEqual(standard_runtime.get("active_run_projection_reason"), "ok")
+                self.assertTrue(bool(standard_projection.get("has_projectable_message")))
+                self.assertEqual(standard_projection.get("reason"), "ok")
+
+                legacy_runtime = rows[legacy_sid].get("runtime_state") or {}
+                legacy_projection = (rows[legacy_sid].get("communication_status_summary") or {}).get("projection_summary") or {}
+                self.assertEqual(legacy_runtime.get("busy_source"), "legacy_run")
+                self.assertEqual(legacy_runtime.get("display_secondary_state"), "legacy_run")
+                self.assertEqual(legacy_runtime.get("active_run_visibility"), "legacy_unknown")
+                self.assertEqual(legacy_projection.get("reason"), "legacy_missing_refs")
+                self.assertFalse(bool(legacy_projection.get("has_projectable_message")))
+
+                system_runtime = rows[system_sid].get("runtime_state") or {}
+                system_projection = (rows[system_sid].get("communication_status_summary") or {}).get("projection_summary") or {}
+                self.assertEqual(system_runtime.get("busy_source"), "system_callback")
+                self.assertEqual(system_runtime.get("display_secondary_state"), "system_callback")
+                self.assertEqual(system_runtime.get("active_run_message_kind"), "system_callback")
+                self.assertEqual(system_runtime.get("active_run_trigger_type"), "callback_auto")
+                self.assertEqual(system_projection.get("reason"), "system_callback")
+                self.assertEqual(system_projection.get("source_run_id"), "source-run-1")
+
+                external_runtime = rows[external_sid].get("runtime_state") or {}
+                external_projection = (rows[external_sid].get("communication_status_summary") or {}).get("projection_summary") or {}
+                self.assertEqual(external_runtime.get("busy_source"), "external_cli")
+                self.assertEqual(external_runtime.get("display_secondary_state"), "external_busy")
+                self.assertEqual(external_runtime.get("external_busy_reason"), "process_probe")
+                self.assertEqual(external_projection.get("reason"), "external_busy_no_run")
+
+                provider_runtime = rows[provider_sid].get("runtime_state") or {}
+                provider_projection = (rows[provider_sid].get("communication_status_summary") or {}).get("projection_summary") or {}
+                self.assertNotEqual(provider_runtime.get("busy_source"), "external_cli")
+                self.assertEqual(provider_runtime.get("display_secondary_state"), "provider_transient")
+                self.assertEqual(provider_projection.get("reason"), "provider_transient_failure")
+                self.assertTrue(bool(provider_projection.get("has_projectable_message")))
+
+                hidden_runtime = rows[hidden_sid].get("runtime_state") or {}
+                hidden_projection = (rows[hidden_sid].get("communication_status_summary") or {}).get("projection_summary") or {}
+                self.assertEqual(hidden_runtime.get("active_run_visibility"), "hidden")
+                self.assertEqual(hidden_projection.get("reason"), "hidden_message")
+                self.assertFalse(bool(hidden_projection.get("has_projectable_message")))
+
+                queued_runtime = rows[queued_sid].get("runtime_state") or {}
+                queued_projection = (rows[queued_sid].get("communication_status_summary") or {}).get("projection_summary") or {}
+                self.assertEqual(queued_runtime.get("busy_source"), "internal_run")
+                self.assertEqual(queued_runtime.get("active_run_visibility"), "missing")
+                self.assertEqual(queued_projection.get("reason"), "queued_no_active_run")
+                self.assertEqual(queued_projection.get("active_run_id"), "")
+                self.assertEqual(queued_projection.get("source_run_id"), queued_id)
             finally:
                 httpd.shutdown()
                 t.join(timeout=2)
@@ -2154,12 +2560,29 @@ class SessionRuntimeStateApiTests(unittest.TestCase):
                         body = json.loads(resp.read().decode("utf-8"))
                     self.assertTrue(bool(body.get("compatibility_entry")))
                     self.assertEqual(str(body.get("entry_role") or ""), "compatibility_management")
+                    self.assertTrue(body.get("isPartial"))
+                    self.assertEqual(str(body.get("statusFreshness") or ""), "partial")
+                    self.assertIn("project_execution_context", (body.get("loadingHints") or {}).get("deferredFields") or [])
                     binding = next(
                         (item for item in (body.get("bindings") or []) if str(item.get("sessionId") or "") == sid),
                         {},
                     )
                     self.assertTrue(bool(binding.get("compatibility_entry")))
                     self.assertEqual(str(binding.get("entry_role") or ""), "compatibility_management")
+                    self.assertTrue(binding.get("project_execution_context_lazy"))
+                    self.assertNotIn("project_execution_context", binding)
+
+                    with url_request.urlopen(
+                        f"http://127.0.0.1:{port}/api/sessions/bindings?include_context=1",
+                        timeout=3,
+                    ) as resp:
+                        self.assertEqual(resp.status, 200)
+                        body = json.loads(resp.read().decode("utf-8"))
+                    self.assertFalse(body.get("isPartial"))
+                    binding = next(
+                        (item for item in (body.get("bindings") or []) if str(item.get("sessionId") or "") == sid),
+                        {},
+                    )
                     binding_ctx = binding.get("project_execution_context") or {}
                     self.assertEqual(
                         ((binding_ctx.get("target") or {}).get("project_id") or ""),
@@ -2344,7 +2767,7 @@ branch = "release/stable"
                     self.assertEqual(after_ctx.get("context_source"), "project")
 
                     with url_request.urlopen(
-                        f"http://127.0.0.1:{port}/api/sessions/bindings",
+                        f"http://127.0.0.1:{port}/api/sessions/bindings?include_context=1",
                         timeout=3,
                     ) as resp:
                         self.assertEqual(resp.status, 200)

@@ -51,9 +51,37 @@ class SessionHealthTests(unittest.TestCase):
             self.assertEqual(data["compacted_count"], 1)
             self.assertEqual(data["recent_after_usage_pcts"], [69.0])
             self.assertEqual(data["last_after_usage_pct"], 69.0)
+            self.assertEqual(data["latest_token_usage_pct"], 69.0)
             self.assertEqual(len(data["compaction_observations"]), 1)
             self.assertEqual(data["compaction_observations"][0]["before_pct"], 81.0)
             self.assertEqual(data["compaction_observations"][0]["after_pct"], 69.0)
+            self.assertEqual(data["compaction_observations"][0]["transition_kind"], "normal_drop")
+
+    def test_analyze_codex_session_logs_uses_pre_compact_high_water(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            log_path = root / "sessions" / "2026" / "05" / "24" / "rollout-2026-05-24T20-26-34-019dd3aa-ba93-7050-93a3-06afd219af42.jsonl"
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            log_path.write_text(
+                "\n".join(
+                    [
+                        '{"timestamp":"2026-05-24T12:25:45.240Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"total_tokens":195867},"model_context_window":258400}}}',
+                        '{"timestamp":"2026-05-24T12:26:34.043Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"total_tokens":38902},"model_context_window":258400}}}',
+                        '{"timestamp":"2026-05-24T12:26:34.045Z","type":"event_msg","payload":{"type":"context_compacted"}}',
+                        '{"timestamp":"2026-05-24T12:26:55.371Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"total_tokens":52610},"model_context_window":258400}}}',
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            index = index_codex_log_files([root / "sessions"])
+            data = analyze_codex_session_logs("019dd3aa-ba93-7050-93a3-06afd219af42", index)
+            self.assertEqual(data["compacted_count"], 1)
+            self.assertEqual(data["recent_after_usage_pcts"], [20.4])
+            self.assertEqual(data["latest_token_usage_pct"], 20.4)
+            self.assertEqual(data["compaction_observations"][0]["before_pct"], 75.8)
+            self.assertEqual(data["compaction_observations"][0]["marker_before_pct"], 15.1)
+            self.assertEqual(data["compaction_observations"][0]["after_pct"], 20.4)
+            self.assertEqual(data["compaction_observations"][0]["transition_kind"], "normal_drop")
 
     def test_analyze_codex_session_logs_prefers_recent_tail_when_log_is_truncated(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -77,6 +105,7 @@ class SessionHealthTests(unittest.TestCase):
             self.assertEqual(data["compacted_count"], 1)
             self.assertTrue(str(data["last_compacted_at"]).startswith("2026-04-13T15:56:00+08:00"))
             self.assertEqual(data["recent_after_usage_pcts"], [40.0])
+            self.assertEqual(data["latest_token_usage_pct"], 40.0)
             self.assertEqual(data["compaction_observations"][0]["before_pct"], 80.0)
             self.assertEqual(data["compaction_observations"][0]["after_pct"], 40.0)
 
@@ -130,6 +159,8 @@ class SessionHealthTests(unittest.TestCase):
             ],
             "recent_after_usage_pcts": [64.0, 67.0, 68.0, 69.0],
             "last_after_usage_pct": 69.0,
+            "latest_token_usage_pct": 69.0,
+            "latest_token_usage_at": "2026-03-11T08:00:02+08:00",
             "avg_turns_between_compactions": 6.0,
             "avg_hours_between_compactions": 4.0,
             "turns_since_last_compaction": 3,

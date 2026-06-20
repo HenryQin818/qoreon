@@ -184,6 +184,8 @@
       sessionTimelineMap: Object.create(null),
       projectRuns: [],
       detailMap: Object.create(null),
+      sessionDetailDeferredTimerById: Object.create(null),
+      sessionDetailDeferredReasonById: Object.create(null),
       debugExpanded: new Set(),
       bubbleExpanded: new Set(),
       processUi: Object.create(null), // { [runId]: { expanded:boolean, manual:boolean } }
@@ -978,7 +980,7 @@
         const ok = await apiHealth();
         if (!ok) {
           stopCCBPoll();
-          hint.textContent = "CCB API 未启用：请启动本地开发服务（需要同源 API 才能发消息/回看回复）。";
+          hint.textContent = "CCB API 未启用：请用 run_local.sh 启动看板服务（需要同源 API 才能发消息/回看回复）。";
           sendBtn.disabled = true;
           refreshBtn.disabled = true;
           renderRuns([]);
@@ -1374,6 +1376,7 @@
       const newConvChannel = document.getElementById("newConvChannel");
       const newConvCliType = document.getElementById("newConvCliType");
       const newConvModel = document.getElementById("newConvModel");
+      const newConvCodeBuddyModel = document.getElementById("newConvCodeBuddyModel");
       const newConvSessionId = document.getElementById("newConvSessionId");
       const newConvInitMessage = document.getElementById("newConvInitMessage");
       const ccbNewConvBtn = document.getElementById("ccbNewConvBtn");
@@ -1457,6 +1460,18 @@
           syncNewConvModelUI();
         });
       }
+      if (newConvCodeBuddyModel) {
+        newConvCodeBuddyModel.addEventListener("change", () => {
+          if (newConvModel) {
+            newConvModel.value = String(newConvCodeBuddyModel.value || codeBuddyDefaultModel());
+            newConvModel.dataset.codebuddyModelApplied = "0";
+            newConvModel.dataset.codebuddyModel = String(newConvModel.value || "");
+            newConvModel.dataset.modelCliType = "codebuddy";
+            newConvModel.dataset.modelSource = "user";
+          }
+          syncNewConvAdvancedSummary();
+        });
+      }
       if (newConvSessionId) {
         newConvSessionId.addEventListener("keydown", (e) => {
           if (e.key === "Enter") {
@@ -1516,7 +1531,7 @@
         const syncNewChannelForm = (e) => {
           const target = e && e.target;
           const id = target && target.id;
-          if (!id || !["newChannelKind", "newChannelKindCustom", "newChannelIndex", "newChannelName", "newChannelDesc", "newChannelRequirement"].includes(id)) return;
+          if (!id || !["newChannelKind", "newChannelKindCustom", "newChannelIndex", "newChannelName", "newChannelDesc", "newChannelAgentRole", "newChannelCreateAgentsMd", "newChannelAgentsMdContent", "newChannelRequirement"].includes(id)) return;
           if (!NEW_CHANNEL_UI.open) return;
           renderNewChannelWorkflowUi();
           if (NEW_CHANNEL_UI.phase !== "form") {
@@ -2194,6 +2209,120 @@
     }
 
     let IMAGE_PREVIEW_READY = false;
+    let IMAGE_PREVIEW_STATE = { items: [], index: 0 };
+
+    function isImagePreviewOpen() {
+      const mask = document.getElementById("imgPreviewMask");
+      return !!(mask && mask.classList.contains("show"));
+    }
+
+    function normalizeImagePreviewItem(raw, fallbackCaption = "") {
+      const item = raw && typeof raw === "object" ? raw : null;
+      const src = String(item
+        ? (item.src || item.url || item.href || item.openUrl || item.dataUrl || "")
+        : (raw || "")).trim();
+      if (!src) return null;
+      const caption = String(item
+        ? (item.caption || item.name || item.originalName || item.filename || fallbackCaption || "")
+        : (fallbackCaption || "")).trim();
+      return { src, caption };
+    }
+
+    function normalizeImagePreviewGallery(src, caption = "", galleryItems = null, activeIndex = 0) {
+      const fallback = normalizeImagePreviewItem({ src, caption }, caption);
+      const rawItems = Array.isArray(galleryItems) ? galleryItems : [];
+      const items = [];
+      rawItems.forEach((item) => {
+        const normalized = normalizeImagePreviewItem(item, caption);
+        if (normalized) items.push(normalized);
+      });
+      if (fallback && !items.length) items.push(fallback);
+      if (fallback && items.length && !items.some((item) => item.src === fallback.src)) {
+        items.unshift(fallback);
+      }
+      let index = Number(activeIndex);
+      if (!Number.isFinite(index)) index = -1;
+      index = Math.trunc(index);
+      if (index < 0 && fallback) index = items.findIndex((item) => item.src === fallback.src);
+      if (index < 0) index = 0;
+      if (index >= items.length) index = Math.max(0, items.length - 1);
+      return { items, index };
+    }
+
+    function renderImagePreviewStrip() {
+      const strip = document.getElementById("imgPreviewStrip");
+      if (!strip) return;
+      strip.textContent = "";
+      const items = IMAGE_PREVIEW_STATE.items || [];
+      if (items.length <= 1) {
+        strip.hidden = true;
+        return;
+      }
+      strip.hidden = false;
+      items.forEach((item, index) => {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "img-preview-thumbbtn" + (index === IMAGE_PREVIEW_STATE.index ? " active" : "");
+        btn.title = item.caption || ("图片 " + (index + 1));
+        btn.setAttribute("aria-label", "查看第 " + (index + 1) + " 张图片");
+        if (index === IMAGE_PREVIEW_STATE.index) btn.setAttribute("aria-current", "true");
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          setImagePreviewIndex(index);
+        });
+        const img = document.createElement("img");
+        img.className = "img-preview-thumb";
+        img.src = item.src;
+        img.alt = item.caption || ("图片 " + (index + 1));
+        btn.appendChild(img);
+        strip.appendChild(btn);
+      });
+      const active = strip.querySelector(".img-preview-thumbbtn.active");
+      if (active && typeof active.scrollIntoView === "function") {
+        active.scrollIntoView({ block: "nearest", inline: "center" });
+      }
+    }
+
+    function setImagePreviewIndex(nextIndex) {
+      const items = IMAGE_PREVIEW_STATE.items || [];
+      if (!items.length) return;
+      let index = Number(nextIndex);
+      if (!Number.isFinite(index)) index = 0;
+      index = Math.max(0, Math.min(items.length - 1, Math.trunc(index)));
+      IMAGE_PREVIEW_STATE.index = index;
+      const item = items[index] || {};
+      const img = document.getElementById("imgPreviewImg");
+      const cap = document.getElementById("imgPreviewCap");
+      const counter = document.getElementById("imgPreviewCounter");
+      const prevBtn = document.getElementById("imgPreviewPrev");
+      const nextBtn = document.getElementById("imgPreviewNext");
+      const dialog = document.getElementById("imgPreviewDialog");
+      if (dialog) dialog.classList.toggle("has-gallery", items.length > 1);
+      if (img) {
+        img.src = String(item.src || "");
+        img.alt = item.caption || "preview";
+      }
+      if (cap) cap.textContent = String(item.caption || "");
+      if (counter) {
+        counter.hidden = items.length <= 1;
+        counter.textContent = items.length > 1 ? ((index + 1) + " / " + items.length) : "";
+      }
+      if (prevBtn) {
+        prevBtn.hidden = items.length <= 1;
+        prevBtn.disabled = index <= 0;
+      }
+      if (nextBtn) {
+        nextBtn.hidden = items.length <= 1;
+        nextBtn.disabled = index >= items.length - 1;
+      }
+      renderImagePreviewStrip();
+    }
+
+    function switchImagePreview(delta) {
+      if (!isImagePreviewOpen()) return;
+      setImagePreviewIndex((IMAGE_PREVIEW_STATE.index || 0) + Number(delta || 0));
+    }
+
     function ensureImagePreview() {
       if (IMAGE_PREVIEW_READY) return;
       IMAGE_PREVIEW_READY = true;
@@ -2201,10 +2330,14 @@
       mask.className = "img-preview-mask";
       mask.id = "imgPreviewMask";
       mask.innerHTML = `
-        <div class="img-preview-dialog" role="dialog" aria-modal="true" aria-label="图片预览">
+        <div class="img-preview-dialog" id="imgPreviewDialog" role="dialog" aria-modal="true" aria-label="图片预览">
           <button type="button" class="img-preview-close" id="imgPreviewClose" aria-label="关闭">×</button>
+          <div class="img-preview-counter" id="imgPreviewCounter" hidden></div>
+          <button type="button" class="img-preview-nav img-preview-prev" id="imgPreviewPrev" aria-label="上一张图片" hidden>‹</button>
+          <button type="button" class="img-preview-nav img-preview-next" id="imgPreviewNext" aria-label="下一张图片" hidden>›</button>
           <img class="img-preview-img" id="imgPreviewImg" alt="preview" />
           <div class="img-preview-cap" id="imgPreviewCap"></div>
+          <div class="img-preview-strip" id="imgPreviewStrip" aria-label="本消息图片缩略图" hidden></div>
         </div>
       `;
       document.body.appendChild(mask);
@@ -2214,29 +2347,60 @@
       });
       const closeBtn = document.getElementById("imgPreviewClose");
       if (closeBtn) closeBtn.addEventListener("click", closeImagePreview);
+      const prevBtn = document.getElementById("imgPreviewPrev");
+      if (prevBtn) prevBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        switchImagePreview(-1);
+      });
+      const nextBtn = document.getElementById("imgPreviewNext");
+      if (nextBtn) nextBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        switchImagePreview(1);
+      });
       document.addEventListener("keydown", (e) => {
-        if (e.key === "Escape") closeImagePreview();
+        if (!isImagePreviewOpen()) return;
+        if (e.key === "Escape") {
+          closeImagePreview();
+          return;
+        }
+        if (e.key === "ArrowLeft") {
+          e.preventDefault();
+          switchImagePreview(-1);
+          return;
+        }
+        if (e.key === "ArrowRight") {
+          e.preventDefault();
+          switchImagePreview(1);
+        }
       });
     }
 
-    function openImagePreview(src, caption = "") {
+    function openImagePreview(src, caption = "", galleryItems = null, activeIndex = 0) {
       const url = String(src || "").trim();
       if (!url) return;
       ensureImagePreview();
       const mask = document.getElementById("imgPreviewMask");
-      const img = document.getElementById("imgPreviewImg");
-      const cap = document.getElementById("imgPreviewCap");
-      if (!mask || !img || !cap) return;
-      img.src = url;
-      cap.textContent = String(caption || "");
+      if (!mask) return;
+      IMAGE_PREVIEW_STATE = normalizeImagePreviewGallery(url, caption, galleryItems, activeIndex);
       mask.classList.add("show");
+      setImagePreviewIndex(IMAGE_PREVIEW_STATE.index);
     }
 
     function closeImagePreview() {
       const mask = document.getElementById("imgPreviewMask");
       const img = document.getElementById("imgPreviewImg");
+      const strip = document.getElementById("imgPreviewStrip");
+      const counter = document.getElementById("imgPreviewCounter");
+      const dialog = document.getElementById("imgPreviewDialog");
       if (mask) mask.classList.remove("show");
       if (img) img.src = "";
+      if (strip) {
+        strip.textContent = "";
+        strip.hidden = true;
+      }
+      if (counter) counter.hidden = true;
+      if (dialog) dialog.classList.remove("has-gallery");
+      IMAGE_PREVIEW_STATE = { items: [], index: 0 };
     }
 
     window.addEventListener("focus", triggerConversationRefreshOnResume);
@@ -2246,62 +2410,10 @@
     window.addEventListener("pageshow", triggerConversationRefreshOnResume);
   
 
-    // Ambient blobs (low-energy). No-op when user prefers reduced motion.
+    // Ambient blobs are intentionally static; positions are defined in CSS.
     (function () {
-      const reduceMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-      if (reduceMotion) return;
-
-      class Blob {
-        constructor(el, index) {
-          this.el = el;
-          const w = window.innerWidth;
-          const h = window.innerHeight;
-          this.x = (index % 3) * (w / 3) - (w * 0.15);
-          this.y = (Math.floor(index / 3) % 3) * (h / 3) - (h * 0.15);
-          this.vx = (Math.random() - 0.5) * 0.08;
-          this.vy = (Math.random() - 0.5) * 0.08;
-          this.z = 0.9 + Math.random() * 0.2;
-          this.vz = (Math.random() - 0.5) * 0.0005;
-          this.bounds = () => {
-            const ww = window.innerWidth;
-            const hh = window.innerHeight;
-            return { minX: -ww * 0.3, maxX: ww * 1.0, minY: -hh * 0.3, maxY: hh * 1.0 };
-          };
-        }
-        update() {
-          this.x += this.vx; this.y += this.vy; this.z += this.vz;
-          const b = this.bounds();
-          if (this.x < b.minX || this.x > b.maxX) this.vx *= -1;
-          if (this.y < b.minY || this.y > b.maxY) this.vy *= -1;
-          if (this.z < 0.8) this.vz += 0.001;
-          if (this.z > 1.2) this.vz -= 0.001;
-          this.render();
-        }
-        render() {
-          let blur = 0;
-          let opacity = 0.8;
-          if (this.z > 1.1) {
-            const t = (this.z - 1.1) / 0.1;
-            blur = Math.max(0, 5 * (1 - t));
-            opacity = 0.9 + t * 0.1;
-          } else {
-            const t = (1.1 - this.z) / 0.3;
-            blur = 5 + t * 15;
-            opacity = 0.9 - t * 0.3;
-          }
-          blur = Math.min(20, Math.max(0, blur));
-          opacity = Math.min(1, Math.max(0.4, opacity));
-          this.el.style.transform = `translate3d(${this.x}px, ${this.y}px, 0) scale(1)`;
-          this.el.style.filter = `blur(${blur}px)`;
-          this.el.style.opacity = String(opacity);
-        }
-      }
-
-      const blobs = Array.from(document.querySelectorAll(".blob")).map((el, i) => new Blob(el, i));
-      function animate() {
-        blobs.forEach((b) => b.update());
-        requestAnimationFrame(animate);
-      }
-      animate();
+      document.querySelectorAll(".blob").forEach((el) => {
+        el.style.animation = "none";
+      });
     })();
   

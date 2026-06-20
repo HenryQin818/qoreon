@@ -8,6 +8,13 @@
       requestRequirement: "",
       requestResult: null,
       confirmOpen: false,
+      agentsMdOpen: false,
+      agentsMdLoading: false,
+      agentsMdSaving: false,
+      agentsMdProjectId: "",
+      agentsMdChannelName: "",
+      agentsMdChannelDesc: "",
+      agentsMdPath: "",
       deleteOpen: false,
       deleteSubmitting: false,
       deleteProjectId: "",
@@ -122,13 +129,18 @@
         "aria-label": "通道操作",
       });
       menu.appendChild(buildChannelManageMenuItem(
+        "编辑 AGENTS.md",
+        "配置这个通道的长期协作规则",
+        () => openChannelAgentsMdModal(projectId, channelName),
+      ));
+      menu.appendChild(buildChannelManageMenuItem(
         "找 Agent 编辑",
         "把通道说明与边界整理成正式派发消息",
         () => openChannelEditAgentModal(projectId, channelName),
       ));
       menu.appendChild(buildChannelManageMenuItem(
         "删除通道",
-        "删除通道目录与配套文件夹，保留运行历史记录",
+        "删除通道目录与配套文件夹，保留 运行历史记录 历史",
         () => openChannelDeleteModal(projectId, channelName),
         true,
       ));
@@ -156,6 +168,314 @@
       channelManageSetVisible("channelEditAgentResult", false);
       const body = document.getElementById("channelEditAgentResultBody");
       if (body) body.innerHTML = "";
+    }
+
+    function channelAgentsMdSetBusy(kind, busy) {
+      if (kind === "load") CHANNEL_MANAGE_UI.agentsMdLoading = !!busy;
+      if (kind === "save") CHANNEL_MANAGE_UI.agentsMdSaving = !!busy;
+      const saveBtn = document.getElementById("channelAgentsMdSaveBtn");
+      const cancelBtn = document.getElementById("channelAgentsMdCancelBtn");
+      const applyBtn = document.getElementById("channelAgentsMdApplyTemplateBtn");
+      const textarea = document.getElementById("channelAgentsMdContent");
+      const disabled = !!(CHANNEL_MANAGE_UI.agentsMdLoading || CHANNEL_MANAGE_UI.agentsMdSaving);
+      if (saveBtn) {
+        saveBtn.disabled = disabled;
+        saveBtn.textContent = CHANNEL_MANAGE_UI.agentsMdSaving ? "保存中..." : "保存 AGENTS.md";
+      }
+      if (cancelBtn) cancelBtn.disabled = !!CHANNEL_MANAGE_UI.agentsMdSaving;
+      if (applyBtn) applyBtn.disabled = disabled;
+      if (textarea) textarea.disabled = disabled;
+    }
+
+    function channelAgentsMdTemplate(role) {
+      if (typeof renderChannelAgentsMdTemplate === "function") {
+        return renderChannelAgentsMdTemplate(
+          role,
+          CHANNEL_MANAGE_UI.agentsMdChannelName,
+          CHANNEL_MANAGE_UI.agentsMdChannelDesc
+        );
+      }
+      return [
+        "# AGENTS.md - " + (CHANNEL_MANAGE_UI.agentsMdChannelName || "当前通道"),
+        "",
+        "## 通道定位",
+        "",
+        "- 通道名称：" + (CHANNEL_MANAGE_UI.agentsMdChannelName || "当前通道"),
+        "- 通道说明：" + (CHANNEL_MANAGE_UI.agentsMdChannelDesc || "请补充通道职责和边界。"),
+        "- 标准角色：" + String(role || "general"),
+        "",
+        "## 协作快速上手",
+        "",
+        "1. 先读规则：进入通道目录后先阅读本文件，再结合当前任务文件、用户消息和项目契约行动。",
+        "2. 任务规则：任务以 `任务/` 目录和文件名状态为准，执行前确认责任位、阶段门禁和验收口径。",
+        "3. 消息规则：跨通道协作使用正式消息入口，完成、阻塞或失败都要回执给来源方。",
+        "4. 证据规则：送达证据只认 `announce_run_id + target_session_id一致 + visible_in_channel_chat=true`。",
+        "5. 生效规则：已写入不等于已生效；旧会话不会自动刷新 AGENTS.md，只影响后续进入该通道目录的 Agent。",
+        "6. Skills 入口：skill 是触发入口和执行口径，不等于自动授权。",
+        "",
+        "## 协作与消息",
+        "",
+        "- 最短入口：`python3 -m task_dashboard.message_cli send|receipt --wait-verify --json`。",
+        "- 常用模式：`dialog_now`、`task_with_receipt`、`notify_only`。",
+        "- `--wait-verify` 只代表送达证据，不代表业务完成；送达不等于业务完成。",
+        "",
+        "## 安全边界",
+        "",
+        "- 本文件只保存长期规则，不写 token、PID、端口、run_id 或临时授权。",
+        "- 不通过本文件授予服务启动、重启、注册、发布、service monitor 写入、会话创建或真实初始化消息权限。",
+        "",
+      ].join("\n");
+    }
+
+    function applyChannelAgentsMdTemplate() {
+      const roleEl = document.getElementById("channelAgentsMdRole");
+      const textarea = document.getElementById("channelAgentsMdContent");
+      if (!textarea) return;
+      textarea.value = channelAgentsMdTemplate(roleEl ? roleEl.value : "general");
+      channelManageSetError("channelAgentsMdErr", "");
+    }
+
+    function channelAgentsMdStaticFiles(payload) {
+      if (typeof normalizeStaticInstructionFilesPayload === "function") {
+        return normalizeStaticInstructionFilesPayload(payload);
+      }
+      const src = (payload && typeof payload === "object") ? payload : {};
+      if (src.static_instruction_files && typeof src.static_instruction_files === "object") {
+        return src.static_instruction_files;
+      }
+      if (src.staticInstructionFiles && typeof src.staticInstructionFiles === "object") {
+        return src.staticInstructionFiles;
+      }
+      return null;
+    }
+
+    function channelAgentsMdSyncResultText(payload) {
+      const files = channelAgentsMdStaticFiles(payload);
+      if (!files) return "AGENTS.md 已保存；服务端尚未返回 CLI 镜像同步结果，不能判定已同步。";
+      const mirrors = Array.isArray(files.mirrors) ? files.mirrors : [];
+      if (!mirrors.length) return "AGENTS.md 已保存；当前通道暂无受管 CLI 镜像。";
+      const parts = mirrors.map((mirror) => {
+        const cli = typeof normalizeCliTypeLabel === "function"
+          ? normalizeCliTypeLabel(mirror.cliType || mirror.cli_type)
+          : String(mirror.cliType || mirror.cli_type || "CLI").toUpperCase();
+        const name = typeof staticInstructionFileName === "function"
+          ? staticInstructionFileName(mirror, "")
+          : String(mirror.fileName || mirror.file_name || "").trim();
+        const status = typeof staticInstructionStatusText === "function"
+          ? staticInstructionStatusText(staticInstructionSyncStatus(mirror))
+          : String(mirror.syncStatus || mirror.sync_status || "等待服务端同步状态");
+        return cli + (name ? (" " + name) : "") + " " + status;
+      });
+      return "AGENTS.md 已保存；" + parts.join("；") + "。";
+    }
+
+    function renderChannelAgentsMdStaticInstructionFiles(payload, options = {}) {
+      const body = document.getElementById("channelAgentsMdStaticFilesBody");
+      const repairBtn = document.getElementById("channelAgentsMdRepairBtn");
+      if (!body) return;
+      body.innerHTML = "";
+      const files = channelAgentsMdStaticFiles(payload);
+      let hasRepairable = false;
+      const appendRow = (title, sub, status, tone = "muted") => {
+        const row = el("div", { class: "channel-static-instruction-row" });
+        const main = el("div");
+        main.appendChild(el("div", { class: "channel-static-instruction-title", text: title }));
+        main.appendChild(el("div", { class: "channel-static-instruction-sub", text: sub }));
+        row.appendChild(main);
+        row.appendChild(el("span", {
+          class: "channel-static-instruction-status " + tone,
+          text: status,
+        }));
+        body.appendChild(row);
+      };
+
+      appendRow(
+        "规则真源：AGENTS.md",
+        "用户只编辑 AGENTS.md；平台不会把 CODEBUDDY.md 反向写回为第二真源。",
+        "唯一真源",
+        "good",
+      );
+
+      if (!files) {
+        appendRow(
+          "CodeBuddy：CODEBUDDY.md",
+          "等待服务端返回 static_instruction_files；当前前端不会误报已同步。",
+          "等待服务端同步状态",
+          "muted",
+        );
+      } else {
+        const mirrors = Array.isArray(files.mirrors) ? files.mirrors : [];
+        if (!mirrors.length) {
+          appendRow(
+            "CLI 镜像：暂无",
+            "当前通道未启用受管 CLI 镜像；Codex 继续只读取 AGENTS.md。",
+            "无需镜像",
+            "muted",
+          );
+        }
+        mirrors.forEach((mirror) => {
+          const cliType = String((mirror && (mirror.cliType || mirror.cli_type)) || "").trim();
+          const cliLabel = typeof normalizeCliTypeLabel === "function" ? normalizeCliTypeLabel(cliType) : (cliType || "CLI");
+          const fileName = typeof staticInstructionFileName === "function"
+            ? staticInstructionFileName(mirror, "CLI 镜像")
+            : String((mirror && (mirror.fileName || mirror.file_name)) || "CLI 镜像");
+          const statusRaw = typeof staticInstructionSyncStatus === "function"
+            ? staticInstructionSyncStatus(mirror)
+            : String((mirror && (mirror.syncStatus || mirror.sync_status || mirror.status)) || "").toLowerCase();
+          const statusText = typeof staticInstructionStatusText === "function"
+            ? staticInstructionStatusText(statusRaw)
+            : (statusRaw || "等待服务端同步状态");
+          const tone = typeof staticInstructionStatusTone === "function" ? staticInstructionStatusTone(statusRaw) : "muted";
+          const managed = !!(mirror && (mirror.managed === true || mirror.isManaged === true));
+          const issues = Array.isArray(mirror && mirror.blockingIssues) ? mirror.blockingIssues : [];
+          const issueText = issues.length ? (" 阻塞：" + issues.join("；")) : "";
+          const sub = managed
+            ? (fileName + " 是 AGENTS.md 的受管镜像；请勿直接编辑该文件。" + issueText)
+            : (fileName + " 当前不是受管镜像；若存在冲突，前端不会显示为已同步，也不会静默覆盖。" + issueText);
+          if (["missing", "stale", "conflict", "blocked"].includes(statusRaw)) hasRepairable = true;
+          appendRow(cliLabel + "：" + fileName, sub, statusText, tone);
+        });
+      }
+      if (repairBtn) {
+        repairBtn.hidden = !hasRepairable;
+        repairBtn.disabled = !!(options && options.repairing);
+        repairBtn.textContent = options && options.repairing ? "修复中..." : "按 AGENTS.md 修复镜像";
+      }
+    }
+
+    async function repairChannelAgentsMdStaticInstructionFiles() {
+      const repairBtn = document.getElementById("channelAgentsMdRepairBtn");
+      if (repairBtn && repairBtn.disabled) return;
+      renderChannelAgentsMdStaticInstructionFiles({ static_instruction_files: { mirrors: [{ cliType: "codebuddy", fileName: "CODEBUDDY.md", syncStatus: "stale", managed: true }] } }, { repairing: true });
+      channelManageSetError("channelAgentsMdErr", "");
+      try {
+        const r = await fetch("/api/channels/static-instruction-files/repair", {
+          method: "POST",
+          headers: authHeaders({ "Content-Type": "application/json" }),
+          body: JSON.stringify({
+            projectId: CHANNEL_MANAGE_UI.agentsMdProjectId,
+            channelName: CHANNEL_MANAGE_UI.agentsMdChannelName,
+            sourceFile: "AGENTS.md",
+            action: "repair_managed_mirrors",
+          }),
+        });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          const msg = String((j && (j.error || j.message)) || (await parseResponseDetail(r)) || "修复失败");
+          channelManageSetError("channelAgentsMdErr", msg);
+          renderChannelAgentsMdStaticInstructionFiles(j);
+          return;
+        }
+        renderChannelAgentsMdStaticInstructionFiles(j);
+        if (typeof toast === "function") {
+          toast(channelAgentsMdSyncResultText(j), { tone: "success" });
+        }
+      } catch (err) {
+        channelManageSetError("channelAgentsMdErr", String((err && err.message) || "网络或服务异常"));
+        renderChannelAgentsMdStaticInstructionFiles(null);
+      }
+    }
+
+    async function openChannelAgentsMdModal(projectId, channelName) {
+      CHANNEL_MANAGE_UI.agentsMdOpen = true;
+      CHANNEL_MANAGE_UI.agentsMdProjectId = channelManageNormalizeText(projectId);
+      CHANNEL_MANAGE_UI.agentsMdChannelName = channelManageNormalizeText(channelName);
+      CHANNEL_MANAGE_UI.agentsMdChannelDesc = channelManageCurrentDesc(projectId, channelName);
+      CHANNEL_MANAGE_UI.agentsMdPath = "";
+      closeChannelManageMenus();
+      channelManageSetError("channelAgentsMdErr", "");
+      const mask = document.getElementById("channelAgentsMdMask");
+      const sub = document.getElementById("channelAgentsMdSub");
+      const nameEl = document.getElementById("channelAgentsMdName");
+      const pathEl = document.getElementById("channelAgentsMdPath");
+      const textarea = document.getElementById("channelAgentsMdContent");
+      if (mask) mask.classList.add("show");
+      if (sub) sub.textContent = CHANNEL_MANAGE_UI.agentsMdChannelName || "-";
+      if (nameEl) nameEl.textContent = CHANNEL_MANAGE_UI.agentsMdChannelName || "-";
+      if (pathEl) pathEl.textContent = "读取中...";
+      if (textarea) textarea.value = "";
+      renderChannelAgentsMdStaticInstructionFiles(null);
+      channelAgentsMdSetBusy("load", true);
+      try {
+        const params = new URLSearchParams();
+        params.set("projectId", CHANNEL_MANAGE_UI.agentsMdProjectId);
+        params.set("channelName", CHANNEL_MANAGE_UI.agentsMdChannelName);
+        params.set("channelDesc", CHANNEL_MANAGE_UI.agentsMdChannelDesc);
+        params.set("role", "general");
+        const r = await fetch("/api/channels/agents-md?" + params.toString(), {
+          headers: authHeaders({ Accept: "application/json" }),
+          cache: "no-store",
+        });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          const msg = String((j && (j.error || j.message)) || (await parseResponseDetail(r)) || "读取失败");
+          channelManageSetError("channelAgentsMdErr", msg);
+          if (textarea) textarea.value = channelAgentsMdTemplate("general");
+          return;
+        }
+        CHANNEL_MANAGE_UI.agentsMdPath = channelManageNormalizeText(j && j.agentsMdPath);
+        if (pathEl) pathEl.textContent = CHANNEL_MANAGE_UI.agentsMdPath || "-";
+        if (textarea) {
+          const source = String((j && j.source) || "").trim();
+          const role = String((j && j.role) || "general").trim() || "general";
+          textarea.value = source === "template" ? channelAgentsMdTemplate(role) : String((j && j.content) || "");
+        }
+        renderChannelAgentsMdStaticInstructionFiles(j);
+      } catch (err) {
+        channelManageSetError("channelAgentsMdErr", String((err && err.message) || "网络或服务异常"));
+        if (textarea) textarea.value = channelAgentsMdTemplate("general");
+        renderChannelAgentsMdStaticInstructionFiles(null);
+      } finally {
+        channelAgentsMdSetBusy("load", false);
+      }
+    }
+
+    function closeChannelAgentsMdModal(force = false) {
+      if (CHANNEL_MANAGE_UI.agentsMdSaving && !force) return;
+      CHANNEL_MANAGE_UI.agentsMdOpen = false;
+      channelManageSetError("channelAgentsMdErr", "");
+      const mask = document.getElementById("channelAgentsMdMask");
+      if (mask) mask.classList.remove("show");
+    }
+
+    async function saveChannelAgentsMd() {
+      if (CHANNEL_MANAGE_UI.agentsMdSaving) return;
+      const textarea = document.getElementById("channelAgentsMdContent");
+      const content = String((textarea && textarea.value) || "");
+      if (!content.trim()) {
+        channelManageSetError("channelAgentsMdErr", "AGENTS.md 内容不能为空");
+        return;
+      }
+      channelManageSetError("channelAgentsMdErr", "");
+      channelAgentsMdSetBusy("save", true);
+      try {
+        const r = await fetch("/api/channels/agents-md", {
+          method: "POST",
+          headers: authHeaders({ "Content-Type": "application/json" }),
+          body: JSON.stringify({
+            projectId: CHANNEL_MANAGE_UI.agentsMdProjectId,
+            channelName: CHANNEL_MANAGE_UI.agentsMdChannelName,
+            content,
+          }),
+        });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          const msg = String((j && (j.error || j.message)) || (await parseResponseDetail(r)) || "保存失败");
+          channelManageSetError("channelAgentsMdErr", msg);
+          return;
+        }
+        CHANNEL_MANAGE_UI.agentsMdPath = channelManageNormalizeText(j && j.agentsMdPath);
+        const pathEl = document.getElementById("channelAgentsMdPath");
+        if (pathEl) pathEl.textContent = CHANNEL_MANAGE_UI.agentsMdPath || "-";
+        renderChannelAgentsMdStaticInstructionFiles(j);
+        if (typeof toast === "function") {
+          toast(channelAgentsMdSyncResultText(j), { tone: "success" });
+        }
+      } catch (err) {
+        channelManageSetError("channelAgentsMdErr", String((err && err.message) || "网络或服务异常"));
+      } finally {
+        channelAgentsMdSetBusy("save", false);
+      }
     }
 
     function channelManageRenderRequestResult(data, extra = {}) {
@@ -683,12 +1003,16 @@
 
       const requestMask = document.getElementById("channelEditAgentMask");
       const confirmMask = document.getElementById("channelEditAgentConfirmMask");
+      const agentsMdMask = document.getElementById("channelAgentsMdMask");
       const deleteMask = document.getElementById("channelDeleteMask");
       if (requestMask) requestMask.addEventListener("click", (e) => {
         if (e.target === requestMask) closeChannelEditAgentModal();
       });
       if (confirmMask) confirmMask.addEventListener("click", (e) => {
         if (e.target === confirmMask) closeChannelEditAgentConfirmModal();
+      });
+      if (agentsMdMask) agentsMdMask.addEventListener("click", (e) => {
+        if (e.target === agentsMdMask) closeChannelAgentsMdModal();
       });
       if (deleteMask) deleteMask.addEventListener("click", (e) => {
         if (e.target === deleteMask) closeChannelDeleteModal();
@@ -713,6 +1037,26 @@
       if (confirmSubmit) confirmSubmit.addEventListener("click", (e) => {
         e.preventDefault();
         submitChannelEditAgentRequest();
+      });
+      const agentsMdCancel = document.getElementById("channelAgentsMdCancelBtn");
+      if (agentsMdCancel) agentsMdCancel.addEventListener("click", (e) => {
+        e.preventDefault();
+        closeChannelAgentsMdModal();
+      });
+      const agentsMdSave = document.getElementById("channelAgentsMdSaveBtn");
+      if (agentsMdSave) agentsMdSave.addEventListener("click", (e) => {
+        e.preventDefault();
+        saveChannelAgentsMd();
+      });
+      const agentsMdApply = document.getElementById("channelAgentsMdApplyTemplateBtn");
+      if (agentsMdApply) agentsMdApply.addEventListener("click", (e) => {
+        e.preventDefault();
+        applyChannelAgentsMdTemplate();
+      });
+      const agentsMdRepair = document.getElementById("channelAgentsMdRepairBtn");
+      if (agentsMdRepair) agentsMdRepair.addEventListener("click", (e) => {
+        e.preventDefault();
+        repairChannelAgentsMdStaticInstructionFiles();
       });
       const deleteCancel = document.getElementById("channelDeleteCancelBtn");
       if (deleteCancel) deleteCancel.addEventListener("click", (e) => {

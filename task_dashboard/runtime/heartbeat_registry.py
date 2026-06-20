@@ -47,13 +47,17 @@ from task_dashboard.runtime.channel_admin import (
     resolve_task_root_path as runtime_resolve_task_root_path,
 )
 from task_dashboard.runtime.agent_display_name import attach_agent_display_fields
+from task_dashboard.runtime.provider_failure import classify_run_failure as runtime_classify_run_failure
 from task_dashboard.runtime.run_state_semantics import (
     build_session_semantics,
     classify_media_run_monitoring,
     classify_run_semantics,
 )
+from task_dashboard.runtime.run_detail_fields import safe_terminal_visible_text
 from task_dashboard.runtime.session_display_state import (
+    build_communication_status_summary as _session_display_build_communication_status_summary,
     build_latest_run_summary as _session_display_build_latest_run_summary,
+    build_runtime_state_explainers as _session_display_build_runtime_state_explainers,
     build_session_display_fields as _session_display_build_fields,
 )
 from task_dashboard.utils import safe_read_text
@@ -1318,14 +1322,16 @@ def _latest_process_row_preview(process_rows: Any, max_len: int = 300) -> str:
 
 def _build_session_summary_from_meta(meta: dict[str, Any]) -> dict[str, Any]:
     process_rows = meta.get("processRows") or meta.get("process_rows") or []
+    cli_type = str(meta.get("cliType") or "codex").strip() or "codex"
     ai_preview = str(
         meta.get("generated_media_summary") or meta.get("lastPreview") or meta.get("partialPreview") or ""
     ).strip()
+    ai_preview = safe_terminal_visible_text(ai_preview, cli_type=cli_type)
     if not ai_preview:
         ai_preview = _latest_process_row_preview(process_rows, 300)
     user_preview = str(meta.get("messagePreview") or "").strip()
     status = str(meta.get("status") or "").strip().lower()
-    return {
+    summary = {
         "latest_run_id": str(meta.get("id") or "").strip(),
         "latest_status": status,
         "updated_at": str(
@@ -1337,6 +1343,7 @@ def _build_session_summary_from_meta(meta: dict[str, Any]) -> dict[str, Any]:
             or ""
         ).strip(),
         "latest_ai_msg": ai_preview,
+        "latest_cli_type": cli_type,
         "latest_user_msg": user_preview,
         "last_preview": ai_preview or user_preview,
         "last_speaker": "assistant" if ai_preview else ("user" if user_preview else "assistant"),
@@ -1345,6 +1352,73 @@ def _build_session_summary_from_meta(meta: dict[str, Any]) -> dict[str, Any]:
         "last_sender_source": str(meta.get("sender_source") or ("manual" if user_preview and not ai_preview else "")).strip(),
         "last_error": str(meta.get("error") or "").strip() if status == "error" else "",
     }
+    run_semantics = classify_run_semantics(meta)
+    error_class = str(run_semantics.get("error_class") or "").strip().lower()
+    if error_class:
+        summary["error_class"] = error_class
+    failure_fields = runtime_classify_run_failure(meta)
+    if failure_fields:
+        summary["failure_class"] = str(failure_fields.get("failure_class") or "").strip().lower()
+        provider_error = failure_fields.get("provider_error")
+        if isinstance(provider_error, dict) and provider_error:
+            summary["provider_error"] = {
+                "kind": str(provider_error.get("kind") or "").strip(),
+                "retryable": bool(provider_error.get("retryable")),
+                "matched_patterns": list(provider_error.get("matched_patterns") or []),
+            }
+        side_effect_risk = str(failure_fields.get("side_effect_risk") or "").strip().lower()
+        if side_effect_risk:
+            summary["side_effect_risk"] = side_effect_risk
+        side_effect_evidence = failure_fields.get("side_effect_evidence")
+        if isinstance(side_effect_evidence, list) and side_effect_evidence:
+            summary["side_effect_evidence"] = list(side_effect_evidence)
+        recovery_mode = str(failure_fields.get("recovery_mode") or "").strip().lower()
+        if recovery_mode:
+            summary["recovery_mode"] = recovery_mode
+        if "recovery_required" in failure_fields:
+            summary["recovery_required"] = bool(failure_fields.get("recovery_required"))
+        if "auto_retry_eligible" in failure_fields:
+            summary["auto_retry_eligible"] = bool(failure_fields.get("auto_retry_eligible"))
+        if "retry_exhausted" in failure_fields:
+            summary["retry_exhausted"] = bool(failure_fields.get("retry_exhausted"))
+        retry_eligibility_reason = str(failure_fields.get("retry_eligibility_reason") or "").strip()
+        if retry_eligibility_reason:
+            summary["retry_eligibility_reason"] = retry_eligibility_reason
+    for key in (
+        "communication_view",
+        "receipt_summary",
+        "receipt_rollup",
+        "receipt_items",
+        "receipt_pending_actions",
+        "source_ref",
+        "target_ref",
+        "callback_to",
+    ):
+        value = meta.get(key)
+        if isinstance(value, (dict, list)) and value:
+            summary[key] = value
+    for key in (
+        "interaction_mode",
+        "interactionMode",
+        "message_kind",
+        "messageKind",
+        "sender_type",
+        "senderType",
+        "trigger_type",
+        "triggerType",
+        "source_run_id",
+        "sourceRunId",
+        "visible_in_channel_chat",
+        "visibleInChannelChat",
+        "receipt_required",
+        "receiptRequired",
+        "retry_exhausted",
+        "retryExhausted",
+        "providerRetryExhausted",
+    ):
+        if key in meta:
+            summary[key] = meta.get(key)
+    return summary
 
 
 def _run_status_display_state(status: Any) -> str:
@@ -1525,14 +1599,18 @@ def _load_archived_session_summary(store: "RunStore", project_id: str, session_i
 
     summary: dict[str, Any] = {}
     if isinstance(best_meta, dict):
+        cli_type = str(best_meta.get("cliType") or "codex").strip() or "codex"
         ai_preview = str(best_meta.get("lastPreview") or best_meta.get("partialPreview") or "").strip()
+        ai_preview = safe_terminal_visible_text(ai_preview, cli_type=cli_type)
         user_preview = str(best_meta.get("messagePreview") or "").strip()
         if best_meta_path is not None:
             try:
                 if not ai_preview:
                     lp = best_meta_path.with_suffix('.last.txt')
                     if lp.exists():
-                        ai_preview = _safe_text(lp.read_text(encoding='utf-8', errors='replace').replace("\r\n", "\n").strip(), 300)
+                        raw_ai_preview = lp.read_text(encoding='utf-8', errors='replace')
+                        raw_ai_preview = safe_terminal_visible_text(raw_ai_preview, cli_type=cli_type)
+                        ai_preview = _safe_text(raw_ai_preview.replace("\r\n", "\n").strip(), 300)
             except Exception:
                 pass
             try:
@@ -1550,6 +1628,7 @@ def _load_archived_session_summary(store: "RunStore", project_id: str, session_i
             "last_sender_source": str(best_meta.get("sender_source") or ("manual" if user_preview and not ai_preview else "")).strip(),
             "latest_user_msg": user_preview,
             "latest_ai_msg": ai_preview,
+            "latest_cli_type": cli_type,
             "last_error": str(best_meta.get("error") or "").strip() if str(best_meta.get("status") or "").strip().lower() == "error" else "",
             "updated_at": str(best_meta.get("finishedAt") or best_meta.get("startedAt") or best_meta.get("createdAt") or "").strip(),
             "latest_status": str(best_meta.get("status") or "").strip().lower(),
@@ -1650,6 +1729,48 @@ def _session_runtime_index_cache_entry(
     return dict(index)
 
 
+def _session_runtime_index_cache_any(
+    project_id: str,
+    *,
+    now_mono: float,
+    allow_invalidated: bool = True,
+) -> dict[str, dict[str, Any]] | None:
+    pid = str(project_id or "").strip()
+    if not pid:
+        return None
+    cached = _session_runtime_index_cache().get(pid)
+    if not isinstance(cached, dict):
+        return None
+    index = cached.get("index")
+    if not isinstance(index, dict):
+        return None
+    build_started = float(cached.get("build_started_at_mono") or cached.get("checked_at_mono") or 0.0)
+    invalidated_at = float(_session_runtime_index_invalidated_at().get(pid) or 0.0)
+    if not allow_invalidated and build_started < invalidated_at:
+        return None
+    return dict(index)
+
+
+def _ensure_project_session_runtime_index_background(store: "RunStore", project_id: str) -> None:
+    pid = str(project_id or "").strip()
+    if not pid:
+        return
+    with _session_runtime_index_cache_lock():
+        current = _session_runtime_index_inflight().get(pid)
+        event = (current or {}).get("event") if isinstance(current, dict) else None
+        if isinstance(event, threading.Event) and not event.is_set():
+            return
+
+    def _worker() -> None:
+        try:
+            _build_project_session_runtime_index(store, pid)
+        except Exception:
+            return
+
+    thread = threading.Thread(target=_worker, name=f"session-runtime-index-warm-{pid}", daemon=True)
+    thread.start()
+
+
 def _build_project_session_runtime_index(store: "RunStore", project_id: str) -> dict[str, dict[str, Any]]:
     pid = str(project_id or "").strip()
     if not pid:
@@ -1739,26 +1860,10 @@ def _build_project_session_runtime_index(store: "RunStore", project_id: str) -> 
                 qreason = str(meta.get("queueReason") or "").strip().lower()
                 if qreason == "session_busy_external":
                     row["external_busy"] = True
+                    row["external_busy_reason"] = "session_busy_external"
             if ts >= float(row.get("latest_ts") or 0.0):
                 row["latest_ts"] = ts
-                row["latest_run_id"] = rid
-                row["latest_status"] = st
-                row["updated_at"] = str(meta.get("finishedAt") or meta.get("startedAt") or meta.get("createdAt") or "").strip()
-                ai_preview = str(meta.get("lastPreview") or meta.get("partialPreview") or "").strip()
-                user_preview = str(meta.get("messagePreview") or "").strip()
-                row["latest_ai_msg"] = ai_preview
-                row["latest_user_msg"] = user_preview
-                row["last_preview"] = ai_preview or user_preview
-                row["last_speaker"] = "assistant" if ai_preview else ("user" if user_preview else "assistant")
-                if user_preview and not ai_preview:
-                    row["last_sender_type"] = str(meta.get("sender_type") or "user").strip() or "user"
-                    row["last_sender_name"] = str(meta.get("sender_name") or "").strip()
-                    row["last_sender_source"] = str(meta.get("sender_source") or "manual").strip() or "manual"
-                else:
-                    row["last_sender_type"] = ""
-                    row["last_sender_name"] = ""
-                    row["last_sender_source"] = ""
-                row["last_error"] = str(meta.get("error") or "").strip() if st == "error" else ""
+                row.update(_build_session_summary_from_meta(meta))
 
         for row in idx.values():
             for key in ("running_ids", "queued_ids", "retry_waiting_ids"):
@@ -1809,9 +1914,12 @@ def _build_session_runtime_state_for_row(
     retry_ids = list(agg.get("retry_waiting_ids") or [])
     internal_state = _session_runtime_internal_state(agg)
     external_busy = bool(agg.get("external_busy"))
+    external_busy_reason = str(agg.get("external_busy_reason") or "").strip()
     probe_updated_at = ""
     if (not external_busy) and probe_external_when_idle and sid and internal_state not in {"running", "queued", "retry_waiting"}:
         external_busy, probe_updated_at = _probe_external_session_busy_cached(sid, cli_type=cli_type, store=store)
+        if external_busy and not external_busy_reason:
+            external_busy_reason = "process_probe"
 
     if internal_state in {"running", "queued", "retry_waiting"}:
         display_state = internal_state
@@ -1834,6 +1942,7 @@ def _build_session_runtime_state_for_row(
         "queued_run_id": queued_run_id,
         "queue_depth": queue_depth,
         "updated_at": updated_at,
+        "external_busy_reason": external_busy_reason if external_busy else "",
     }
 
 
@@ -1859,6 +1968,7 @@ def _build_session_latest_run_summary(summary: dict[str, Any], agg: dict[str, An
             "last_sender_source": summary.get("last_sender_source") or merged.get("last_sender_source") or "",
             "latest_user_msg": summary.get("latest_user_msg") or merged.get("latest_user_msg") or "",
             "latest_ai_msg": summary.get("latest_ai_msg") or merged.get("latest_ai_msg") or "",
+            "latest_cli_type": summary.get("latest_cli_type") or merged.get("latest_cli_type") or merged.get("cliType") or merged.get("cli_type") or "",
             "last_error": summary.get("last_error") or merged.get("last_error") or "",
             "updated_at": summary.get("updated_at") or merged.get("updated_at") or "",
             "latest_status": summary.get("latest_status") or merged.get("latest_status") or "",
@@ -1876,28 +1986,53 @@ def _attach_runtime_state_to_sessions(
     sessions: list[dict[str, Any]],
     *,
     project_id: str,
+    runtime_index_wait_for_inflight: bool = True,
+    runtime_index_allow_stale: bool = False,
+    probe_external_when_idle: bool = True,
 ) -> list[dict[str, Any]]:
     pid = str(project_id or "").strip()
     if not pid:
         return sessions
-    idx = _build_project_session_runtime_index(store, pid)
+    idx: dict[str, dict[str, Any]] | None = None
+    if runtime_index_allow_stale:
+        now_mono = time.monotonic()
+        with _session_runtime_index_cache_lock():
+            cached_index = _session_runtime_index_cache_entry(
+                pid,
+                now_mono=now_mono,
+                ttl_s=_session_runtime_index_cache_ttl_s(),
+            )
+            idx = cached_index if isinstance(cached_index, dict) else _session_runtime_index_cache_any(
+                pid,
+                now_mono=now_mono,
+                allow_invalidated=True,
+            )
+        if idx is None:
+            if runtime_index_wait_for_inflight:
+                idx = _build_project_session_runtime_index(store, pid)
+            else:
+                _ensure_project_session_runtime_index_background(store, pid)
+                return sessions
+    else:
+        idx = _build_project_session_runtime_index(store, pid)
     # Batch external-busy probe for idle sessions to avoid per-session ps scans on /api/sessions.
     probe_targets: list[tuple[str, str]] = []
-    for row in sessions:
-        if not isinstance(row, dict):
-            continue
-        sid = str(row.get("id") or "").strip()
-        if not sid:
-            continue
-        agg = idx.get(sid) if sid else {}
-        if bool((agg or {}).get("external_busy")):
-            continue
-        internal_state = _session_runtime_internal_state(agg or {})
-        if internal_state in {"running", "queued", "retry_waiting"}:
-            continue
-        cli_type = _normalize_cli_type_id(row.get("cli_type") if "cli_type" in row else row.get("cliType"))
-        probe_targets.append((sid, cli_type))
-    busy_map = _probe_external_session_busy_batch_cached(probe_targets, store=store)
+    if probe_external_when_idle:
+        for row in sessions:
+            if not isinstance(row, dict):
+                continue
+            sid = str(row.get("id") or "").strip()
+            if not sid:
+                continue
+            agg = idx.get(sid) if sid else {}
+            if bool((agg or {}).get("external_busy")):
+                continue
+            internal_state = _session_runtime_internal_state(agg or {})
+            if internal_state in {"running", "queued", "retry_waiting"}:
+                continue
+            cli_type = _normalize_cli_type_id(row.get("cli_type") if "cli_type" in row else row.get("cliType"))
+            probe_targets.append((sid, cli_type))
+    busy_map = _probe_external_session_busy_batch_cached(probe_targets, store=store) if probe_targets else {}
 
     out: list[dict[str, Any]] = []
     for row in sessions:
@@ -1926,7 +2061,10 @@ def _attach_runtime_state_to_sessions(
             updated_at = str(busy_entry[1] or "").strip()
             if updated_at:
                 state["updated_at"] = updated_at
-        item["runtime_state"] = state
+            if external_busy and not str(state.get("external_busy_reason") or "").strip():
+                state["external_busy_reason"] = "process_probe"
+            elif not external_busy:
+                state["external_busy_reason"] = ""
         summary = agg if isinstance(agg, dict) else {}
         if (not str(summary.get("last_preview") or "").strip()) and sid:
             archived_summary = _load_archived_session_summary(store, pid, sid)
@@ -1934,6 +2072,8 @@ def _attach_runtime_state_to_sessions(
                 merged = dict(archived_summary)
                 merged.update({k: v for k, v in summary.items() if v not in (None, "", [], {})})
                 summary = merged
+        state.update(_session_display_build_runtime_state_explainers(summary, state))
+        item["runtime_state"] = state
         display_fields = _build_session_display_state_fields(state, summary)
         item["session_display_state"] = str(
             display_fields.get("session_display_state") or item.get("session_display_state") or "idle"
@@ -1948,6 +2088,7 @@ def _attach_runtime_state_to_sessions(
         latest_effective_run_summary = summary.get("latest_effective_run_summary")
         if isinstance(latest_effective_run_summary, dict) and latest_effective_run_summary:
             item["latest_effective_run_summary"] = dict(latest_effective_run_summary)
+        item["communication_status_summary"] = _session_display_build_communication_status_summary(summary, state)
         session_health_state = str(summary.get("session_health_state") or "healthy").strip() or "healthy"
         if str(state.get("display_state") or "").strip().lower() in {"running", "queued", "retry_waiting", "external_busy"}:
             session_health_state = "busy"
@@ -2052,12 +2193,46 @@ def _build_run_observability_fields(
         run_fields = (session_semantics.get("run_fields") or {}).get(run_id)
         if isinstance(run_fields, dict):
             run_semantics.update(run_fields)
+    failure_fields = runtime_classify_run_failure(meta)
     return {
         "display_state": display_state,
         "queue_reason": queue_reason,
         "blocked_by_run_id": blocked_by_run_id,
         "outcome_state": str(run_semantics.get("outcome_state") or "").strip(),
         "error_class": str(run_semantics.get("error_class") or "").strip(),
+        "failure_class": str(
+            run_semantics.get("failure_class")
+            or failure_fields.get("failure_class")
+            or ""
+        ).strip().lower(),
+        "provider_error": (
+            dict(run_semantics.get("provider_error") or {})
+            if isinstance(run_semantics.get("provider_error"), dict) and run_semantics.get("provider_error")
+            else (
+                {
+                    "kind": str((failure_fields.get("provider_error") or {}).get("kind") or "").strip(),
+                    "retryable": bool((failure_fields.get("provider_error") or {}).get("retryable")),
+                    "matched_patterns": list((failure_fields.get("provider_error") or {}).get("matched_patterns") or []),
+                }
+                if isinstance(failure_fields.get("provider_error"), dict) and failure_fields.get("provider_error")
+                else {}
+            )
+        ),
+        "side_effect_risk": str(
+            run_semantics.get("side_effect_risk")
+            or failure_fields.get("side_effect_risk")
+            or ""
+        ).strip().lower(),
+        "recovery_mode": str(
+            run_semantics.get("recovery_mode")
+            or failure_fields.get("recovery_mode")
+            or ""
+        ).strip().lower(),
+        "recovery_required": bool(
+            run_semantics.get("recovery_required")
+            if "recovery_required" in run_semantics
+            else failure_fields.get("recovery_required")
+        ),
         "effective_for_session_health": bool(run_semantics.get("effective_for_session_health")),
         "effective_for_session_preview": bool(run_semantics.get("effective_for_session_preview")),
         "superseded_by_run_id": str(run_semantics.get("superseded_by_run_id") or "").strip(),
@@ -2298,7 +2473,17 @@ def _run_codex_channel_bootstrap_v1(
     return 200, payload
 
 
-def _create_channel(project_id: str, channel_name: str, channel_desc: str, cli_type: str) -> dict[str, Any]:
+def _create_channel(
+    project_id: str,
+    channel_name: str,
+    channel_desc: str,
+    cli_type: str,
+    *,
+    agents_md_role: Any = "",
+    channel_type: Any = "",
+    agents_md_content: str = "",
+    create_agents_md: bool = True,
+) -> dict[str, Any]:
     result = runtime_create_channel(
         project_id=project_id,
         channel_name=channel_name,
@@ -2307,6 +2492,10 @@ def _create_channel(project_id: str, channel_name: str, channel_desc: str, cli_t
         config_path=_config_toml_path(),
         repo_root=_repo_root(),
         atomic_write_text=_atomic_write_text,
+        agents_md_role=agents_md_role,
+        channel_type=channel_type,
+        agents_md_content=agents_md_content,
+        create_agents_md=create_agents_md,
     )
     _clear_dashboard_cfg_cache()
     return result

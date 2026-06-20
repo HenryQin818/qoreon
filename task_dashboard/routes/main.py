@@ -47,13 +47,23 @@ from task_dashboard.runtime.agent_candidates import (
     list_agent_candidates_response as runtime_list_agent_candidates_response,
 )
 from task_dashboard.runtime.channel_admin import (
+    StaticInstructionFileConflict as RuntimeStaticInstructionFileConflict,
     delete_channel as runtime_delete_channel,
+    ensure_channel_static_instruction_files as runtime_ensure_channel_static_instruction_files,
     resolve_task_root_path as runtime_resolve_task_root_path,
+)
+from task_dashboard.runtime.channel_static_instruction_routes import (
+    handle_channel_agents_md_get as runtime_handle_channel_agents_md_get,
+    handle_channel_agents_md_post as runtime_handle_channel_agents_md_post,
+    handle_static_instruction_files_repair_post as runtime_handle_static_instruction_files_repair_post,
 )
 from task_dashboard.runtime_identity import build_health_runtime_identity
 from task_dashboard.runtime.project_execution_context import build_project_execution_context
 from task_dashboard.runtime.project_admin import (
     bootstrap_project_response as runtime_bootstrap_project_response,
+)
+from task_dashboard.runtime.project_onboarding_announce import (
+    send_project_onboarding_announce as runtime_send_project_onboarding_announce,
 )
 from task_dashboard.performance_diagnostics import build_runtime_perf_snapshot
 from task_dashboard.runtime.execution_profiles import (
@@ -108,6 +118,15 @@ from task_dashboard.runtime.platform_lan_access import (
     build_state as runtime_build_platform_lan_access_state,
     update_response as runtime_update_platform_lan_access_response,
 )
+from task_dashboard.runtime.runstore_health import (
+    archive_terminal_runs as runtime_archive_terminal_runs,
+)
+from task_dashboard.runstore_health import (
+    build_runstore_health_response as runstore_build_health_response,
+    create_runstore_archive_dry_run as runstore_create_archive_dry_run,
+    execute_runstore_archive_plan as runstore_execute_archive_plan,
+    list_runstore_hot_runs_response as runstore_list_hot_runs_response,
+)
 from task_dashboard.runtime.project_id_aliases import (
     canonicalize_runtime_project_id,
     rewrite_payload_project_id_fields,
@@ -120,6 +139,7 @@ from task_dashboard.runtime.task_assistant_runtime import (
     put_task_assistant_response,
     run_task_assistant_now_response,
 )
+from task_dashboard.runtime.session_task_tracking import build_session_task_tracking
 from task_dashboard.runtime.task_plan_registry import (
     activate_task_plan_response,
     upsert_task_plan_response,
@@ -202,6 +222,7 @@ class RouteContext:
     # Session/channel management helpers for POST routes
     create_cli_session: Callable[..., dict[str, Any]] = field(repr=False)
     resolve_project_workdir: Callable[[str], Path] = field(repr=False)
+    resolve_channel_workdir: Callable[[str, str], Path] = field(repr=False)
     detect_git_branch: Callable[[str], str] = field(repr=False)
     build_session_seed_prompt: Callable[..., str] = field(repr=False)
     decorate_session_display_fields: Callable[[dict[str, Any]], dict[str, Any]] = field(repr=False)
@@ -211,7 +232,7 @@ class RouteContext:
     apply_session_work_context: Callable[..., dict[str, Any]] = field(repr=False)
     load_project_execution_context: Callable[..., dict[str, Any]] = field(repr=False)
     project_channel_exists: Callable[[str, str], bool] = field(repr=False)
-    create_channel: Callable[[str, str, str, str], dict[str, Any]] = field(repr=False)
+    create_channel: Callable[..., dict[str, Any]] = field(repr=False)
     run_codex_channel_bootstrap: Callable[..., tuple[int, dict[str, Any]]] = field(repr=False)
     infer_project_id_for_session: Callable[[Any, str], str] = field(repr=False)
     resolve_primary_target_by_channel: Callable[[str, str], Optional[dict[str, Any]]] = field(repr=False)
@@ -499,30 +520,25 @@ class RouteDispatcher:
         if not isinstance(rows, list) or not rows:
             return payload
         runtime_base_dir = self._task_runtime_base_dir()
-        next_rows: list[dict[str, Any]] = []
-        state_cache: dict[str, dict[str, Any]] = {}
+        state_items_by_project: dict[str, dict[str, Any]] = {}
 
-        def _configured_task_id_for_session(project_id: str, session_id: str) -> str:
+        def _task_assistant_items_for_project(project_id: str) -> dict[str, Any]:
             pid = str(project_id or "").strip()
-            sid = str(session_id or "").strip()
-            if not pid or not sid:
-                return ""
-            if pid not in state_cache:
+            if not pid:
+                return {}
+            if pid not in state_items_by_project:
                 try:
-                    state_cache[pid] = load_task_assistant_state(runtime_base_dir=runtime_base_dir, project_id=pid)
+                    state = load_task_assistant_state(runtime_base_dir=runtime_base_dir, project_id=pid)
+                    items = state.get("items") if isinstance(state.get("items"), dict) else {}
+                    state_items_by_project[pid] = dict(items)
                 except Exception:
-                    state_cache[pid] = {}
-            items = (state_cache.get(pid) or {}).get("items")
-            if not isinstance(items, dict):
-                return ""
-            for key, value in items.items():
-                item = value if isinstance(value, dict) else {}
-                if str(item.get("target_session_id") or "").strip() == sid:
-                    return str(item.get("task_id") or key or "").strip()
-            return ""
+                    state_items_by_project[pid] = {}
+            return state_items_by_project[pid]
 
+        next_rows: list[dict[str, Any]] = []
         for raw in rows:
             row = dict(raw) if isinstance(raw, dict) else {}
+            session_id = str(row.get("id") or row.get("sessionId") or row.get("session_id") or "").strip()
             project_id = canonicalize_runtime_project_id(
                 str(
                     row.get("project_id")
@@ -534,12 +550,28 @@ class RouteDispatcher:
                 ).strip()
             )
             tracking = row.get("task_tracking") if isinstance(row.get("task_tracking"), dict) else None
+            if tracking is None:
+                configured_for_session = any(
+                    isinstance(item, dict)
+                    and str(item.get("target_session_id") or item.get("targetSessionId") or "").strip() == session_id
+                    for item in _task_assistant_items_for_project(project_id).values()
+                )
+                if session_id and project_id and configured_for_session:
+                    try:
+                        tracking = build_session_task_tracking(
+                            session=row,
+                            store=self.ctx.store,
+                            project_id=project_id,
+                            session_id=session_id,
+                            runtime_state=row.get("runtime_state") if isinstance(row.get("runtime_state"), dict) else {},
+                        )
+                    except Exception:
+                        tracking = None
             current_task_ref = (tracking.get("current_task_ref") or {}) if isinstance(tracking, dict) else {}
             if not isinstance(current_task_ref, dict):
-                current_task_ref = {}
+                next_rows.append(row)
+                continue
             task_id = str(current_task_ref.get("task_id") or "").strip()
-            if not task_id:
-                task_id = _configured_task_id_for_session(project_id, str(row.get("id") or row.get("session_id") or row.get("sessionId") or ""))
             if not task_id:
                 next_rows.append(row)
                 continue
@@ -555,7 +587,6 @@ class RouteDispatcher:
             )
             next_tracking = dict(tracking or {})
             next_current = dict(current_task_ref)
-            next_current.setdefault("task_id", task_id)
             next_current["task_assistant"] = summary
             next_tracking["current_task_ref"] = next_current
             row["task_tracking"] = next_tracking
@@ -615,12 +646,24 @@ class RouteDispatcher:
             self._handle_runtime_perf_snapshot_get(handler)
             return True
 
+        if path in {"/api/runstore/health", "/api/runtime/runstore/health"}:
+            self._handle_runstore_health_get(handler, qs)
+            return True
+
+        if path in {"/api/runstore/hot-runs", "/api/runtime/runstore/hot"}:
+            self._handle_runstore_hot_get(handler, qs)
+            return True
+
         if path == "/api/conversation-memos":
             self._handle_conversation_memos_get(handler, qs)
             return True
 
         if path == "/api/channel-sessions":
             self._handle_channel_sessions_get(handler, u.query or "")
+            return True
+
+        if path == "/api/channels/agents-md":
+            runtime_handle_channel_agents_md_get(handler, self.ctx, qs)
             return True
 
         if path == "/api/agent-candidates":
@@ -729,6 +772,18 @@ class RouteDispatcher:
             self._handle_platform_lan_access_post(handler)
             return True
 
+        if path == "/api/runstore/archive/dry-run":
+            self._handle_runstore_archive_dry_run_post(handler)
+            return True
+
+        if path == "/api/runstore/archive/execute":
+            self._handle_runstore_archive_execute_post(handler)
+            return True
+
+        if path == "/api/runtime/runstore/archive-terminal":
+            self._handle_runstore_archive_terminal_post(handler)
+            return True
+
         if path == "/api/tasks/status":
             self._handle_task_status_post(handler)
             return True
@@ -787,6 +842,14 @@ class RouteDispatcher:
 
         if path == "/api/channels/request-edit":
             self._handle_channel_request_edit_post(handler)
+            return True
+
+        if path == "/api/channels/agents-md":
+            runtime_handle_channel_agents_md_post(handler, self.ctx)
+            return True
+
+        if path == "/api/channels/static-instruction-files/repair":
+            runtime_handle_static_instruction_files_repair_post(handler, self.ctx)
             return True
 
         if path == "/api/channels/delete":
@@ -987,6 +1050,131 @@ class RouteDispatcher:
             updated_by="api:/api/runtime/lan-access",
         )
         self.ctx.json_response(handler, code, payload)
+
+    def _runstore_protected_run_ids(self) -> set[str]:
+        protected: set[str] = set()
+        scheduler = self.ctx.scheduler
+        if scheduler is not None:
+            fn = getattr(scheduler, "protected_run_ids", None)
+            if callable(fn):
+                try:
+                    protected.update(str(item or "").strip() for item in fn())
+                except Exception:
+                    pass
+        registry = self.ctx.run_process_registry
+        fn = getattr(registry, "tracked_run_ids", None)
+        if callable(fn):
+            try:
+                protected.update(str(item or "").strip() for item in fn())
+            except Exception:
+                pass
+        return {item for item in protected if item}
+
+    def _handle_runstore_health_get(
+        self,
+        handler: "BaseHTTPRequestHandler",
+        qs: dict[str, list[str]],
+    ) -> None:
+        project_id = self._qs_first(qs, ("projectId", "project_id"), max_len=120).strip()
+        code, payload = runstore_build_health_response(
+            self.ctx.store,
+            project_id=project_id,
+            protected_run_ids=self._runstore_protected_run_ids(),
+        )
+        self.ctx.json_response(handler, code, payload)
+
+    def _handle_runstore_hot_get(
+        self,
+        handler: "BaseHTTPRequestHandler",
+        qs: dict[str, list[str]],
+    ) -> None:
+        code, payload = runstore_list_hot_runs_response(
+            self.ctx.store,
+            query=qs,
+            protected_run_ids=self._runstore_protected_run_ids(),
+        )
+        self.ctx.json_response(handler, code, payload)
+
+    def _handle_runstore_archive_dry_run_post(self, handler: "BaseHTTPRequestHandler") -> None:
+        if not self.ctx.require_token():
+            return
+        try:
+            body = self.ctx.read_body_json(handler, max_bytes=20_000)
+        except Exception as exc:
+            self.ctx.json_response(handler, 400, {"ok": False, "error": "bad_json", "message": str(exc)})
+            return
+        code, payload = runstore_create_archive_dry_run(
+            self.ctx.store,
+            body=body,
+            protected_run_ids=self._runstore_protected_run_ids(),
+        )
+        self.ctx.json_response(handler, code, payload)
+
+    def _handle_runstore_archive_execute_post(self, handler: "BaseHTTPRequestHandler") -> None:
+        if not self.ctx.require_token():
+            return
+        try:
+            body = self.ctx.read_body_json(handler, max_bytes=20_000)
+        except Exception as exc:
+            self.ctx.json_response(handler, 400, {"ok": False, "error": "bad_json", "message": str(exc)})
+            return
+        code, payload = runstore_execute_archive_plan(
+            self.ctx.store,
+            body=body,
+            protected_run_ids=self._runstore_protected_run_ids(),
+        )
+        self.ctx.json_response(handler, code, payload)
+
+    def _handle_runstore_archive_terminal_post(self, handler: "BaseHTTPRequestHandler") -> None:
+        """Compatibility endpoint for the earlier runtime namespace."""
+        if not self.ctx.require_token():
+            return
+        try:
+            body = self.ctx.read_body_json(handler, max_bytes=20_000)
+        except Exception as exc:
+            self.ctx.json_response(handler, 400, {"ok": False, "error": "bad_json", "message": str(exc)})
+            return
+        older_raw = body.get("olderThanS", body.get("older_than_s", 86400))
+        limit_raw = body.get("limit", 500)
+        try:
+            older_than_s = max(0.0, float(older_raw))
+        except Exception:
+            older_than_s = 86400.0
+        try:
+            limit = max(1, min(int(limit_raw or 500), 2000))
+        except Exception:
+            limit = 500
+        execute_requested = self.ctx.coerce_bool(body.get("execute"), False)
+        dry_run_requested = self.ctx.coerce_bool(body.get("dryRun", body.get("dry_run")), True)
+        if execute_requested or not dry_run_requested:
+            self.ctx.json_response(
+                handler,
+                409,
+                {
+                    "ok": False,
+                    "error": "legacy_archive_execute_disabled",
+                    "message": (
+                        "Write mode for /api/runtime/runstore/archive-terminal is disabled; "
+                        "use /api/runstore/archive/dry-run and /api/runstore/archive/execute."
+                    ),
+                    "replacement": {
+                        "dry_run": "/api/runstore/archive/dry-run",
+                        "execute": "/api/runstore/archive/execute",
+                    },
+                },
+            )
+            return
+        payload = runtime_archive_terminal_runs(
+            self.ctx.store,
+            older_than_s=older_than_s,
+            limit=limit,
+            dry_run=True,
+            project_id=str(body.get("projectId") or body.get("project_id") or "").strip(),
+            protected_run_ids=self._runstore_protected_run_ids(),
+            actor=str(body.get("actor") or "api:/api/runtime/runstore/archive-terminal").strip(),
+            reason=str(body.get("reason") or "").strip(),
+        )
+        self.ctx.json_response(handler, 200 if payload.get("ok", True) else 500, payload)
 
     def _handle_communication_audit_get(
         self, handler: "BaseHTTPRequestHandler", qs: dict[str, list[str]]
@@ -2014,6 +2202,10 @@ class RouteDispatcher:
         """Handle GET /api/sessions/bindings."""
         requested_project_id = str((qs.get("projectId") or [""])[0] or "").strip()
         project_id = canonicalize_runtime_project_id(requested_project_id)
+        include_context = self.ctx.coerce_bool(
+            (qs.get("include_context") or qs.get("includeContext") or ["0"])[0],
+            False,
+        )
         compat_meta = {
             "compatibility_entry": True,
             "entry_role": "compatibility_management",
@@ -2027,20 +2219,35 @@ class RouteDispatcher:
         for row in bindings:
             item = dict(row if isinstance(row, dict) else {})
             item.update(compat_meta)
-            session_id = str(item.get("sessionId") or "").strip()
-            session = self.ctx.session_store.get_session(session_id) if session_id else None
-            if isinstance(session, dict):
-                enriched = self.ctx.apply_session_work_context(
-                    session,
-                    project_id=str(session.get("project_id") or item.get("projectId") or "").strip(),
-                    environment_name=self.ctx.environment_name,
-                    worktree_root=self.ctx.worktree_root,
-                )
-                item["project_execution_context"] = (
-                    (enriched.get("project_execution_context") or {}) if isinstance(enriched, dict) else {}
-                )
+            if include_context:
+                session_id = str(item.get("sessionId") or "").strip()
+                session = self.ctx.session_store.get_session(session_id) if session_id else None
+                if isinstance(session, dict):
+                    enriched = self.ctx.apply_session_work_context(
+                        session,
+                        project_id=str(session.get("project_id") or item.get("projectId") or "").strip(),
+                        environment_name=self.ctx.environment_name,
+                        worktree_root=self.ctx.worktree_root,
+                    )
+                    item["project_execution_context"] = (
+                        (enriched.get("project_execution_context") or {}) if isinstance(enriched, dict) else {}
+                    )
+            else:
+                item["project_execution_context_lazy"] = True
             out_bindings.append(item)
-        payload = {"bindings": out_bindings, **compat_meta}
+        loading_hints = {
+            "detailEndpoint": "/api/sessions/binding/{session_id}?include_context=1",
+            "deferredFields": ["project_execution_context"],
+            "backgroundRefreshRecommended": True,
+        }
+        payload = {
+            "bindings": out_bindings,
+            **compat_meta,
+            "statusFreshness": "partial" if not include_context else "live",
+            "lastUpdatedAt": time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime()),
+            "isPartial": not include_context,
+            "loadingHints": loading_hints if not include_context else {},
+        }
         payload = self._rewrite_alias_payload(payload, requested_project_id=requested_project_id, row_keys=("bindings",))
         self.ctx.json_response(handler, 200, payload)
 
@@ -2885,6 +3092,7 @@ class RouteDispatcher:
             read_task_dashboard_generated_at=self.ctx.read_task_dashboard_generated_at,
             rebuild_dashboard_static=self.ctx.rebuild_dashboard_static,
             clear_dashboard_cfg_cache=runtime_clear_dashboard_cfg_cache,
+            announce_onboarding_message=lambda payload: runtime_send_project_onboarding_announce(payload, self.ctx),
         )
         self.ctx.json_response(handler, code, payload)
 
@@ -2975,16 +3183,25 @@ class RouteDispatcher:
                 worktree_root=str(self.ctx.worktree_root or ""),
                 create_cli_session=self.ctx.create_cli_session,
                 resolve_project_workdir=self.ctx.resolve_project_workdir,
+                resolve_channel_workdir=self.ctx.resolve_channel_workdir,
                 detect_git_branch=self.ctx.detect_git_branch,
                 build_session_seed_prompt=self.ctx.build_session_seed_prompt,
                 decorate_session_display_fields=self.ctx.decorate_session_display_fields,
                 apply_session_work_context=self.ctx.apply_session_work_context,
                 load_project_execution_context=self.ctx.load_project_execution_context,
+                ensure_static_instruction_files=lambda **kwargs: runtime_ensure_channel_static_instruction_files(
+                    **kwargs,
+                    config_path=self.ctx.config_toml_path(),
+                    repo_root=self.ctx.repo_root(),
+                ),
                 project_exists=lambda pid: bool(self.ctx.find_project_cfg(pid))
                 or bool(self.ctx.session_store.list_sessions(pid, include_deleted=True)),
                 channel_exists=lambda pid, cname: self.ctx.project_channel_exists(pid, cname)
                 or bool(self.ctx.session_store.list_sessions(pid, cname, include_deleted=True)),
             )
+        except RuntimeStaticInstructionFileConflict as e:
+            self.ctx.json_response(handler, 409, {"error": "static instruction file conflict", "message": str(e)})
+            return
         except ValueError as e:
             self.ctx.json_response(handler, 400, {"error": str(e)})
             return
@@ -3284,6 +3501,8 @@ class RouteDispatcher:
             local_server_host=local_host,
             local_server_port=self.ctx.server_port,
             project_id_from_session=str((session_data or {}).get("project_id") or ""),
+            resolve_channel_workdir=self.ctx.resolve_channel_workdir,
+            resolve_project_workdir=self.ctx.resolve_project_workdir,
         )
         project_id = str(parsed_announce.get("project_id") or "")
         channel_name = str(parsed_announce.get("channel_name") or "")
@@ -3401,8 +3620,13 @@ class RouteDispatcher:
             channel_name=channel_name,
             note=note,
             first_message=first_message,
+            cli_type=cli_type,
         )
-        project_workdir = self.ctx.resolve_project_workdir(project_id)
+        cli_key = str(cli_type or "").strip().lower()
+        if cli_key in {"claude", "codebuddy"} and project_id and channel_name:
+            project_workdir = self.ctx.resolve_channel_workdir(project_id, channel_name)
+        else:
+            project_workdir = self.ctx.resolve_project_workdir(project_id)
         project_execution_context = (
             self.ctx.load_project_execution_context(
                 project_id=project_id,
@@ -3605,7 +3829,7 @@ class RouteDispatcher:
         if not self.ctx.require_token():
             return
         try:
-            body = self.ctx.read_body_json(handler, max_bytes=64_000)
+            body = self.ctx.read_body_json(handler, max_bytes=280_000)
         except Exception as e:
             self.ctx.json_response(handler, 400, {"error": "bad json", "message": str(e), "step": "request_parse"})
             return
@@ -3701,6 +3925,10 @@ class RouteDispatcher:
             candidate = Path(framework_path) / "沟通-收件箱.md"
             if candidate.exists():
                 inbox_path = str(candidate)
+        agents_md = (create_result.get("agents_md") or {}) if isinstance(create_result.get("agents_md"), dict) else {}
+        static_instruction_files = create_result.get("static_instruction_files")
+        if not isinstance(static_instruction_files, dict):
+            static_instruction_files = agents_md.get("static_instruction_files") if isinstance(agents_md.get("static_instruction_files"), dict) else {}
         payload: dict[str, Any] = {
             "ok": True,
             "status": "done",
@@ -3715,6 +3943,12 @@ class RouteDispatcher:
                 "configPath": str(self.ctx.config_toml_path()),
                 "channelRootPath": framework_path,
                 "readmePath": readme_path,
+                "agentsMdPath": str(agents_md.get("path") or ""),
+                "agentsMdCreated": bool(agents_md.get("created")),
+                "agentsMdRole": str(agents_md.get("role") or ""),
+                "agentsMdChannelType": str(agents_md.get("channelType") or ""),
+                "agentsMdDryRun": agents_md.get("dryRun") or {},
+                "static_instruction_files": static_instruction_files,
                 "inboxPath": inbox_path,
             },
             "resultPath": str(self.ctx.config_toml_path()),
@@ -3800,6 +4034,14 @@ class RouteDispatcher:
         source_agent_name = str(req.get("source_agent_name") or "任务看板").strip()
         source_agent_alias = str(req.get("source_agent_alias") or "").strip()
         source_agent_id = str(req.get("source_agent_id") or "task_dashboard").strip() or "task_dashboard"
+        cli_type = self.ctx.safe_text(body.get("cliType") or body.get("cli_type"), 40).strip() or "codex"
+        agents_md_role = self.ctx.safe_text(body.get("agentRole") or body.get("agentsMdRole") or body.get("role"), 80).strip()
+        channel_type = self.ctx.safe_text(body.get("channelType") or body.get("channel_type") or "", 80).strip()
+        agents_md_content = str(body.get("agentsMdContent") if "agentsMdContent" in body else body.get("agents_md_content") or "")
+        create_agents_md = self.ctx.coerce_bool(
+            body.get("createAgentsMd") if "createAgentsMd" in body else body.get("create_agents_md"),
+            True,
+        )
 
         missing: list[str] = []
         if not project_id:
@@ -3878,8 +4120,24 @@ class RouteDispatcher:
             target_session = resolved_target
 
         try:
-            create_result = self.ctx.create_channel(project_id, channel_name, channel_desc or channel_name, "codex")
+            create_result = self.ctx.create_channel(
+                project_id,
+                channel_name,
+                channel_desc or channel_name,
+                cli_type,
+                agents_md_role=agents_md_role,
+                channel_type=channel_type,
+                agents_md_content=agents_md_content,
+                create_agents_md=create_agents_md,
+            )
             runtime_clear_dashboard_cfg_cache()
+        except RuntimeStaticInstructionFileConflict as e:
+            self.ctx.json_response(
+                handler,
+                409,
+                {"error": "static instruction file conflict", "message": str(e), "step": "create_channel"},
+            )
+            return
         except ValueError as e:
             message = str(e)
             if "already exists" in message.lower():
@@ -4320,19 +4578,42 @@ class RouteDispatcher:
         if not self.ctx.require_token():
             return
         try:
-            body = self.ctx.read_body_json(handler, max_bytes=10_000)
+            body = self.ctx.read_body_json(handler, max_bytes=280_000)
         except Exception as e:
             self.ctx.json_response(handler, 400, {"error": f"bad json: {e}"})
             return
         project_id = self.ctx.safe_text(body.get("projectId"), 80).strip()
         channel_name = self.ctx.safe_text(body.get("name"), 200).strip()
         channel_desc = self.ctx.safe_text(body.get("desc"), 500).strip()
+        cli_type = self.ctx.safe_text(body.get("cliType") or body.get("cli_type"), 40).strip() or "codex"
+        agents_md_role = self.ctx.safe_text(body.get("agentRole") or body.get("agentsMdRole") or body.get("role"), 80).strip()
+        channel_type = self.ctx.safe_text(body.get("channelType") or body.get("channel_type") or body.get("channelKind") or body.get("channel_kind"), 80).strip()
+        agents_md_content = str(body.get("agentsMdContent") if "agentsMdContent" in body else body.get("agents_md_content") or "")
+        create_agents_md = self.ctx.coerce_bool(
+            body.get("createAgentsMd") if "createAgentsMd" in body else body.get("create_agents_md"),
+            True,
+        )
         if not project_id or not channel_name:
             self.ctx.json_response(handler, 400, {"error": "missing projectId or name"})
             return
         try:
-            result = self.ctx.create_channel(project_id, channel_name, channel_desc, "codex")
+            result = self.ctx.create_channel(
+                project_id,
+                channel_name,
+                channel_desc,
+                cli_type,
+                agents_md_role=agents_md_role,
+                channel_type=channel_type,
+                agents_md_content=agents_md_content,
+                create_agents_md=create_agents_md,
+            )
             runtime_clear_dashboard_cfg_cache()
+        except RuntimeStaticInstructionFileConflict as e:
+            self.ctx.json_response(handler, 409, {"error": "static instruction file conflict", "message": str(e)})
+            return
+        except ValueError as e:
+            self.ctx.json_response(handler, 400, {"error": str(e)})
+            return
         except Exception as e:
             self.ctx.json_response(handler, 500, {"error": str(e)})
             return

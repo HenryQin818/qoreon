@@ -27,6 +27,65 @@
       return "";
     }
 
+    function agentIdentityExplanationMeta(session) {
+      const s = (session && typeof session === "object") ? session : {};
+      const contract = readAgentDisplayContract(s);
+      const state = normalizeAgentNameState(contract.state, "");
+      const issue = String(contract.issue || "").trim().toLowerCase();
+      if (state !== "identity_unresolved" && state !== "name_missing") return null;
+      const channelName = String(getSessionChannelName(s) || s.channel_name || s.channelName || s.primaryChannel || "").trim();
+      const sessionId = String(getSessionId(s) || s.session_id || s.sessionId || s.id || "").trim();
+      const missingItems = state === "name_missing"
+        ? ["可展示 Agent 名称"]
+        : ["alias / purpose / Agent 可读身份"];
+      const suggestions = state === "name_missing"
+        ? ["补充 alias 或 agent_name 后刷新身份"]
+        : ["补 alias/purpose，或重新生成该 Agent 身份"];
+      return {
+        key: "identity_unresolved",
+        tone: "warn",
+        heading: "Agent 可读身份缺失或不可用",
+        body: "发生什么：系统没有解析到稳定的 Agent 可读身份；影响：列表、@ 协同对象和回执来源只能显示“身份未解析”，容易影响派发判断；怎么修：补齐 alias/purpose，或重新生成该 Agent 身份后刷新。",
+        title: [
+          "状态: " + (state || "identity_unresolved"),
+          issue ? ("问题: " + issue) : "",
+          channelName ? ("通道: " + channelName) : "",
+          sessionId ? ("session: " + sessionId) : "",
+        ].filter(Boolean).join("\n"),
+        chips: ["身份未解析", state || "identity_unresolved"].filter(Boolean),
+        missingItems,
+        suggestions,
+        details: [
+          { label: "发生什么", text: "系统没有解析到稳定的 Agent 可读身份。" },
+          { label: "影响什么", text: "列表、@ 协同对象和回执来源只能显示“身份未解析”，容易影响派发判断。" },
+          { label: "怎么修", text: suggestions.join("；") },
+        ],
+      };
+    }
+
+    function agentDisplayTooltip(session, fallback = "-") {
+      const resolved = String(resolveAgentDisplayName(session) || "").trim();
+      const contract = readAgentDisplayContract(session);
+      const stateLabel = String(agentNameStateLabel(contract.state, contract.issue) || "").trim();
+      const title = String(resolved || stateLabel || fallback || "-").trim() || "-";
+      const explanation = agentIdentityExplanationMeta(session);
+      if (!explanation) return title;
+      const missing = (Array.isArray(explanation.missingItems) ? explanation.missingItems : [])
+        .map((item) => String(item || "").trim())
+        .filter(Boolean)
+        .join("、");
+      const suggestions = (Array.isArray(explanation.suggestions) ? explanation.suggestions : [])
+        .map((item) => String(item || "").trim())
+        .filter(Boolean)
+        .join("；");
+      return [
+        title,
+        explanation.body,
+        missing ? ("缺失项: " + missing) : "",
+        suggestions ? ("修复建议: " + suggestions) : "",
+      ].filter(Boolean).join("\n");
+    }
+
     function compactAgentDisplayId(value) {
       const text = String(value || "").trim();
       if (!text) return "";
@@ -250,8 +309,18 @@
       return !!detail.can_skip_detail_for_list;
     }
 
+    function normalizeRunSummaryBool(value) {
+      if (typeof value === "boolean") return value;
+      if (typeof value === "number") return value !== 0;
+      const text = String(value == null ? "" : value).trim().toLowerCase();
+      return text === "1" || text === "true" || text === "yes" || text === "y";
+    }
+
     function normalizeLatestRunSummary(raw) {
       const src = (raw && typeof raw === "object") ? raw : {};
+      const providerError = (src.provider_error && typeof src.provider_error === "object")
+        ? src.provider_error
+        : (src.providerError && typeof src.providerError === "object" ? src.providerError : null);
       return {
         run_id: String(firstNonEmptyText([src.run_id, src.runId]) || "").trim(),
         status: normalizeSessionDisplayState(firstNonEmptyText([src.status, src.display_state, src.displayState]), "idle"),
@@ -265,6 +334,23 @@
         latest_ai_msg: String(firstNonEmptyText([src.latest_ai_msg, src.latestAiMsg]) || "").trim(),
         error: String(firstNonEmptyText([src.error, src.last_error, src.lastError]) || "").trim(),
         run_count: Math.max(0, Number(firstNonEmptyText([src.run_count, src.runCount, 0])) || 0),
+        error_class: typeof normalizeRunErrorClass === "function"
+          ? normalizeRunErrorClass(firstNonEmptyText([src.error_class, src.errorClass]), "")
+          : String(firstNonEmptyText([src.error_class, src.errorClass]) || "").trim().toLowerCase(),
+        failure_class: String(firstNonEmptyText([src.failure_class, src.failureClass]) || "").trim().toLowerCase(),
+        provider_error: providerError ? {
+          kind: String(firstNonEmptyText([providerError.kind, providerError.error_kind, providerError.errorKind]) || "").trim(),
+          retryable: normalizeRunSummaryBool(providerError.retryable),
+          matched_patterns: Array.isArray(providerError.matched_patterns)
+            ? providerError.matched_patterns.map((item) => String(item || "").trim()).filter(Boolean)
+            : Array.isArray(providerError.matchedPatterns)
+              ? providerError.matchedPatterns.map((item) => String(item || "").trim()).filter(Boolean)
+              : [],
+        } : {},
+        side_effect_risk: String(firstNonEmptyText([src.side_effect_risk, src.sideEffectRisk]) || "").trim().toLowerCase(),
+        recovery_mode: String(firstNonEmptyText([src.recovery_mode, src.recoveryMode]) || "").trim().toLowerCase(),
+        recovery_required: normalizeRunSummaryBool(firstNonEmptyText([src.recovery_required, src.recoveryRequired, false])),
+        retry_exhausted: normalizeRunSummaryBool(firstNonEmptyText([src.retry_exhausted, src.retryExhausted, false])),
       };
     }
 
@@ -284,6 +370,7 @@
         || s === "interrupted_user"
         || s === "failed_config"
         || s === "failed_business"
+        || s === "provider_transient_failed"
         || s === "recovered_notice"
       ) {
         return s;
@@ -299,6 +386,7 @@
         || s === "session_binding"
         || s === "workspace_permission"
         || s === "cli_path"
+        || s === "provider_transient"
       ) {
         return s;
       }
@@ -307,11 +395,32 @@
 
     function normalizeLatestEffectiveRunSummary(raw) {
       const src = (raw && typeof raw === "object") ? raw : {};
+      const providerError = (src.provider_error && typeof src.provider_error === "object")
+        ? src.provider_error
+        : (src.providerError && typeof src.providerError === "object" ? src.providerError : null);
       return {
         run_id: String(firstNonEmptyText([src.run_id, src.runId]) || "").trim(),
         outcome_state: normalizeRunOutcomeState(firstNonEmptyText([src.outcome_state, src.outcomeState]), ""),
         preview: String(firstNonEmptyText([src.preview, src.last_preview, src.lastPreview]) || "").trim(),
+        error: String(firstNonEmptyText([src.error, src.last_error, src.lastError]) || "").trim(),
         created_at: String(firstNonEmptyText([src.created_at, src.createdAt, src.updated_at, src.updatedAt]) || "").trim(),
+        error_class: typeof normalizeRunErrorClass === "function"
+          ? normalizeRunErrorClass(firstNonEmptyText([src.error_class, src.errorClass]), "")
+          : String(firstNonEmptyText([src.error_class, src.errorClass]) || "").trim().toLowerCase(),
+        failure_class: String(firstNonEmptyText([src.failure_class, src.failureClass]) || "").trim().toLowerCase(),
+        provider_error: providerError ? {
+          kind: String(firstNonEmptyText([providerError.kind, providerError.error_kind, providerError.errorKind]) || "").trim(),
+          retryable: normalizeRunSummaryBool(providerError.retryable),
+          matched_patterns: Array.isArray(providerError.matched_patterns)
+            ? providerError.matched_patterns.map((item) => String(item || "").trim()).filter(Boolean)
+            : Array.isArray(providerError.matchedPatterns)
+              ? providerError.matchedPatterns.map((item) => String(item || "").trim()).filter(Boolean)
+              : [],
+        } : {},
+        side_effect_risk: String(firstNonEmptyText([src.side_effect_risk, src.sideEffectRisk]) || "").trim().toLowerCase(),
+        recovery_mode: String(firstNonEmptyText([src.recovery_mode, src.recoveryMode]) || "").trim().toLowerCase(),
+        recovery_required: normalizeRunSummaryBool(firstNonEmptyText([src.recovery_required, src.recoveryRequired, false])),
+        retry_exhausted: normalizeRunSummaryBool(firstNonEmptyText([src.retry_exhausted, src.retryExhausted, false])),
       };
     }
 
@@ -390,6 +499,9 @@
       const latestEffectiveRunSummary = getSessionLatestEffectiveRunSummary(s);
       const latestEffectiveOutcomeState = normalizeRunOutcomeState(latestEffectiveRunSummary.outcome_state, "");
       const latestStatus = normalizeSessionDisplayState(latestRunSummary.status, "");
+      const latestRunId = String(latestRunSummary.run_id || "").trim();
+      const latestEffectiveRunId = String(latestEffectiveRunSummary.run_id || "").trim();
+      const latestRunSupersedesEffective = !!(latestRunId && latestEffectiveRunId && latestRunId !== latestEffectiveRunId);
       const isActiveLike = (one) => (
         one === "running"
         || one === "queued"
@@ -408,6 +520,9 @@
       if (sessionHealthState === "recovering") return "retry_waiting";
       if (sessionHealthState === "blocked") return "error";
       if (sessionHealthState === "attention") {
+        if (isActiveLike(latestStatus)) return latestStatus;
+        if (latestStatus === "done" || latestEffectiveOutcomeState === "success") return "done";
+        if (latestRunSupersedesEffective && (latestStatus === "error" || latestStatus === "done")) return latestStatus;
         if (latestEffectiveOutcomeState === "interrupted_infra" || latestEffectiveOutcomeState === "interrupted_user") {
           return "interrupted";
         }
@@ -443,4 +558,104 @@
 
     function latestRunSummaryUpdatedAt(session) {
       return String(getSessionLatestRunSummary(session).updated_at || "").trim();
+    }
+
+    function sessionBindingErrorClassMatches(raw) {
+      const normalized = normalizeRunErrorClass(raw, "");
+      return normalized === "session_binding" || String(raw || "").trim().toLowerCase() === "session_binding";
+    }
+
+    function sessionBindingErrorTextMatches(raw) {
+      const text = String(raw || "").trim().toLowerCase();
+      if (!text) return false;
+      return (
+        text.indexOf("no conversation found with session id") >= 0
+        || text.indexOf("session_binding") >= 0
+        || text.indexOf("session binding") >= 0
+        || /conversation\s+(?:not\s+found|missing|lost)/i.test(text)
+      );
+    }
+
+    function conversationCliTypeForSession(session) {
+      const s = (session && typeof session === "object") ? session : {};
+      return String(firstNonEmptyText([
+        s.cli_type,
+        s.cliType,
+        s.primary_cli_type,
+        s.primaryCliType,
+      ]) || "codex").trim().toLowerCase() || "codex";
+    }
+
+    function conversationSessionBindingBlockMeta(session) {
+      const s = (session && typeof session === "object") ? session : {};
+      if (!s || !Object.keys(s).length) return null;
+      const latestRunSummary = getSessionLatestRunSummary(s);
+      const latestEffectiveRunSummary = getSessionLatestEffectiveRunSummary(s);
+      const sessionHealthState = getSessionHealthState(s);
+      const displayState = getSessionDisplayState(s);
+      const latestOutcomeState = normalizeRunOutcomeState(latestEffectiveRunSummary.outcome_state, "");
+      const latestStatus = normalizeSessionDisplayState(latestRunSummary.status, "");
+      const classes = [
+        s.error_class,
+        s.errorClass,
+        s.failure_class,
+        s.failureClass,
+        latestRunSummary.error_class,
+        latestRunSummary.failure_class,
+        latestEffectiveRunSummary.error_class,
+        latestEffectiveRunSummary.failure_class,
+      ];
+      const textCandidates = [
+        s.error,
+        s.last_error,
+        s.lastError,
+        s.session_display_reason,
+        s.sessionDisplayReason,
+        s.status_reason,
+        s.statusReason,
+        latestRunSummary.error,
+        latestRunSummary.preview,
+        latestEffectiveRunSummary.error,
+        latestEffectiveRunSummary.preview,
+      ];
+      const hasBindingClass = classes.some(sessionBindingErrorClassMatches);
+      const hasBindingText = textCandidates.some(sessionBindingErrorTextMatches);
+      const isErrorLike = (
+        sessionHealthState === "blocked"
+        || displayState === "error"
+        || latestOutcomeState === "failed_config"
+        || latestStatus === "error"
+      );
+      if (!hasBindingClass && !(hasBindingText && isErrorLike)) return null;
+      const cliType = conversationCliTypeForSession(s);
+      const cliLabel = /^(?:claude|claudecode|claude_code|claude-code)$/.test(cliType) ? "ClaudeCode" : "CLI";
+      const runId = String(firstNonEmptyText([
+        latestEffectiveRunSummary.run_id,
+        latestRunSummary.run_id,
+      ]) || "").trim();
+      const baseDetail = cliLabel + " conversation 未完成初始化或已丢失；请重试初始化或等待后端修复。";
+      return {
+        blocked: true,
+        reason: "session_binding",
+        cliType,
+        heading: "配置阻塞：会话绑定失败",
+        body: baseDetail,
+        message: "会话绑定失败，已暂停普通发送。",
+        action: "请刷新状态，或等待后端完成绑定修复后再发送。",
+        runId,
+        title: [
+          "配置阻塞：会话绑定失败",
+          baseDetail,
+          runId ? ("run_id: " + runId) : "",
+        ].filter(Boolean).join("\n"),
+      };
+    }
+
+    function isConversationSessionBindingBlocked(session) {
+      return !!conversationSessionBindingBlockMeta(session);
+    }
+
+    function conversationSessionBindingBlockMessage(session) {
+      const meta = conversationSessionBindingBlockMeta(session);
+      return meta ? (meta.heading + "；" + meta.body) : "";
     }

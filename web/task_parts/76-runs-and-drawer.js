@@ -1,6 +1,96 @@
     function isTerminalTextCli(cliType) {
       const normalized = String(cliType || "").trim().toLowerCase();
-      return normalized === "claude" || normalized === "opencode";
+      return normalized === "claude" || normalized === "opencode" || normalized === "codebuddy";
+    }
+
+    const CODEBUDDY_RAW_CONTEXT_HIDDEN_TEXT = "CodeBuddy 返回了原始结构化上下文，已隐藏；请查看运行详情或等待修复后重跑。";
+
+    function codeBuddyRawContextTextHasMarker(text) {
+      const raw = String(text || "");
+      if (!raw.trim()) return false;
+      if (/system-reminder/i.test(raw)) return true;
+      if (/data-role\s*=\s*["']memory["']/i.test(raw)) return true;
+      if (/\brawContent\b|\braw_content\b/i.test(raw)) return true;
+      if (/\binput_text\b/i.test(raw)) return true;
+      if (/"role"\s*:\s*"user"/i.test(raw) || /\brole\s*=\s*user\b/i.test(raw)) return true;
+      if (/"role"\s*:\s*"system"/i.test(raw) || /\brole\s*=\s*system\b/i.test(raw)) return true;
+      return /\bmemory\b/i.test(raw) && (/[<>{}\[\]]/.test(raw) || /"role"\s*:|data-role|input_text|rawContent/i.test(raw));
+    }
+
+    function codeBuddyRawJsonHasContextShape(value, depth = 0) {
+      if (depth > 6 || value == null) return false;
+      if (typeof value === "string") return codeBuddyRawContextTextHasMarker(value);
+      if (Array.isArray(value)) {
+        return value.slice(0, 80).some((item) => codeBuddyRawJsonHasContextShape(item, depth + 1));
+      }
+      if (typeof value !== "object") return false;
+      const keys = Object.keys(value);
+      const lowerKeys = keys.map((key) => String(key || "").toLowerCase());
+      if (lowerKeys.includes("rawcontent") || lowerKeys.includes("raw_content") || lowerKeys.includes("input_text")) return true;
+      const role = String(value.role || "").trim().toLowerCase();
+      if ((role === "user" || role === "system") && (value.content !== undefined || value.parts !== undefined || value.text !== undefined)) return true;
+      const type = String(value.type || value.item_type || value.itemType || "").trim().toLowerCase();
+      if (type === "input_text" || type === "system-reminder" || type === "system_reminder") return true;
+      if (String(value["data-role"] || value.dataRole || "").trim().toLowerCase() === "memory") return true;
+      return keys.slice(0, 80).some((key) => codeBuddyRawJsonHasContextShape(value[key], depth + 1));
+    }
+
+    function isCodeBuddyRawContextLeakText(text) {
+      const raw = String(text || "");
+      const trimmed = raw.trim();
+      if (!trimmed) return false;
+      if (codeBuddyRawContextTextHasMarker(trimmed)) return true;
+      if (!/^[\[{]/.test(trimmed)) return false;
+      if (trimmed.length <= 200000) {
+        try {
+          return codeBuddyRawJsonHasContextShape(JSON.parse(trimmed));
+        } catch (_) {
+          // Fall through to the cheap marker check for truncated JSON-like text.
+        }
+      }
+      return /"role"\s*:|"content"\s*:|"type"\s*:|\binput_text\b|\brawContent\b|\braw_content\b|system-reminder|\bmemory\b/i.test(trimmed);
+    }
+
+    function isCodeBuddyRunMeta(run, detail, ctx = {}) {
+      const detailFull = detail && detail.full ? detail.full : null;
+      const detailRun = (detailFull && detailFull.run)
+        || (detail && detail.run)
+        || null;
+      const values = [
+        ctx && ctx.cliType,
+        ctx && ctx.cli_type,
+        run && run.cliType,
+        run && run.cli_type,
+        detail && detail.cliType,
+        detail && detail.cli_type,
+        detailRun && detailRun.cliType,
+        detailRun && detailRun.cli_type,
+      ];
+      return values.some((value) => String(value || "").trim().toLowerCase() === "codebuddy");
+    }
+
+    function codeBuddySafeRunId(runId, run, detail) {
+      const detailFull = detail && detail.full ? detail.full : null;
+      const detailRun = (detailFull && detailFull.run)
+        || (detail && detail.run)
+        || null;
+      return String(
+        runId
+        || (run && run.id)
+        || (run && run.run_id)
+        || (detailRun && detailRun.id)
+        || (detailRun && detailRun.run_id)
+        || ""
+      ).trim();
+    }
+
+    function safeCodeBuddyTextForDisplay(text, runId = "", run = null, detail = null, ctx = {}) {
+      const raw = String(text || "");
+      if (!raw.trim()) return raw;
+      if (!isCodeBuddyRunMeta(run, detail, ctx)) return raw;
+      if (!isCodeBuddyRawContextLeakText(raw)) return raw;
+      const safeRunId = codeBuddySafeRunId(runId, run, detail);
+      return CODEBUDDY_RAW_CONTEXT_HIDDEN_TEXT + (safeRunId ? ("\nrun_id: " + safeRunId) : "");
     }
 
     function renderRuns(runs) {
@@ -21,7 +111,8 @@
         const outcomeMeta = buildRunOutcomeMeta(r, detailMeta);
         const cliType = String(r.cliType || r.cli_type || "").trim().toLowerCase();
         const suppressTerminalTextLegacyPreview = isTerminalTextCli(cliType);
-        top.appendChild(chip(st, st === "done" ? "good" : (st === "error" ? "bad" : "warn")));
+        const chipState = String(runDisplayState || st || "").trim();
+        top.appendChild(chip(chipState, chipState === "done" ? "good" : (chipState === "error" || chipState === "interrupted" ? "bad" : "warn")));
         row.appendChild(top);
         const metaBar = el("div", { class: "run-context-meta" });
         const stateSourceChip = buildRunDisplayStateSourceChip(r, detailMeta);
@@ -35,11 +126,11 @@
         );
         if (execSourceChip) metaBar.appendChild(execSourceChip);
         if (metaBar.childNodes.length) row.appendChild(metaBar);
-        const msg = String(r.messagePreview || "").trim();
+        const msg = String(safeCodeBuddyTextForDisplay(r.messagePreview || "", r.id, r, detailMeta, { cliType }) || "").trim();
         if (msg) row.appendChild(el("div", { class: "msg", text: "msg: " + msg }));
         const err = String(r.error || "").trim();
-        if (st === "error") {
-          row.appendChild(el("div", { class: "err", text: "error: " + (err || "执行失败（未返回具体错误文本）") }));
+        if (runDisplayState === "error") {
+          row.appendChild(el("div", { class: "err", text: runErrorDisplayText(err, outcomeMeta) }));
           const eh = String(r.errorHint || "").trim();
           if (eh) row.appendChild(el("div", { class: "hint", text: eh }));
         } else if (outcomeMeta && outcomeMeta.subtitle && (runDisplayState === "interrupted" || runDisplayState === "done")) {
@@ -53,7 +144,7 @@
         }
         const amCount = suppressTerminalTextLegacyPreview ? 0 : Number(r.agentMessagesCount || 0);
         if (amCount > 0) row.appendChild(el("div", { class: "hint", text: "已回捞过程消息 " + amCount + " 条" }));
-        const last = String(r.lastPreview || "");
+        const last = String(safeCodeBuddyTextForDisplay(r.lastPreview || "", r.id, r, detailMeta, { cliType }) || "");
         if (last) {
           const lv = el("div", { class: "last reply" });
           setMarkdown(lv, last);
@@ -63,7 +154,7 @@
         if (log) {
           const stLabel = (st === "queued" || st === "running" || st === "retry_waiting") ? "process" : "log";
           row.appendChild(el("div", { class: "last", text: stLabel + ":\n" + log }));
-        } else if (st === "error") {
+        } else if (runDisplayState === "error") {
           row.appendChild(el("div", { class: "hint", text: "未采集到过程日志（可能是任务启动后进程提前退出，或该记录产生于旧版本服务）。" }));
         }
         const btns = el("div", { class: "chips", style: "justify-content:flex-end; gap:8px" });
@@ -83,7 +174,8 @@
         }
         const allowRecoveryOps = st === "error" || (runDisplayState === "interrupted" && outcomeMeta && outcomeMeta.outcomeState === "interrupted_infra");
         if (allowRecoveryOps) {
-          const recoverBtn = el("button", { class: "btn", text: "回收结果" });
+          const providerRecovery = !!(outcomeMeta && outcomeMeta.providerTransient);
+          const recoverBtn = el("button", { class: "btn", text: providerRecovery ? "补链恢复" : "回收结果" });
           recoverBtn.addEventListener("click", async (e) => {
             e.stopPropagation();
             recoverBtn.disabled = true;
@@ -94,17 +186,19 @@
             }
           });
           btns.appendChild(recoverBtn);
-          const retryBtn = el("button", { class: "btn", text: "重试" });
-          retryBtn.addEventListener("click", async (e) => {
-            e.stopPropagation();
-            retryBtn.disabled = true;
-            try {
-              await retryRun(r);
-            } finally {
-              retryBtn.disabled = false;
-            }
-          });
-          btns.appendChild(retryBtn);
+          if (!providerRecovery) {
+            const retryBtn = el("button", { class: "btn", text: "重试" });
+            retryBtn.addEventListener("click", async (e) => {
+              e.stopPropagation();
+              retryBtn.disabled = true;
+              try {
+                await retryRun(r);
+              } finally {
+                retryBtn.disabled = false;
+              }
+            });
+            btns.appendChild(retryBtn);
+          }
         }
         const isExpanded = CCB.expanded.has(String(r.id || ""));
         const b = el("button", { class: "btn", text: isExpanded ? "收起" : "展开" });
@@ -157,7 +251,9 @@
             if (partialFull) fullText += "partial:\n" + partialFull + "\n\n";
             const am = Array.isArray(d.agentMessages) ? d.agentMessages : [];
             if (am.length) fullText += "agent_messages:\n- " + am.join("\n- ") + "\n\n";
-            fullText += "msg:\n" + String(d.message || "") + "\n\nprocess:\n" + processText + "\n\nlast:\n" + String(d.last || "");
+            const detailMsg = safeCodeBuddyTextForDisplay(d.message || "", r.id, r, d, { cliType });
+            const detailLast = safeCodeBuddyTextForDisplay(d.last || "", r.id, r, d, { cliType });
+            fullText += "msg:\n" + String(detailMsg || "") + "\n\nprocess:\n" + processText + "\n\nlast:\n" + String(detailLast || "");
             row.appendChild(el("div", { class: "last", text: fullText }));
           }
         }
@@ -174,6 +270,26 @@
       const preferDetail = detailRun ? shouldPreferDetailSnapshot(run, detailRun, detail) : false;
       const detailInterrupted = isRunInterruptedByUser(detailRun);
       const runInterrupted = isRunInterruptedByUser(run);
+      const outcomeState = getRunOutcomeState(run, detail);
+      if (outcomeState === "success" || runInterrupted || runState === "done" || runState === "error") {
+        return {
+          text: "状态来源: 时间线",
+          tone: "good",
+          title: "主状态使用 runs 列表返回的终态快照",
+        };
+      }
+      if (
+        outcomeState === "interrupted_user"
+        || outcomeState === "failed_config"
+        || outcomeState === "failed_business"
+        || outcomeState === "provider_transient_failed"
+      ) {
+        return {
+          text: "状态来源: 时间线",
+          tone: "good",
+          title: "主状态使用 runs 列表返回的结果分类",
+        };
+      }
       if ((isWorkingLikeState(detailState) || detailInterrupted || detailState === "done" || detailState === "error") && preferDetail) {
         return {
           text: "状态来源: 详情纠偏",
@@ -634,13 +750,18 @@
         menu.appendChild(btn);
       };
       appendMenuItem(
+        "编辑 AGENTS.md",
+        "配置这个通道的长期协作规则",
+        () => typeof openChannelAgentsMdModal === "function" && openChannelAgentsMdModal(pid, channel),
+      );
+      appendMenuItem(
         "找 Agent 编辑",
         "把通道说明与边界整理成正式派发消息",
         () => typeof openChannelEditAgentModal === "function" && openChannelEditAgentModal(pid, channel),
       );
       appendMenuItem(
         "删除通道",
-        "删除通道目录与配套文件夹，保留运行历史记录",
+        "删除通道目录与配套文件夹，保留 运行历史记录 历史",
         () => typeof openChannelDeleteModal === "function" && openChannelDeleteModal(pid, channel),
         true,
       );
@@ -864,11 +985,17 @@
         const sid = String(s.sessionId || s.id || "");
         const agentName = conversationAgentName(s);
         const mainTitle = agentName || "未命名会话";
+        const displayTitle = typeof agentDisplayTooltip === "function"
+          ? agentDisplayTooltip(s, mainTitle)
+          : mainTitle;
         const previewText = String(conversationPreviewLine(s) || "").trim() || "暂无消息记录";
         const secondaryParts = conversationSecondaryMeta(s);
         const heatMeta = conversationHeatMeta(s);
         const statusMeta = conversationStatusMeta(s);
         const statusBadge = buildConversationStatusBadge(s);
+        const auxBadges = typeof buildConversationAuxStatusBadges === "function"
+          ? buildConversationAuxStatusBadges(s)
+          : null;
         const countBadges = buildConversationCountBadges(s, { projectId: STATE.project, showUnread: false });
         const row = el("div", {
           class: "frow conv-main-row"
@@ -881,7 +1008,7 @@
         const head = el("div", { class: "conv-card-head" });
         const titleWrap = el("div", { class: "conv-card-titlewrap" });
         const titleRow = el("div", { class: "conv-title" });
-        titleRow.appendChild(el("div", { class: "conv-name", text: mainTitle, title: mainTitle }));
+        titleRow.appendChild(el("div", { class: "conv-name", text: mainTitle, title: displayTitle }));
         titleWrap.appendChild(titleRow);
         const envBadge = buildConversationEnvironmentBadge(s, { compact: true });
         const execSourceChip = buildProjectExecutionContextCompactChip(
@@ -905,6 +1032,7 @@
         head.appendChild(titleWrap);
         const side = el("div", { class: "conv-card-side" });
         if (statusBadge) side.appendChild(statusBadge);
+        if (auxBadges) side.appendChild(auxBadges);
         head.appendChild(side);
         if (metaRow) head.appendChild(metaRow);
         body.appendChild(head);
@@ -1065,6 +1193,44 @@
       setHash();
     }
 
+    function conversationCtxCodeBuddyPermissionMode(session, fallback = "") {
+      const row = (session && typeof session === "object") ? session : {};
+      const sid = String(row.sessionId || row.id || row.session_id || "").trim();
+      const hasCached = sid
+        && PCONV.codeBuddyPermissionModeBySessionId
+        && typeof PCONV.codeBuddyPermissionModeBySessionId === "object"
+        && Object.prototype.hasOwnProperty.call(PCONV.codeBuddyPermissionModeBySessionId, sid);
+      const raw = firstNonEmptyText([
+        hasCached ? PCONV.codeBuddyPermissionModeBySessionId[sid] : "",
+        row.codebuddy_permission_mode,
+        row.codebuddyPermissionMode,
+        fallback,
+      ]);
+      return typeof normalizeCodeBuddyPermissionMode === "function"
+        ? normalizeCodeBuddyPermissionMode(raw)
+        : String(raw || "default");
+    }
+
+    function conversationCtxClaudePermissionMode(session, fallback = "") {
+      const row = (session && typeof session === "object") ? session : {};
+      const sid = String(row.sessionId || row.id || row.session_id || "").trim();
+      const hasCached = sid
+        && PCONV.claudePermissionModeBySessionId
+        && typeof PCONV.claudePermissionModeBySessionId === "object"
+        && Object.prototype.hasOwnProperty.call(PCONV.claudePermissionModeBySessionId, sid);
+      const raw = firstNonEmptyText([
+        hasCached ? PCONV.claudePermissionModeBySessionId[sid] : "",
+        row.claude_permission_mode,
+        row.claudePermissionMode,
+        row.permission_mode,
+        row.permissionMode,
+        fallback,
+      ]);
+      return typeof normalizeClaudePermissionMode === "function"
+        ? normalizeClaudePermissionMode(raw)
+        : String(raw || "bypassPermissions");
+    }
+
     function currentConversationCtx() {
       if (STATE.panelMode === "channel") return null;
       if (STATE.project === "overview") return null;
@@ -1091,6 +1257,16 @@
       // 兼容 channel_name 和 primaryChannel 两种字段名
       const channelName = String(scopedChannel || cur.channel_name || cur.primaryChannel || "");
       const agentName = conversationAgentName(cur);
+      const normalizeModel = typeof normalizeSessionModel === "function"
+        ? normalizeSessionModel
+        : (value) => String(value || "").trim();
+      const codeBuddyPermissionMode = typeof conversationCtxCodeBuddyPermissionMode === "function"
+        ? conversationCtxCodeBuddyPermissionMode(cur)
+        : String(cur.codebuddy_permission_mode || cur.codebuddyPermissionMode || "default");
+      const codebuddyPermissionMode = codeBuddyPermissionMode;
+      const claudePermissionMode = typeof conversationCtxClaudePermissionMode === "function"
+        ? conversationCtxClaudePermissionMode(cur)
+        : String(cur.claude_permission_mode || cur.claudePermissionMode || cur.permission_mode || cur.permissionMode || "bypassPermissions");
       return {
         projectId: String(STATE.project || ""),
         sessionId: sid,
@@ -1099,6 +1275,9 @@
         agentName: String(agentName || ""),
         alias: String(cur.alias || ""),
         cliType,
+        model: normalizeModel(cur.model),
+        codebuddyPermissionMode,
+        claudePermissionMode,
       };
     }
 
@@ -1126,6 +1305,9 @@
         agentName: String(conversationAgentName(targetSession) || ""),
         alias: String(targetSession.alias || ""),
         cliType: String(targetSession.cli_type || current.cliType || "codex"),
+        model: normalizeSessionModel(targetSession.model || current.model),
+        codebuddyPermissionMode: conversationCtxCodeBuddyPermissionMode(targetSession, current.codebuddyPermissionMode || current.codebuddy_permission_mode),
+        claudePermissionMode: conversationCtxClaudePermissionMode(targetSession, current.claudePermissionMode || current.claude_permission_mode || current.permissionMode || current.permission_mode),
         isPrimary: isPrimarySession(targetSession),
         routeReason: useSelectedSub ? "explicit-sub" : "default-main",
       };
@@ -1181,6 +1363,21 @@
           "",
         ]) || "").trim(),
         cliType: String(cliType || "codex").trim() || "codex",
+        model: normalizeSessionModel(firstNonEmptyText([
+          matched && matched.model,
+          fallback && fallback.model,
+          "",
+        ])),
+        codebuddyPermissionMode: conversationCtxCodeBuddyPermissionMode(matched, firstNonEmptyText([
+          fallback && fallback.codebuddyPermissionMode,
+          fallback && fallback.codebuddy_permission_mode,
+        ])),
+        claudePermissionMode: conversationCtxClaudePermissionMode(matched, firstNonEmptyText([
+          fallback && fallback.claudePermissionMode,
+          fallback && fallback.claude_permission_mode,
+          fallback && fallback.permissionMode,
+          fallback && fallback.permission_mode,
+        ])),
         isPrimary: matched ? isPrimarySession(matched) : false,
         routeReason: "draft-session",
       };
@@ -1303,7 +1500,10 @@
       const src = (source && typeof source === "object") ? source : {};
       return Math.max(
         toTimeNum(firstNonEmptyText([
+          src.latestProgressAt,
+          src.latest_progress_at,
           src.lastProgressAt,
+          src.last_progress_at,
           src.updatedAt,
           src.updated_at,
           src.startedAt,
@@ -1311,6 +1511,76 @@
           src.createdAt,
         ])),
         -1
+      );
+    }
+
+    function processRowProgressTs(row) {
+      const src = (row && typeof row === "object") ? row : {};
+      const explicitTs = firstNonEmptyText([
+        src.at,
+        src.ts,
+        src.time,
+        src.timestamp,
+        src.updatedAt,
+        src.updated_at,
+        src.createdAt,
+        src.created_at,
+      ]);
+      const explicitNum = toTimeNum(explicitTs);
+      if (explicitNum >= 0) return explicitNum;
+      return toTimeNum(extractProcessItemTimestamp(src.text));
+    }
+
+    function runSourceProcessProgressTs(source) {
+      const src = (source && typeof source === "object") ? source : {};
+      const lists = [
+        src.processRows,
+        src.process_rows,
+        src.processEvents,
+        src.process_events,
+      ];
+      let latest = -1;
+      lists.forEach((list) => {
+        if (!Array.isArray(list) || !list.length) return;
+        list.slice(-80).forEach((row) => {
+          const ts = processRowProgressTs(row);
+          if (ts > latest) latest = ts;
+        });
+      });
+      return latest;
+    }
+
+    function runSourceContinuingProgressTs(source) {
+      const src = (source && typeof source === "object") ? source : {};
+      return Math.max(
+        toTimeNum(firstNonEmptyText([
+          src.latestProgressAt,
+          src.latest_progress_at,
+          src.lastProgressAt,
+          src.last_progress_at,
+          src.updatedAt,
+          src.updated_at,
+        ])),
+        runSourceProcessProgressTs(src),
+        -1
+      );
+    }
+
+    function latestRunProgressTs(run, detailRun, detailMeta) {
+      const detailFull = detailMeta && detailMeta.full && typeof detailMeta.full === "object"
+        ? detailMeta.full
+        : null;
+      return Math.max(
+        runSourceContinuingProgressTs(run),
+        runSourceContinuingProgressTs(detailRun),
+        runSourceContinuingProgressTs(detailFull)
+      );
+    }
+
+    function latestRunTerminalTs(run, detailRun) {
+      return Math.max(
+        runSourceFinishedTs(run),
+        runSourceFinishedTs(detailRun)
       );
     }
 
@@ -1345,6 +1615,23 @@
         runSourceProgressTs(run)
       );
       return runTs < 0 || detailTs >= runTs;
+    }
+
+    function shouldSuppressRunInterruptedInfra(runMeta, detailMeta = null) {
+      const run = (runMeta && typeof runMeta === "object") ? runMeta : {};
+      const detail = (detailMeta && typeof detailMeta === "object") ? detailMeta : null;
+      const detailRun = detail && detail.full && detail.full.run && typeof detail.full.run === "object"
+        ? detail.full.run
+        : {};
+      const runState = deriveRunStateFromSource(run, "");
+      const detailState = deriveRunStateFromSource(detailRun, "");
+      const preferDetail = detailRun ? shouldPreferDetailSnapshot(run, detailRun, detail) : false;
+      if (isWorkingLikeState(detailState) && preferDetail) return true;
+      if (isWorkingLikeState(runState)) return true;
+      const progressTs = latestRunProgressTs(run, detailRun, detail);
+      if (progressTs < 0 || isProgressStale(progressTs)) return false;
+      const terminalTs = latestRunTerminalTs(run, detailRun);
+      return terminalTs < 0 || progressTs > terminalTs + 1000;
     }
 
     function isWorkingLikeState(st) {
@@ -1401,9 +1688,87 @@
       ]), "");
     }
 
+    function getRunFailureClass(runMeta, detailMeta = null) {
+      const run = (runMeta && typeof runMeta === "object") ? runMeta : {};
+      const detail = (detailMeta && typeof detailMeta === "object") ? detailMeta : null;
+      const detailRun = detail && detail.full && detail.full.run && typeof detail.full.run === "object"
+        ? detail.full.run
+        : {};
+      return String(firstNonEmptyText([
+        detailRun.failure_class,
+        detailRun.failureClass,
+        run.failure_class,
+        run.failureClass,
+      ]) || "").trim().toLowerCase();
+    }
+
+    function getRunProviderError(runMeta, detailMeta = null) {
+      const run = (runMeta && typeof runMeta === "object") ? runMeta : {};
+      const detail = (detailMeta && typeof detailMeta === "object") ? detailMeta : null;
+      const detailRun = detail && detail.full && detail.full.run && typeof detail.full.run === "object"
+        ? detail.full.run
+        : {};
+      const candidates = [
+        detailRun.provider_error,
+        detailRun.providerError,
+        run.provider_error,
+        run.providerError,
+      ];
+      for (const item of candidates) {
+        if (item && typeof item === "object") return item;
+      }
+      return {};
+    }
+
+    function getRunProviderFailureDisplay(runMeta, detailMeta = null) {
+      const outcomeState = getRunOutcomeState(runMeta, detailMeta);
+      const errorClass = getRunErrorClass(runMeta, detailMeta);
+      const failureClass = getRunFailureClass(runMeta, detailMeta);
+      const providerError = getRunProviderError(runMeta, detailMeta);
+      const providerKind = String((providerError && providerError.kind) || "").trim().toLowerCase();
+      const retryable = !!(providerError && providerError.retryable);
+      const matched = Array.isArray(providerError && providerError.matched_patterns)
+        ? providerError.matched_patterns
+        : [];
+      const providerLike = failureClass === "provider_transient"
+        || outcomeState === "provider_transient_failed"
+        || errorClass === "provider_transient"
+        || (retryable && !!providerKind);
+      if (!providerLike) return null;
+      const label = ({
+        high_demand: "模型服务高负载",
+        model_capacity: "模型容量不足",
+        rate_limit: "模型服务限流",
+        server_error: "模型服务 5xx",
+        network_timeout: "网络超时",
+        network_reset: "网络中断",
+        upstream_unavailable: "上游不可用",
+      }[providerKind]
+        || (matched.some((item) => /model[_\s-]?capacity|resource[_\s-]?exhausted|no capacity/i.test(String(item || ""))) ? "模型容量不足" : "")
+        || (matched.some((item) => /high demand|temporary errors?/i.test(String(item || ""))) ? "模型服务高负载" : "模型服务临时不可用"));
+      return {
+        providerTransient: true,
+        providerKind,
+        label,
+        headline: label,
+        tone: "warn",
+        subtitle: "这不是业务处理失败，模型服务返回临时错误；可能已有部分动作完成，需要补链恢复。",
+        recoveryText: "可能已有部分动作完成，需要补链恢复。",
+        errorPrefix: label,
+      };
+    }
+
     function buildRunOutcomeMeta(runMeta, detailMeta = null) {
       const outcomeState = getRunOutcomeState(runMeta, detailMeta);
       const errorClass = getRunErrorClass(runMeta, detailMeta);
+      const providerDisplay = getRunProviderFailureDisplay(runMeta, detailMeta);
+      if (providerDisplay) {
+        return {
+          outcomeState: outcomeState || "provider_transient_failed",
+          errorClass: errorClass || "provider_transient",
+          ...providerDisplay,
+        };
+      }
       if (!outcomeState) return null;
       if (outcomeState === "success") {
         return {
@@ -1415,6 +1780,7 @@
         };
       }
       if (outcomeState === "interrupted_infra") {
+        if (shouldSuppressRunInterruptedInfra(runMeta, detailMeta)) return null;
         return {
           outcomeState,
           errorClass,
@@ -1469,6 +1835,20 @@
       return null;
     }
 
+    function runErrorDisplayText(rawError, outcomeMeta = null, fallback = "执行失败（未返回具体错误文本）") {
+      const err = String(rawError || "").trim();
+      if (outcomeMeta && outcomeMeta.providerTransient) {
+        const lead = String(outcomeMeta.errorPrefix || outcomeMeta.label || "模型服务临时不可用").trim();
+        const parts = [
+          lead + "：这不是业务处理失败。",
+          String(outcomeMeta.recoveryText || "可能已有部分动作完成，需要补链恢复。").trim(),
+        ].filter(Boolean);
+        if (err) parts.push("原始错误：" + err);
+        return parts.join(" ");
+      }
+      return "error: " + (err || fallback);
+    }
+
     function getRunDisplayState(run, detail) {
       const detailRun = detail && detail.full && detail.full.run && typeof detail.full.run === "object"
         ? detail.full.run
@@ -1479,12 +1859,21 @@
       const runInterrupted = isRunInterruptedByUser(run);
       const detailInterrupted = isRunInterruptedByUser(detailRun);
       const outcomeState = getRunOutcomeState(run, detail);
-      // 同一个 run 一旦 detail 已进入终态，就不允许后续乱序/滞后的 working 摘要再把它压回处理中。
-      if (detailInterrupted || outcomeState === "interrupted_infra" || outcomeState === "interrupted_user") return "interrupted";
-      if (outcomeState === "failed_config" || outcomeState === "failed_business") return "error";
-      if (detailState === "done" || detailState === "error") return detailState;
+      // 同一个 run 一旦列表快照已进入明确终态，不允许 detail 的旧 working 摘要再把它压回处理中。
+      if (outcomeState === "success") return "done";
+      if (runState === "done") return "done";
+      if (outcomeState === "failed_config" || outcomeState === "failed_business" || outcomeState === "provider_transient_failed") return "error";
+      if (outcomeState === "interrupted_infra") {
+        if (shouldSuppressRunInterruptedInfra(run, detail)) return "running";
+        return "interrupted";
+      }
+      if (runState === "error") return "error";
+      if (runInterrupted || outcomeState === "interrupted_user") return "interrupted";
+      if (detailInterrupted && preferDetail) return "interrupted";
+      if ((detailState === "done" || detailState === "error") && preferDetail) return detailState;
       if (isWorkingLikeState(detailState) && preferDetail) return detailState;
       if (isWorkingLikeState(runState)) return runState;
+      if (detailState === "done" || detailState === "error") return detailState;
       if (runInterrupted) return "interrupted";
       if (runState === "done" || runState === "error") return runState;
       if (isWorkingLikeState(detailState)) return detailState;
@@ -1614,6 +2003,7 @@
       if (s === "interrupted" && outcomeState === "interrupted_infra") return "环境中断";
       if (s === "interrupted") return "用户打断";
       if (s === "error" && opts && opts.timeout) return "执行超时";
+      if (s === "error" && outcomeState === "provider_transient_failed") return String(opts.providerHeadline || "模型服务临时不可用");
       if (s === "error" && outcomeState === "failed_config") return "配置阻塞";
       if (s === "error" && outcomeState === "failed_business") return "业务失败";
       if (s === "error") return "执行异常";
@@ -1687,6 +2077,9 @@
         input.placeholder = "该会话缺少通道路由，请先为该 session 绑定通道";
         return false;
       }
+      const conversationModel = typeof resolveConversationComposerPayloadModel === "function"
+        ? resolveConversationComposerPayloadModel(ctx)
+        : "";
       if (String(STATE.selectedSessionId || "") !== String(ctx.sessionId || "")) {
         setSelectedSessionId(ctx.sessionId, true, { explicit: false });
       }
@@ -1720,6 +2113,7 @@
             channelName: ctx.channelName,
             sessionId: ctx.sessionId,
             cliType: ctx.cliType || "codex",
+            ...(conversationModel ? { model: conversationModel } : {}),
             message: quickMsg,
             ...buildUiUserSenderFields(),
           }),
@@ -1864,12 +2258,35 @@
       PCONV.processUi[rid] = state;
     }
 
+    function isUnsafeProcessRowKind(raw) {
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) return false;
+      const kindText = firstNonEmptyText([
+        raw.type,
+        raw.kind,
+        raw.event_type,
+        raw.eventType,
+        raw.item_type,
+        raw.itemType,
+        raw.source,
+        raw.title,
+        raw.name,
+        raw.label,
+      ]).toLowerCase();
+      return kindText.indexOf("reasoning") >= 0 || kindText.indexOf("file-history-snapshot") >= 0;
+    }
+
+    function containsUnsafeProcessMarker(value) {
+      const text = String(value == null ? "" : value).trim().toLowerCase();
+      return text.indexOf("file-history-snapshot") >= 0;
+    }
+
     function normalizeProcessMessageText(raw) {
       if (raw == null) return "";
       if (typeof raw === "string" || typeof raw === "number" || typeof raw === "boolean") {
         return String(raw).replace(/\r\n/g, "\n").trim();
       }
       if (typeof raw === "object" && !Array.isArray(raw)) {
+        if (isUnsafeProcessRowKind(raw)) return "";
         const txt = firstNonEmptyText([
           raw.text,
           raw.message,
@@ -1880,10 +2297,14 @@
           raw.label,
           raw.title,
         ]);
+        if (containsUnsafeProcessMarker(txt)) return "";
         if (txt) return String(txt).replace(/\r\n/g, "\n").trim();
         if (Array.isArray(raw.lines) && raw.lines.length) {
-          return raw.lines.map((line) => String(line || "")).join("\n").replace(/\r\n/g, "\n").trim();
+          const lineText = raw.lines.map((line) => String(line || "")).join("\n").replace(/\r\n/g, "\n").trim();
+          return containsUnsafeProcessMarker(lineText) ? "" : lineText;
         }
+        const rawType = firstNonEmptyText([raw.type, raw.event_type, raw.eventType]).toLowerCase();
+        if (raw.rawContent !== undefined || raw.raw_content !== undefined || rawType.indexOf("reasoning") >= 0) return "";
         try { return JSON.stringify(raw); } catch (_) {}
       }
       return String(raw || "").replace(/\r\n/g, "\n").trim();
@@ -1912,13 +2333,82 @@
       return "";
     }
 
+    function clampRunProcessDisplayText(value, maxLen = 180) {
+      const text = String(value == null ? "" : value).replace(/\r\n/g, "\n").trim();
+      const compact = text.replace(/\s+/g, " ").trim();
+      const limit = Math.max(24, Number(maxLen || 0) || 180);
+      if (compact.length <= limit) return compact;
+      return compact.slice(0, Math.max(0, limit - 1)).trimEnd() + "…";
+    }
+
+    function looksLikeRawProcessJsonText(value) {
+      const text = String(value == null ? "" : value).trim();
+      if (!text) return false;
+      if (text.indexOf("rawContent") >= 0 || text.indexOf("raw_content") >= 0 || text.indexOf("reasoning") >= 0) return true;
+      const firstChar = text.charAt(0);
+      if (firstChar !== "{" && firstChar !== "[") return false;
+      return text.indexOf('"event_type"') >= 0
+        || text.indexOf('"item_type"') >= 0
+        || text.indexOf('"type"') >= 0
+        || text.indexOf('"content"') >= 0
+        || text.indexOf('"role"') >= 0;
+    }
+
+    function isLowValueRunProcessActionTarget(value) {
+      const text = String(value || "").trim().toLowerCase();
+      return !text
+        || text === "claude"
+        || text === "claudecode"
+        || text === "claude-code"
+        || text === "codex"
+        || text === "codebuddy"
+        || text === "code-buddy"
+        || text === "gemini"
+        || text === "opencode";
+    }
+
+    function firstRunProcessActionTargetText(values) {
+      const list = Array.isArray(values) ? values : [];
+      for (let i = 0; i < list.length; i += 1) {
+        const text = String(list[i] == null ? "" : list[i]).trim();
+        if (!text) continue;
+        if (isLowValueRunProcessActionTarget(text)) continue;
+        if (looksLikeRawProcessJsonText(text) || containsUnsafeProcessMarker(text)) continue;
+        return text;
+      }
+      return "";
+    }
+
+    function structuredProcessRowFallbackText(row) {
+      const src = (row && typeof row === "object" && !Array.isArray(row)) ? row : {};
+      const eventType = firstProcessMetaText([src.event_type, src.eventType, src.type, src.kind]);
+      const itemType = firstProcessMetaText([src.item_type, src.itemType, src.item && src.item.type]);
+      const title = firstProcessMetaText([src.title, src.name, src.label, src.toolName, src.tool_name]);
+      const target = firstRunProcessActionTargetText([
+        src.target,
+        src.targetPath,
+        src.target_path,
+        src.path,
+        src.command,
+        src.url,
+        src.href,
+      ]);
+      const prefix = firstProcessMetaText([title, eventType, itemType, "结构化动作"]);
+      return clampRunProcessDisplayText(target && target !== prefix ? (prefix + ": " + target) : prefix, 180);
+    }
+
     function normalizeRunProcessTimelineRow(raw, index = 0) {
       const row = (raw && typeof raw === "object" && !Array.isArray(raw)) ? raw : null;
-      const text = normalizeProcessMessageText(raw);
+      let text = normalizeProcessMessageText(raw);
+      if (row && !isUnsafeProcessRowKind(row)) {
+        const fallbackText = structuredProcessRowFallbackText(row);
+        if (fallbackText && (!text || looksLikeRawProcessJsonText(text))) text = fallbackText;
+      }
       const at = row ? extractStructuredProcessRowTime(row) : "";
       const eventType = row ? firstProcessMetaText([row.event_type, row.eventType]) : "";
       const itemType = row ? firstProcessMetaText([row.item_type, row.itemType, row.type]) : "";
       const title = row ? firstProcessMetaText([row.title, row.name, row.label]) : "";
+      const callId = row ? firstProcessMetaText([row.call_id, row.callId, row.raw_ref, row.rawRef]) : "";
       const out = {
         text,
         at,
@@ -1926,15 +2416,74 @@
         eventType,
         itemType,
         title,
+        callId,
         rowIndex: Math.max(0, Number(index || 0) || 0),
       };
       if (row) {
-        ["path", "source", "status", "phase"].forEach((key) => {
+        [
+          "path",
+          "source",
+          "status",
+          "phase",
+          "state",
+          "outcome",
+          "target",
+          "targetPath",
+          "target_path",
+          "command",
+          "url",
+          "href",
+          "name",
+          "toolName",
+          "tool_name",
+          "call_id",
+          "callId",
+          "raw_ref",
+          "rawRef",
+          "error",
+          "errorSummary",
+          "error_summary",
+          "failureReason",
+          "failure_reason",
+        ].forEach((key) => {
           const value = firstProcessMetaText([row[key]]);
           if (value) out[key] = value;
         });
       }
       return out;
+    }
+
+    function normalizeRunProcessEventRow(raw, index = 0) {
+      const row = (raw && typeof raw === "object" && !Array.isArray(raw)) ? raw : null;
+      if (!row) return normalizeRunProcessTimelineRow(raw, index);
+      const text = firstProcessMetaText([
+        row.text,
+        row.message,
+        row.msg,
+        row.detail,
+        row.summary,
+        row.label,
+        row.title,
+      ]);
+      if (!text) return null;
+      return normalizeRunProcessTimelineRow({
+        text,
+        at: row.at,
+        ts: row.ts,
+        time: row.time,
+        timestamp: row.timestamp,
+        createdAt: row.createdAt,
+        created_at: row.created_at,
+        updatedAt: row.updatedAt,
+        updated_at: row.updated_at,
+        event_type: firstProcessMetaText([row.event_type, row.eventType, row.type, row.kind]),
+        item_type: firstProcessMetaText([row.item_type, row.itemType, row.item && row.item.type]),
+        title: firstProcessMetaText([row.title, row.name, row.label]),
+        source: firstProcessMetaText([row.source]),
+        status: firstProcessMetaText([row.status]),
+        phase: firstProcessMetaText([row.phase]),
+        call_id: firstProcessMetaText([row.call_id, row.callId, row.raw_ref, row.rawRef, row.item && (row.item.call_id || row.item.callId)]),
+      }, index);
     }
 
     function copyRunProcessTimelineMeta(row) {
@@ -1948,6 +2497,26 @@
         "source",
         "status",
         "phase",
+        "state",
+        "outcome",
+        "target",
+        "targetPath",
+        "target_path",
+        "command",
+        "url",
+        "href",
+        "name",
+        "toolName",
+        "tool_name",
+        "callId",
+        "call_id",
+        "rawRef",
+        "raw_ref",
+        "error",
+        "errorSummary",
+        "error_summary",
+        "failureReason",
+        "failure_reason",
         "rowIndex",
       ].forEach((key) => {
         if (src[key] !== undefined && src[key] !== null && String(src[key]).trim() !== "") {
@@ -1962,16 +2531,264 @@
       return !!firstProcessMetaText([row.eventType, row.event_type, row.eventTypeRaw]);
     }
 
+    function normalizeRunProcessActionType(row) {
+      const primaryText = [
+        row && (row.eventType || row.event_type),
+        row && (row.itemType || row.item_type),
+      ].map((value) => String(value || "").trim().toLowerCase()).filter(Boolean).join(" ");
+      if (primaryText.includes("file_read") || primaryText.includes("read_file") || primaryText.includes("read") || primaryText.includes("view")) return "read";
+      const text = [
+        row && (row.eventType || row.event_type),
+        row && (row.itemType || row.item_type),
+        row && row.title,
+        row && row.name,
+        row && row.path,
+        row && row.command,
+        row && row.url,
+        row && row.text,
+      ].map((value) => String(value || "").trim().toLowerCase()).filter(Boolean).join(" ");
+      if (!text) return "unknown";
+      if (text.includes("collab") || text.includes("announce") || text.includes("receipt") || text.includes("callback") || text.includes("message")) return "message";
+      if (text.includes("file_change") || text.includes("apply_patch") || text.includes("patch") || text.includes("edit") || text.includes("write")) return "edit";
+      if (text.includes("command") || text.includes("shell") || text.includes("exec") || text.includes("terminal") || text.includes("bash")) return "command";
+      if (text.includes("web") || text.includes("browser") || text.includes("http") || text.includes("url") || text.includes("fetch")) return "web";
+      if (text.includes("search") || text.includes("grep") || text.includes("rg ") || text.includes("find ")) return "search";
+      if (text.includes("read") || text.includes("view") || text.includes("open") || text.includes("cat ")) return "read";
+      if (text.includes("tool") || text.includes("mcp") || text.includes("function_call")) return "tool";
+      if (text.includes("runtime") || text.includes("system") || text.includes("todo") || text.includes("plan")) return "system";
+      return "unknown";
+    }
+
     function runProcessActionLabel(row) {
-      const eventType = String((row && (row.eventType || row.event_type)) || "").trim().toLowerCase();
-      const itemType = String((row && (row.itemType || row.item_type)) || "").trim().toLowerCase();
-      if (eventType.includes("command") || itemType === "command_execution" || itemType.includes("command")) return "命令";
-      if (eventType.includes("todo") || itemType.includes("todo")) return "待办";
-      if (eventType.includes("file") || itemType.includes("file")) return "文件";
-      if (eventType.includes("collab") || itemType.includes("collab")) return "协作";
-      if (eventType.includes("tool") || itemType.includes("tool") || itemType.includes("mcp")) return "工具";
-      if (eventType.includes("runtime")) return "运行";
-      return "动作";
+      const labels = {
+        read: "读取",
+        edit: "编辑",
+        command: "命令",
+        search: "检索",
+        web: "Web",
+        message: "消息",
+        tool: "工具",
+        system: "系统",
+        unknown: "未知",
+      };
+      const key = normalizeRunProcessActionType(row);
+      return labels[key] || labels.unknown;
+    }
+
+    function runProcessRowCallId(row) {
+      return firstProcessMetaText([
+        row && row.callId,
+        row && row.call_id,
+        row && row.rawRef,
+        row && row.raw_ref,
+      ]);
+    }
+
+    function runProcessActionEventText(row) {
+      return [
+        row && (row.eventType || row.event_type),
+        row && (row.itemType || row.item_type),
+        row && row.status,
+        row && row.state,
+        row && row.phase,
+        row && row.outcome,
+      ].map((value) => String(value || "").trim().toLowerCase()).filter(Boolean).join(" ");
+    }
+
+    function isAssistantProgressProcessRow(row) {
+      const eventText = runProcessActionEventText(row);
+      return eventText.includes("assistant_progress");
+    }
+
+    function isRunProcessToolStartRow(row) {
+      const eventText = runProcessActionEventText(row);
+      return eventText.includes("tool_started")
+        || eventText.includes("tool_call.started")
+        || eventText.includes("function_call.started");
+    }
+
+    function isRunProcessToolFailedClosingRow(row) {
+      const eventText = runProcessActionEventText(row);
+      const hasErrorPayload = !!firstProcessMetaText([
+        row && row.error,
+        row && row.errorSummary,
+        row && row.error_summary,
+        row && row.failureReason,
+        row && row.failure_reason,
+      ]);
+      return hasErrorPayload
+        || eventText.includes("tool_failed")
+        || eventText.includes("tool_error")
+        || eventText.includes("tool_call.failed")
+        || eventText.includes("tool_call.error")
+        || eventText.includes("function_call_error")
+        || eventText.includes("failed")
+        || eventText.includes("error")
+        || eventText.includes("exception");
+    }
+
+    function isRunProcessToolCompletedClosingRow(row) {
+      const eventText = runProcessActionEventText(row);
+      return eventText.includes("tool_completed")
+        || eventText.includes("tool_call.completed")
+        || eventText.includes("function_call_result");
+    }
+
+    function buildRunProcessCallStatusIndex(rows) {
+      const completed = new Set();
+      const failed = new Set();
+      (Array.isArray(rows) ? rows : []).forEach((row) => {
+        const callId = runProcessRowCallId(row);
+        if (!callId) return;
+        if (isRunProcessToolFailedClosingRow(row)) {
+          failed.add(callId);
+          return;
+        }
+        if (isRunProcessToolCompletedClosingRow(row)) completed.add(callId);
+      });
+      return { completed, failed };
+    }
+
+    function normalizeRunProcessActionStatus(row, callStatusIndex = null) {
+      if (isAssistantProgressProcessRow(row)) return "completed";
+      const callId = runProcessRowCallId(row);
+      if (callId && isRunProcessToolStartRow(row) && callStatusIndex) {
+        if (callStatusIndex.failed && callStatusIndex.failed.has(callId)) return "failed";
+        if (callStatusIndex.completed && callStatusIndex.completed.has(callId)) return "completed";
+      }
+      const explicit = firstProcessMetaText([
+        row && row.status,
+        row && row.state,
+        row && row.phase,
+        row && row.outcome,
+      ]).toLowerCase();
+      const mapStatus = (text) => {
+        const value = String(text || "").trim().toLowerCase();
+        if (!value) return "";
+        if (value.includes("fail") || value.includes("error") || value.includes("exception")) return "failed";
+        if (value.includes("cancel") || value.includes("interrupt") || value.includes("aborted")) return "cancelled";
+        if (value.includes("skip")) return "skipped";
+        if (value.includes("pending") || value.includes("queued") || value.includes("wait")) return "pending";
+        if (value.includes("running") || value.includes("progress") || value.includes("start") || value.includes("started") || value.includes("execution")) return "running";
+        if (value.includes("complete") || value.includes("done") || value.includes("success") || value.includes("succeed") || value.includes("result")) return "completed";
+        return "";
+      };
+      const explicitStatus = mapStatus(explicit);
+      if (explicitStatus) return explicitStatus;
+      const eventText = [
+        row && (row.eventType || row.event_type),
+        row && (row.itemType || row.item_type),
+        row && row.text,
+      ].map((value) => String(value || "").trim().toLowerCase()).filter(Boolean).join(" ");
+      const eventStatus = mapStatus(eventText);
+      if (eventStatus) return eventStatus;
+      return "completed";
+    }
+
+    function runProcessActionStatusLabel(status, row = null) {
+      if (isAssistantProgressProcessRow(row)) return "进展记录";
+      const labels = {
+        pending: "待处理",
+        running: "进行中",
+        completed: "已完成",
+        failed: "失败",
+        cancelled: "已取消",
+        skipped: "已跳过",
+      };
+      const key = String(status || "").trim().toLowerCase();
+      return labels[key] || labels.completed;
+    }
+
+    function runProcessActionTarget(row) {
+      const directTarget = firstRunProcessActionTargetText([
+        row && row.path,
+        row && row.targetPath,
+        row && row.target_path,
+        row && row.target,
+        row && row.command,
+        row && row.url,
+        row && row.href,
+      ]);
+      if (directTarget) return clampRunProcessDisplayText(directTarget, 120);
+      const text = String((row && row.text) || "").trim();
+      const stripped = text
+        .replace(/^执行命令[:：]\s*/, "")
+        .replace(/^调用工具[:：]\s*/, "")
+        .replace(/^工具完成[:：]\s*/, "")
+        .replace(/^更新文件[:：]\s*/, "")
+        .replace(/^读取[:：]\s*/, "")
+        .replace(/^编辑[:：]\s*/, "")
+        .trim();
+      if (stripped && stripped !== text && !isLowValueRunProcessActionTarget(stripped) && !looksLikeRawProcessJsonText(stripped) && !containsUnsafeProcessMarker(stripped)) {
+        return clampRunProcessDisplayText(stripped, 120);
+      }
+      if (text && !isLowValueRunProcessActionTarget(text) && !looksLikeRawProcessJsonText(text) && !containsUnsafeProcessMarker(text)) {
+        return clampRunProcessDisplayText(text, 120);
+      }
+      const titleTarget = firstRunProcessActionTargetText([
+        row && row.title,
+        row && row.name,
+        row && row.toolName,
+        row && row.tool_name,
+      ]);
+      if (titleTarget) return clampRunProcessDisplayText(titleTarget, 120);
+      return "当前上下文";
+    }
+
+    function runProcessActionErrorSummary(row) {
+      const raw = firstProcessMetaText([
+        row && row.errorSummary,
+        row && row.error_summary,
+        row && row.failureReason,
+        row && row.failure_reason,
+        row && row.error,
+      ]);
+      if (!raw || looksLikeRawProcessJsonText(raw) || containsUnsafeProcessMarker(raw)) return "";
+      return clampRunProcessDisplayText(raw, 240);
+    }
+
+    function buildRunProcessActionNode(row, idx, callStatusIndex = null) {
+      const typeKey = normalizeRunProcessActionType(row);
+      const label = runProcessActionLabel(row);
+      const status = normalizeRunProcessActionStatus(row, callStatusIndex);
+      const target = runProcessActionTarget(row);
+      const callId = runProcessRowCallId(row);
+      const rawText = String((row && row.text) || "").trim();
+      const safeText = (!rawText || looksLikeRawProcessJsonText(rawText) || containsUnsafeProcessMarker(rawText))
+        ? clampRunProcessDisplayText(label + " · " + target, 160)
+        : clampRunProcessDisplayText(rawText, 180);
+      const detailText = (!rawText || looksLikeRawProcessJsonText(rawText) || containsUnsafeProcessMarker(rawText))
+        ? safeText
+        : clampRunProcessDisplayText(rawText, 640);
+      const action = {
+        id: "action-" + idx,
+        kind: "action",
+        isActionNode: true,
+        text: safeText,
+        detailText,
+        at: String((row && row.at) || "").trim(),
+        eventType: row && row.eventType,
+        itemType: row && row.itemType,
+        title: row && row.title,
+        label,
+        typeKey,
+        status,
+        statusLabel: runProcessActionStatusLabel(status, row),
+        target,
+        callId,
+        errorSummary: runProcessActionErrorSummary(row),
+        row,
+      };
+      return {
+        id: action.id,
+        kind: "action",
+        isActionNode: true,
+        text: safeText,
+        at: action.at,
+        row,
+        action,
+        actions: [],
+      };
     }
 
     function buildRunProcessStepGroups(rows) {
@@ -1979,50 +2796,29 @@
         .map((row, idx) => normalizeRunProcessTimelineRow(row, idx))
         .filter((row) => String((row && row.text) || "").trim());
       const groups = [];
-      let current = null;
+      let stepCount = 0;
       let actionCount = 0;
-      const ensureSyntheticStep = () => {
-        if (current) return current;
-        current = {
-          id: "synthetic-start",
-          synthetic: true,
-          text: "启动与准备动作",
-          at: "",
-          row: { text: "启动与准备动作", at: "", synthetic: true },
-          actions: [],
-        };
-        groups.push(current);
-        return current;
-      };
+      const callStatusIndex = buildRunProcessCallStatusIndex(normalizedRows);
       normalizedRows.forEach((row, idx) => {
         if (isRunProcessActionRow(row)) {
-          const group = ensureSyntheticStep();
           actionCount += 1;
-          group.actions.push({
-            id: "action-" + idx,
-            text: row.text,
-            at: row.at,
-            eventType: row.eventType,
-            itemType: row.itemType,
-            title: row.title,
-            label: runProcessActionLabel(row),
-            row,
-          });
+          groups.push(buildRunProcessActionNode(row, idx, callStatusIndex));
           return;
         }
-        current = {
+        stepCount += 1;
+        groups.push({
           id: "step-" + idx,
+          kind: "step",
           synthetic: false,
           text: row.text,
           at: row.at,
           row,
           actions: [],
-        };
-        groups.push(current);
+        });
       });
       return {
         groups,
-        stepCount: groups.length,
+        stepCount,
         actionCount,
       };
     }
@@ -2052,11 +2848,42 @@
         out.push(txt);
         rows.push(row);
       };
-      const rowLists = [full.processRows, full.process_rows];
+      const detailRun = (full.run && typeof full.run === "object") ? full.run : null;
+      const topRowLists = [
+        full.processRows,
+        full.process_rows,
+      ];
+      const nestedRowLists = [
+        detailRun && detailRun.processRows,
+        detailRun && detailRun.process_rows,
+      ];
+      const rowLists = topRowLists.some((list) => Array.isArray(list) && list.length)
+        ? topRowLists
+        : nestedRowLists;
       rowLists.forEach((list) => {
         if (!Array.isArray(list)) return;
         list.forEach((item) => push(item));
       });
+      if (!out.length) {
+        const topEventLists = [
+          full.processEvents,
+          full.process_events,
+        ];
+        const nestedEventLists = [
+          detailRun && detailRun.processEvents,
+          detailRun && detailRun.process_events,
+        ];
+        const eventLists = topEventLists.some((list) => Array.isArray(list) && list.length)
+          ? topEventLists
+          : nestedEventLists;
+        eventLists.forEach((list) => {
+          if (!Array.isArray(list)) return;
+          list.forEach((item) => {
+            const eventRow = normalizeRunProcessEventRow(item, rows.length);
+            if (eventRow) push(eventRow);
+          });
+        });
+      }
       if (!out.length) {
         const directLists = [
           full.processMessages,
@@ -2072,6 +2899,34 @@
         });
       }
       return { items: out, rows, exact: out.length > 0 };
+    }
+
+    function processListCount(raw) {
+      if (Array.isArray(raw)) return raw.length;
+      if (typeof raw === "number" && Number.isFinite(raw)) return Math.max(0, raw);
+      return 0;
+    }
+
+    function reportedProcessCountFromRunAndDetail(run, detailFull) {
+      const full = (detailFull && typeof detailFull === "object") ? detailFull : null;
+      const detailRun = full && full.run && typeof full.run === "object" ? full.run : null;
+      const sources = [
+        (run && typeof run === "object") ? run : null,
+        full,
+        detailRun,
+      ];
+      let count = 0;
+      sources.forEach((source) => {
+        if (!source) return;
+        count = Math.max(
+          count,
+          processListCount(source.processRows),
+          processListCount(source.process_rows),
+          processListCount(source.processEvents),
+          processListCount(source.process_events)
+        );
+      });
+      return count;
     }
 
     function collectRunProcessInfo(runId, runStatus, run, detail) {
@@ -2163,8 +3018,10 @@
 
       const latest = items.length ? items[items.length - 1] : "";
       const countFromRun = suppressTerminalTextLegacyPreview ? 0 : Number((run && run.agentMessagesCount) || 0);
+      const reportedProcessCount = reportedProcessCountFromRunAndDetail(run, detailFull);
+      const reportedCount = Math.max(countFromRun, reportedProcessCount);
       // 展示条数以“已解析列表/后端统计”较大值为准，避免切会话时临时回退。
-      const count = Math.max(items.length, countFromRun);
+      const count = Math.max(items.length, reportedCount);
       const rows = (rid && PCONV.processTrailByRun[rid] && Array.isArray(PCONV.processTrailByRun[rid].rows))
         ? PCONV.processTrailByRun[rid].rows
         : items.map((txt) => ({ text: String(txt || ""), at: "" }));
@@ -2202,9 +3059,10 @@
       return {
         items,
         rows,
+        cliType,
         latest,
         count,
-        reportedCount: countFromRun,
+        reportedCount,
         latestProgressAt,
         processStepGroups: processStepModel.groups,
         processStepCount: processStepModel.stepCount,
@@ -2241,7 +3099,7 @@
         const allowProgressDetailText = runWorking && detailWorking;
         const fullLast = String(d.lastMessage || "");
         if (allowTerminalDetailText && fullLast.trim()) {
-          return fullLast;
+          return safeCodeBuddyTextForDisplay(fullLast, run && run.id, run, detail, { cliType });
         }
         if (!suppressTerminalTextLegacyFallback) {
           const fullPartial = String(d.partialMessage || "");
@@ -2256,13 +3114,13 @@
       const runPartial = String((run && run.partialPreview) || "");
       if (suppressTerminalTextLegacyFallback) {
         const runLastOnly = String((run && run.lastPreview) || "");
-        return runLastOnly;
+        return safeCodeBuddyTextForDisplay(runLastOnly, run && run.id, run, detail, { cliType });
       }
       if (runWorking && runPartial.trim()) return runPartial;
       const runLastForTerminal = String((run && run.lastPreview) || "");
-      if (!runWorking && runLastForTerminal.trim()) return runLastForTerminal;
+      if (!runWorking && runLastForTerminal.trim()) return safeCodeBuddyTextForDisplay(runLastForTerminal, run && run.id, run, detail, { cliType });
       const runLast = String((run && run.lastPreview) || "");
-      if (!runWorking && runLast.trim()) return runLast;
+      if (!runWorking && runLast.trim()) return safeCodeBuddyTextForDisplay(runLast, run && run.id, run, detail, { cliType });
       return runPartial;
     }
 
@@ -2388,7 +3246,7 @@
       if (!m || typeof m.index !== "number") return "";
       p = p.slice(0, m.index + m[0].length);
       const low = p.toLowerCase();
-      if (low.endsWith("/skill.md") || low.includes("/.codex/")) return "";
+      if (low.endsWith("/skill.md") || low.includes("/.codex/" + "skills/")) return "";
       if (!BUSINESS_PATH_SEGMENTS.some((seg) => p.includes(seg))) return "";
       return p;
     }

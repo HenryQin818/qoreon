@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import os
 import shutil
 import socket
@@ -10,6 +11,7 @@ import tempfile
 from pathlib import Path
 from typing import Any, Callable
 
+from task_dashboard.claude_models import normalize_claude_model
 from task_dashboard.runtime.execution_profiles import (
     normalize_execution_profile,
     resolve_execution_profile_permissions,
@@ -20,6 +22,22 @@ _CODEX_VPS_ALL_PROXY = "socks5h://127.0.0.1:10808"
 _CODEX_VPS_NO_PROXY = "localhost,127.0.0.1,::1,*.local,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
 _CODEX_ROUTE_MODE_FILE = Path.home() / "network-tools" / "xray-vless-vps" / "console" / "data" / "codex-route-mode"
 _PROXY_ENV_KEYS = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy", "NO_PROXY", "no_proxy")
+_CODEX_VPS_PROXY_MARKERS = ("127.0.0.1:10809", "127.0.0.1:10808", "localhost:10809", "localhost:10808")
+_PROJECT_PYTHON_RUNNER_MODULES = {
+    "codebuddy": "task_dashboard.adapters.codebuddy_runner",
+    "claude": "task_dashboard.adapters.claude_runner",
+}
+
+
+def _callable_accepts_keyword(fn: Any, keyword: str) -> bool:
+    try:
+        signature = inspect.signature(fn)
+    except Exception:
+        return True
+    for param in signature.parameters.values():
+        if param.kind == inspect.Parameter.VAR_KEYWORD:
+            return True
+    return keyword in signature.parameters
 
 
 def _path_has_non_ascii(path: Path) -> bool:
@@ -138,6 +156,8 @@ def _normalize_codex_route_policy(value: str) -> str:
         return "strict_vps"
     if normalized in {"preferred", "vps_first", "vps_preferred"}:
         return "vps_preferred"
+    if normalized in {"system", "system_proxy", "external", "external_proxy", "follow_system"}:
+        return "system_proxy"
     if normalized in {"direct", "off", "no_proxy", "bypass"}:
         return "direct"
     return "strict_vps"
@@ -164,21 +184,59 @@ def _clear_proxy_env(env: dict[str, str]) -> None:
         env.pop(key, None)
 
 
+def _clear_codex_vps_proxy_env(env: dict[str, str]) -> None:
+    for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
+        value = str(env.get(key) or "")
+        if any(marker in value for marker in _CODEX_VPS_PROXY_MARKERS):
+            env.pop(key, None)
+
+
+def _apply_system_proxy_env(env: dict[str, str]) -> bool:
+    http_proxy = str(
+        env.get("HTTPS_PROXY")
+        or env.get("HTTP_PROXY")
+        or env.get("https_proxy")
+        or env.get("http_proxy")
+        or ""
+    ).strip()
+    all_proxy = str(env.get("ALL_PROXY") or env.get("all_proxy") or http_proxy or "").strip()
+    if not http_proxy and not all_proxy:
+        return False
+    if http_proxy:
+        env["HTTP_PROXY"] = http_proxy
+        env["HTTPS_PROXY"] = http_proxy
+        env["http_proxy"] = http_proxy
+        env["https_proxy"] = http_proxy
+    if all_proxy:
+        env["ALL_PROXY"] = all_proxy
+        env["all_proxy"] = all_proxy
+    no_proxy = str(env.get("NO_PROXY") or env.get("no_proxy") or _CODEX_VPS_NO_PROXY)
+    env["NO_PROXY"] = no_proxy
+    env["no_proxy"] = no_proxy
+    env["CODEX_VPS_PROXY_MODE"] = "system-proxy"
+    return True
+
+
 def _apply_codex_vps_proxy_env(env: dict[str, str]) -> None:
     flag = str(env.get("TASK_DASHBOARD_CODEX_VPS_PROXY", "1") or "").strip().lower()
     if flag in {"0", "false", "no", "off", "disabled"}:
-        _clear_proxy_env(env)
-        env["CODEX_VPS_PROXY_MODE"] = "direct"
+        _clear_codex_vps_proxy_env(env)
+        env["CODEX_VPS_PROXY_MODE"] = "local-default"
         return
 
     route_policy = _read_codex_route_policy(env)
     if route_policy == "direct":
-        _clear_proxy_env(env)
-        env["CODEX_VPS_PROXY_MODE"] = "direct"
+        _clear_codex_vps_proxy_env(env)
+        env["CODEX_VPS_PROXY_MODE"] = "local-default"
+        return
+    if route_policy == "system_proxy":
+        if not _apply_system_proxy_env(env):
+            _clear_proxy_env(env)
+            env["CODEX_VPS_PROXY_MODE"] = "system-proxy-fallback-direct"
         return
     if route_policy == "vps_preferred" and not _local_proxy_open(10809):
-        _clear_proxy_env(env)
-        env["CODEX_VPS_PROXY_MODE"] = "direct-fallback"
+        _clear_codex_vps_proxy_env(env)
+        env["CODEX_VPS_PROXY_MODE"] = "local-default-fallback"
         return
 
     http_proxy = str(env.get("TASK_DASHBOARD_CODEX_VPS_HTTP_PROXY") or _CODEX_VPS_HTTP_PROXY)
@@ -201,7 +259,13 @@ def _apply_codex_vps_proxy_env(env: dict[str, str]) -> None:
 
 def _build_spawn_env(*, cli_type: str, cmd: list[str]) -> dict[str, str]:
     env = dict(os.environ)
-    if str(cli_type or "").strip() != "codex":
+    cli = str(cli_type or "").strip().lower()
+    runner_module = _PROJECT_PYTHON_RUNNER_MODULES.get(cli, "")
+    if runner_module and runner_module in {str(part or "") for part in cmd}:
+        project_root = Path(__file__).resolve().parents[2]
+        env["PYTHONPATH"] = _prepend_path_entries(env.get("PYTHONPATH", ""), [str(project_root)])
+        return env
+    if cli != "codex":
         return env
     # Scope the VPS route to CCB-spawned Codex child processes only.
     _apply_codex_vps_proxy_env(env)
@@ -251,6 +315,17 @@ def _upsert_codex_cd_arg(cmd: list[str], cwd: Path) -> list[str]:
     updated = _remove_flag(list(cmd), "--cd", takes_value=True)
     updated = _remove_flag(updated, "-C", takes_value=True)
     return _insert_after_exec(updated, ["-C", str(cwd)])
+
+
+def _extract_resume_session_id(cmd: list[str]) -> str:
+    """Extract the session id following --resume / -r from a CLI command."""
+    parts = [str(item or "") for item in list(cmd or [])]
+    for index, token in enumerate(parts):
+        if token in {"--resume", "-r"} and index + 1 < len(parts):
+            return str(parts[index + 1] or "").strip()
+        if token.startswith("--resume="):
+            return token.split("=", 1)[1].strip()
+    return ""
 
 
 def _augment_codex_command_for_execution_profile(
@@ -321,6 +396,21 @@ def prepare_process_spawn(
             spawn_cmd = _upsert_codex_cd_arg(spawn_cmd, spawn_cwd)
             mode = "codex_ascii_workspace_mirror"
             mirrored_from = str(source_root)
+    if str(cli_type or "").strip() == "claude":
+        sid = _extract_resume_session_id(spawn_cmd)
+        if sid:
+            try:
+                from task_dashboard.adapters import get_adapter
+
+                adapter_cls = get_adapter("claude")
+                resolver = getattr(adapter_cls, "resolve_session_cwd", None)
+                session_cwd = str(resolver(sid) if callable(resolver) else "").strip()
+                candidate = Path(session_cwd).expanduser() if session_cwd else None
+                if candidate and candidate.exists() and candidate.is_dir():
+                    spawn_cwd = candidate
+                    mode = "claude_session_cwd"
+            except Exception:
+                pass
     return {
         "cmd": spawn_cmd,
         "spawn_cwd": spawn_cwd,
@@ -343,26 +433,42 @@ def build_execution_command(
     cli_type: str,
     supports_model: bool,
     profile_not_found_recent: Callable[[str, str], tuple[bool, float]],
+    permission_mode: str = "",
+    attachments: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    base_cmd = adapter_cls.build_resume_command(
-        session_id=session_id,
-        message=message,
-        output_path=output_path,
-        profile_label="",
-        model=(resolved_model if supports_model else ""),
-        reasoning_effort=(resolved_reasoning if cli_type == "codex" else ""),
-    )
+    def _build(profile: str) -> list[str]:
+        kwargs = {
+            "session_id": session_id,
+            "message": message,
+            "output_path": output_path,
+            "profile_label": profile,
+            "model": (
+                normalize_claude_model(resolved_model)
+                if str(cli_type or "").strip().lower() == "claude" and supports_model
+                else (resolved_model if supports_model else "")
+            ),
+            "reasoning_effort": (resolved_reasoning if cli_type == "codex" else ""),
+        }
+        if (
+            str(cli_type or "").strip().lower() in {"codebuddy", "claude"}
+            and str(permission_mode or "").strip()
+            and _callable_accepts_keyword(adapter_cls.build_resume_command, "permission_mode")
+        ):
+            kwargs["permission_mode"] = permission_mode
+        if (
+            str(cli_type or "").strip().lower() == "codex"
+            and isinstance(attachments, list)
+            and attachments
+            and _callable_accepts_keyword(adapter_cls.build_resume_command, "attachments")
+        ):
+            kwargs["attachments"] = attachments
+        return adapter_cls.build_resume_command(**kwargs)
+
+    base_cmd = _build("")
     cmd = list(base_cmd)
     profile_suppressed, profile_suppress_left_s = profile_not_found_recent(cli_type, profile_label)
     if profile_label and (not profile_suppressed):
-        cmd = adapter_cls.build_resume_command(
-            session_id=session_id,
-            message=message,
-            output_path=output_path,
-            profile_label=profile_label,
-            model=(resolved_model if supports_model else ""),
-            reasoning_effort=(resolved_reasoning if cli_type == "codex" else ""),
-        )
+        cmd = _build(profile_label)
     return {
         "base_cmd": list(base_cmd),
         "cmd": list(cmd),

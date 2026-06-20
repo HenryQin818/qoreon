@@ -1960,7 +1960,7 @@
       const cliField = el("label", { class: "cfg-field" });
       cliField.appendChild(el("span", { text: "CLI 类型" }));
       const cliSelect = el("select", { class: "input" });
-      ["codex", "claude", "opencode", "gemini", "trae"].forEach((value) => {
+      ["codex", "claude", "opencode", "gemini", "trae", "codebuddy"].forEach((value) => {
         const option = el("option", { value, text: value });
         option.selected = value === division.cli_type;
         cliSelect.appendChild(option);

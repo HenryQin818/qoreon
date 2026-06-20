@@ -126,19 +126,38 @@ def _build_compaction_observations(
             continue
         seen_compact_keys.add(compact_key)
         before = None
+        marker_before = None
         after = None
+        pre_window_tokens: list[dict[str, Any]] = []
+        for token in token_events:
+            token_ts = token.get("timestamp")
+            if token_ts is None or token_ts > compact_ts:
+                continue
+            if compact_ts - token_ts <= timedelta(minutes=30):
+                pre_window_tokens.append(token)
         for token in reversed(token_events):
             token_ts = token.get("timestamp")
             if token_ts is not None and token_ts <= compact_ts:
-                before = token
+                marker_before = token
                 break
+        if pre_window_tokens:
+            before = max(pre_window_tokens, key=lambda item: float(item.get("usage_pct") or 0.0))
+        else:
+            before = marker_before
         for token in token_events:
             token_ts = token.get("timestamp")
             if token_ts is not None and token_ts >= compact_ts:
                 after = token
                 break
         before_pct = before.get("usage_pct") if isinstance(before, dict) else None
+        marker_before_pct = marker_before.get("usage_pct") if isinstance(marker_before, dict) else None
         after_pct = after.get("usage_pct") if isinstance(after, dict) else None
+        transition_kind = ""
+        if before_pct is not None and after_pct is not None:
+            try:
+                transition_kind = "marker_sample_increase" if float(after_pct) > float(before_pct) else "normal_drop"
+            except (TypeError, ValueError):
+                transition_kind = ""
         if after_pct is not None:
             post_compact_values.append(float(after_pct))
         observations.append(
@@ -146,7 +165,10 @@ def _build_compaction_observations(
                 "compacted_at": _iso_local(compact_ts),
                 "before_pct": before_pct,
                 "after_pct": after_pct,
+                "transition_kind": transition_kind,
+                "marker_before_pct": marker_before_pct,
                 "before_observed_at": _iso_local(before.get("timestamp")) if isinstance(before, dict) else "",
+                "marker_before_observed_at": _iso_local(marker_before.get("timestamp")) if isinstance(marker_before, dict) else "",
                 "after_observed_at": _iso_local(after.get("timestamp")) if isinstance(after, dict) else "",
             }
         )
@@ -249,9 +271,16 @@ def _observed_baseline_floor(
     reasons = [f"最近压缩后={series_text}"]
     latest = compaction_observations[-1]
     if latest.get("before_pct") is not None and latest.get("after_pct") is not None:
-        reasons.append(
-            f"最近一次={int(round(float(latest['before_pct'])))}%→{int(round(float(latest['after_pct'])))}%"
-        )
+        before_pct = float(latest["before_pct"])
+        after_pct = float(latest["after_pct"])
+        if after_pct > before_pct:
+            reasons.append(
+                f"最近一次compact后={int(round(after_pct))}%（标记前采样{int(round(before_pct))}%）"
+            )
+        else:
+            reasons.append(
+                f"最近一次={int(round(before_pct))}%→{int(round(after_pct))}%"
+            )
     sustained_high_floor = len(after_values) >= 2 and min(after_values[-3:]) >= 60.0
     if sustained_high_floor:
         reasons.append("连续多次压缩后仍>=60%")
@@ -426,6 +455,8 @@ def analyze_codex_session_logs(session_id: str, log_index: dict[str, list[Path]]
         "compaction_observations": [],
         "recent_after_usage_pcts": [],
         "last_after_usage_pct": None,
+        "latest_token_usage_pct": None,
+        "latest_token_usage_at": "",
         "avg_turns_between_compactions": None,
         "avg_hours_between_compactions": None,
         "turns_since_last_compaction": None,
@@ -462,6 +493,8 @@ def analyze_codex_session_logs(session_id: str, log_index: dict[str, list[Path]]
     seen_first_compaction = False
     timeline_events: list[dict[str, Any]] = []
     observed_events: list[dict[str, Any]] = []
+    latest_token_usage_pct: float | None = None
+    latest_token_usage_at: datetime | None = None
 
     for path, path_size, _mtime in reversed(path_meta):
         if scanned_bytes >= max_bytes:
@@ -523,6 +556,8 @@ def analyze_codex_session_logs(session_id: str, log_index: dict[str, list[Path]]
                 usage_pct = _token_usage_pct(payload.get("info"))
                 if ts is not None and usage_pct is not None:
                     timeline_events.append({"kind": "token", "timestamp": ts, "usage_pct": usage_pct})
+                    latest_token_usage_pct = usage_pct
+                    latest_token_usage_at = ts
             elif payload_type == "context_compacted":
                 compacted_count += 1
                 if seen_first_compaction:
@@ -552,6 +587,8 @@ def analyze_codex_session_logs(session_id: str, log_index: dict[str, list[Path]]
     metrics["compaction_observations"] = compaction_observations
     metrics["recent_after_usage_pcts"] = [round(float(value), 1) for value in post_compact_values[-5:]]
     metrics["last_after_usage_pct"] = round(float(post_compact_values[-1]), 1) if post_compact_values else None
+    metrics["latest_token_usage_pct"] = round(float(latest_token_usage_pct), 1) if latest_token_usage_pct is not None else None
+    metrics["latest_token_usage_at"] = _iso_local(latest_token_usage_at)
     metrics["avg_turns_between_compactions"] = round(_avg([float(v) for v in turns_between_compactions]) or 0.0, 1) if turns_between_compactions else None
     metrics["avg_hours_between_compactions"] = round(_avg(hours_between_compactions) or 0.0, 1) if hours_between_compactions else None
     metrics["turns_since_last_compaction"] = turns_since_last_compaction if seen_first_compaction else None
@@ -660,6 +697,8 @@ def build_session_health_page(
                         "compaction_observations": [],
                         "recent_after_usage_pcts": [],
                         "last_after_usage_pct": None,
+                        "latest_token_usage_pct": None,
+                        "latest_token_usage_at": "",
                         "baseline_floor_pct": 0,
                         "baseline_floor_reasons": ["仅支持 Codex 日志"],
                         "baseline_floor_status": "未支持",
