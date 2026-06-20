@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Callable
 
+from task_dashboard.claude_models import normalize_claude_model
+from task_dashboard.claude_permissions import normalize_claude_permission_mode
+from task_dashboard.codebuddy_permissions import normalize_codebuddy_permission_mode
 from task_dashboard.runtime.execution_profiles import normalize_execution_profile
 from task_dashboard.runtime.project_execution_context import (
     build_project_execution_context,
@@ -65,15 +69,56 @@ def _coerce_optional_bool_local(value: Any) -> bool | None:
     return None
 
 
-def _coerce_int_local(value: Any, default: int = 0) -> int:
-    try:
-        return int(value)
-    except Exception:
-        return int(default)
-
-
 def _normalize_execution_profile_local(value: Any) -> str:
     return normalize_execution_profile(_safe_text_local(value, 40), allow_empty=True)
+
+
+def _path_identity_local(value: Any) -> str:
+    text = _safe_text_local(value, 4000).strip()
+    if not text:
+        return ""
+    path = Path(text).expanduser()
+    try:
+        if path.exists():
+            return str(path.resolve())
+        return str(path)
+    except Exception:
+        return text
+
+
+def _paths_equal_local(left: Any, right: Any) -> bool:
+    left_id = _path_identity_local(left)
+    right_id = _path_identity_local(right)
+    return bool(left_id and right_id and left_id == right_id)
+
+
+def _session_has_explicit_workdir_local(session: dict[str, Any] | None, *, project_workdir: str = "") -> bool:
+    row = session if isinstance(session, dict) else {}
+    context = row.get("project_execution_context") if isinstance(row.get("project_execution_context"), dict) else {}
+    override = context.get("override") if isinstance(context.get("override"), dict) else {}
+    fields = override.get("fields") if isinstance(override.get("fields"), list) else []
+    if "workdir" in {str(item or "").strip() for item in fields}:
+        return True
+    workdir = _safe_text_local(row.get("workdir"), 4000).strip()
+    if not workdir:
+        return False
+    if project_workdir and _paths_equal_local(workdir, project_workdir):
+        return False
+    return True
+
+
+def _resolve_callable_path_text_local(fn: Callable[..., Any] | None, *args: Any) -> str:
+    if not callable(fn):
+        return ""
+    try:
+        candidate = fn(*args)
+    except Exception:
+        return ""
+    text = _safe_text_local(candidate, 4000).strip()
+    if not text:
+        return ""
+    path = Path(text).expanduser()
+    return str(path) if path.exists() and path.is_dir() else text
 
 
 def _normalize_session_role_local(value: Any) -> str:
@@ -104,17 +149,50 @@ def _normalize_session_create_mode_local(value: Any) -> str:
 
 def parse_session_create_request(body: dict[str, Any]) -> dict[str, Any]:
     row = body if isinstance(body, dict) else {}
+    raw_cli_type = _safe_text_local(
+        row.get("cli_type") if "cli_type" in row else row.get("cliType"),
+        40,
+    ).strip().lower()
     set_as_primary = _coerce_optional_bool_local(
         row.get("set_as_primary") if "set_as_primary" in row else row.get("setAsPrimary")
     )
-    reuse_strategy = _safe_text_local(
+    permission_mode_explicit = raw_cli_type != "claude" and (
+        "codebuddy_permission_mode" in row or "codebuddyPermissionMode" in row
+    )
+    claude_permission_mode_explicit = (
+        "claude_permission_mode" in row
+        or "claudePermissionMode" in row
+        or (
+            raw_cli_type == "claude"
+            and ("permission_mode" in row or "permissionMode" in row)
+        )
+    )
+    raw_permission_mode = (
+        row.get("codebuddy_permission_mode")
+        if "codebuddy_permission_mode" in row
+        else row.get("codebuddyPermissionMode")
+    )
+    raw_claude_permission_mode = (
+        row.get("claude_permission_mode")
+        if "claude_permission_mode" in row
+        else (
+            row.get("claudePermissionMode")
+            if "claudePermissionMode" in row
+            else (row.get("permission_mode") if "permission_mode" in row else row.get("permissionMode"))
+        )
+    )
+    raw_reuse_strategy = _safe_text_local(
         row.get("reuse_strategy") if "reuse_strategy" in row else row.get("reuseStrategy"),
         80,
     ).strip()
-    create_timeout_s = _coerce_int_local(
-        row.get("create_timeout_s") if "create_timeout_s" in row else row.get("createTimeoutS"),
-        0,
-    )
+    raw_create_timeout = row.get("create_timeout_s") if "create_timeout_s" in row else row.get("createTimeoutS")
+    try:
+        create_timeout_s = max(10, int(raw_create_timeout)) if raw_create_timeout not in (None, "") else 90
+    except Exception:
+        create_timeout_s = 90
+    has_reuse_strategy = "reuse_strategy" in row or "reuseStrategy" in row
+    if not raw_reuse_strategy and set_as_primary is True and not has_reuse_strategy:
+        raw_reuse_strategy = "create_new"
     return {
         "mode": _normalize_session_create_mode_local(
             row.get("mode") if "mode" in row else row.get("createMode")
@@ -127,11 +205,23 @@ def parse_session_create_request(body: dict[str, Any]) -> dict[str, Any]:
             else (row.get("sessionId") if "sessionId" in row else row.get("existingSessionId")),
             80,
         ).strip(),
-        "cli_type": _safe_text_local(row.get("cli_type"), 40).strip() or "codex",
-        "model": _safe_text_local(row.get("model"), 120).strip(),
+        "cli_type": raw_cli_type or "codex",
+        "model": (
+            normalize_claude_model(row.get("model"))
+            if raw_cli_type == "claude"
+            else _safe_text_local(row.get("model"), 120).strip()
+        ),
         "reasoning_effort": _normalize_reasoning_effort_local(
             row.get("reasoning_effort") if "reasoning_effort" in row else row.get("reasoningEffort")
         ),
+        "codebuddy_permission_mode": normalize_codebuddy_permission_mode(raw_permission_mode)
+        if permission_mode_explicit
+        else "",
+        "_codebuddy_permission_mode_explicit": permission_mode_explicit,
+        "claude_permission_mode": normalize_claude_permission_mode(raw_claude_permission_mode)
+        if claude_permission_mode_explicit
+        else "",
+        "_claude_permission_mode_explicit": claude_permission_mode_explicit,
         "alias": _safe_text_local(row.get("alias"), 200).strip(),
         "environment": _safe_text_local(
             row.get("environment") if "environment" in row else row.get("environmentName"),
@@ -147,9 +237,8 @@ def parse_session_create_request(body: dict[str, Any]) -> dict[str, Any]:
             row.get("session_role") if "session_role" in row else row.get("sessionRole")
         ),
         "purpose": _safe_text_local(row.get("purpose"), 200).strip(),
-        "reuse_strategy": reuse_strategy or "reuse_active",
-        "reuse_strategy_explicit": bool(reuse_strategy),
-        "create_timeout_s": max(0, create_timeout_s),
+        "reuse_strategy": raw_reuse_strategy or "reuse_active",
+        "create_timeout_s": create_timeout_s,
         "set_as_primary": set_as_primary,
         "first_message": _safe_text_local(
             row.get("first_message") if "first_message" in row else row.get("firstMessage"),
@@ -163,17 +252,46 @@ def parse_session_update_fields(body: dict[str, Any]) -> dict[str, Any]:
     update_fields: dict[str, Any] = {}
     if "alias" in row:
         update_fields["alias"] = _safe_text_local(row.get("alias"), 200).strip()
-    if "status" in row:
-        update_fields["status"] = _safe_text_local(row.get("status"), 40).strip()
+    # `status` is a legacy read-only compatibility field; runtime state is
+    # projected from run/session evidence instead of being updated by PUT.
     if "channel_name" in row:
         update_fields["channel_name"] = _safe_text_local(row.get("channel_name"), 200).strip()
-    if "cli_type" in row:
-        update_fields["cli_type"] = _safe_text_local(row.get("cli_type"), 40).strip()
+    if "cli_type" in row or "cliType" in row:
+        update_fields["cli_type"] = _safe_text_local(
+            row.get("cli_type") if "cli_type" in row else row.get("cliType"),
+            40,
+        ).strip()
     if "model" in row:
-        update_fields["model"] = _safe_text_local(row.get("model"), 120).strip()
+        raw_model = _safe_text_local(row.get("model"), 120).strip()
+        if str(row.get("cli_type") or row.get("cliType") or "").strip().lower() == "claude":
+            raw_model = normalize_claude_model(raw_model)
+        update_fields["model"] = raw_model
     if "reasoning_effort" in row or "reasoningEffort" in row:
         update_fields["reasoning_effort"] = _normalize_reasoning_effort_local(
             row.get("reasoning_effort") if "reasoning_effort" in row else row.get("reasoningEffort")
+        )
+    if "codebuddy_permission_mode" in row or "codebuddyPermissionMode" in row:
+        update_fields["codebuddy_permission_mode"] = normalize_codebuddy_permission_mode(
+            row.get("codebuddy_permission_mode")
+            if "codebuddy_permission_mode" in row
+            else row.get("codebuddyPermissionMode")
+        )
+    if (
+        "claude_permission_mode" in row
+        or "claudePermissionMode" in row
+        or (
+            str(row.get("cli_type") or row.get("cliType") or "").strip().lower() == "claude"
+            and ("permission_mode" in row or "permissionMode" in row)
+        )
+    ):
+        update_fields["claude_permission_mode"] = normalize_claude_permission_mode(
+            row.get("claude_permission_mode")
+            if "claude_permission_mode" in row
+            else (
+                row.get("claudePermissionMode")
+                if "claudePermissionMode" in row
+                else (row.get("permission_mode") if "permission_mode" in row else row.get("permissionMode"))
+            )
         )
     if "environment" in row or "environmentName" in row:
         update_fields["environment"] = _safe_text_local(
@@ -223,6 +341,8 @@ def parse_announce_request(
     local_server_host: str,
     local_server_port: int,
     project_id_from_session: str = "",
+    resolve_channel_workdir: Callable[[str, str], Any] | None = None,
+    resolve_project_workdir: Callable[[str], Any] | None = None,
 ) -> dict[str, Any]:
     row = body if isinstance(body, dict) else {}
     project_id = _safe_text_local(row.get("projectId"), 80).strip()
@@ -238,6 +358,41 @@ def parse_announce_request(
     message = _safe_text_local(row.get("message"), 20_000).strip()
     sender_fields = extract_sender_fields(row)
     run_extra_fields = extract_run_extra_fields(row)
+    raw_cli_type = str(row.get("cliType") or row.get("cli_type") or "").strip().lower()
+    session_cli_type = str((session_data or {}).get("cli_type") or "").strip().lower()
+    effective_cli_type = session_cli_type or raw_cli_type or "codex"
+    if (
+        (
+            raw_cli_type != "claude"
+            and ("codebuddy_permission_mode" in row or "codebuddyPermissionMode" in row)
+        )
+        or (raw_cli_type != "claude" and ("permission_mode" in row or "permissionMode" in row))
+    ):
+        raw_permission_mode = (
+            row.get("codebuddy_permission_mode")
+            if "codebuddy_permission_mode" in row
+            else (
+                row.get("codebuddyPermissionMode")
+                if "codebuddyPermissionMode" in row
+                else (row.get("permission_mode") if "permission_mode" in row else row.get("permissionMode"))
+            )
+        )
+        run_extra_fields["codebuddy_permission_mode"] = normalize_codebuddy_permission_mode(raw_permission_mode)
+    if (
+        "claude_permission_mode" in row
+        or "claudePermissionMode" in row
+        or (raw_cli_type == "claude" and ("permission_mode" in row or "permissionMode" in row))
+    ):
+        raw_claude_permission_mode = (
+            row.get("claude_permission_mode")
+            if "claude_permission_mode" in row
+            else (
+                row.get("claudePermissionMode")
+                if "claudePermissionMode" in row
+                else (row.get("permission_mode") if "permission_mode" in row else row.get("permissionMode"))
+            )
+        )
+        run_extra_fields["claude_permission_mode"] = normalize_claude_permission_mode(raw_claude_permission_mode)
     target_ref = run_extra_fields.get("target_ref")
     if not isinstance(target_ref, dict):
         target_ref = {}
@@ -298,6 +453,21 @@ def parse_announce_request(
         requested_work_context,
         override_source="request",
     )
+    if (
+        effective_cli_type in {"claude", "codebuddy"}
+        and not str(requested_work_context.get("workdir") or "").strip()
+        and project_id
+        and channel_name
+        and callable(resolve_channel_workdir)
+    ):
+        project_workdir = _resolve_callable_path_text_local(resolve_project_workdir, project_id)
+        if not _session_has_explicit_workdir_local(session_data, project_workdir=project_workdir):
+            channel_workdir = _resolve_callable_path_text_local(resolve_channel_workdir, project_id, channel_name)
+            if channel_workdir:
+                effective_work_context["workdir"] = channel_workdir
+                if not request_override_source and not _paths_equal_local(channel_workdir, project_workdir):
+                    request_override_fields = sorted(set(list(request_override_fields or []) + ["workdir"]))
+                    request_override_source = "session"
     run_extra_fields.update(effective_work_context)
     run_extra_fields["execution_profile"] = execution_profile
 

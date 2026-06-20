@@ -1208,7 +1208,7 @@ class ConversationTimelineUiLogicTests(unittest.TestCase):
         if proc.returncode != 0:
             self.fail(proc.stderr or proc.stdout or "node assistant generated attachment filter regression script failed")
 
-    def test_run_process_rows_group_actions_under_steps(self) -> None:
+    def test_run_process_rows_render_actions_as_independent_nodes(self) -> None:
         script = textwrap.dedent(
             r"""
             const assert = require("node:assert/strict");
@@ -1246,12 +1246,32 @@ class ConversationTimelineUiLogicTests(unittest.TestCase):
             function normalizeProcessTimestamp(value) {
               return String(value == null ? "" : value).trim();
             }
+            eval(extractFunction("isUnsafeProcessRowKind"));
+            eval(extractFunction("containsUnsafeProcessMarker"));
             eval(extractFunction("normalizeProcessMessageText"));
             eval(extractFunction("extractStructuredProcessRowTime"));
             eval(extractFunction("firstProcessMetaText"));
+            eval(extractFunction("clampRunProcessDisplayText"));
+            eval(extractFunction("looksLikeRawProcessJsonText"));
+            eval(extractFunction("isLowValueRunProcessActionTarget"));
+            eval(extractFunction("firstRunProcessActionTargetText"));
+            eval(extractFunction("structuredProcessRowFallbackText"));
             eval(extractFunction("normalizeRunProcessTimelineRow"));
             eval(extractFunction("isRunProcessActionRow"));
+            eval(extractFunction("normalizeRunProcessActionType"));
             eval(extractFunction("runProcessActionLabel"));
+            eval(extractFunction("runProcessRowCallId"));
+            eval(extractFunction("runProcessActionEventText"));
+            eval(extractFunction("isAssistantProgressProcessRow"));
+            eval(extractFunction("isRunProcessToolStartRow"));
+            eval(extractFunction("isRunProcessToolFailedClosingRow"));
+            eval(extractFunction("isRunProcessToolCompletedClosingRow"));
+            eval(extractFunction("buildRunProcessCallStatusIndex"));
+            eval(extractFunction("normalizeRunProcessActionStatus"));
+            eval(extractFunction("runProcessActionStatusLabel"));
+            eval(extractFunction("runProcessActionTarget"));
+            eval(extractFunction("runProcessActionErrorSummary"));
+            eval(extractFunction("buildRunProcessActionNode"));
             eval(extractFunction("buildRunProcessStepGroups"));
 
             const mixed = buildRunProcessStepGroups([
@@ -1263,19 +1283,126 @@ class ConversationTimelineUiLogicTests(unittest.TestCase):
             ]);
             assert.equal(mixed.stepCount, 2);
             assert.equal(mixed.actionCount, 3);
-            assert.equal(mixed.groups[0].actions.length, 2);
-            assert.equal(mixed.groups[0].actions[0].label, "命令");
-            assert.equal(mixed.groups[0].actions[1].label, "文件");
-            assert.equal(mixed.groups[1].actions[0].label, "协作");
+            assert.equal(mixed.groups.length, 5);
+            assert.equal(mixed.groups[0].kind, "step");
+            assert.equal(mixed.groups[1].kind, "action");
+            assert.equal(mixed.groups[1].action.label, "命令");
+            assert.equal(mixed.groups[1].action.typeKey, "command");
+            assert.equal(mixed.groups[2].action.label, "编辑");
+            assert.equal(mixed.groups[4].action.label, "消息");
 
             const actionOnly = buildRunProcessStepGroups([
               { text: "执行命令: build", event_type: "command_execution", item_type: "command_execution" },
               { text: "工具完成: node --check", event_type: "tool_completed", item_type: "tool_call" },
             ]);
-            assert.equal(actionOnly.stepCount, 1);
-            assert.equal(actionOnly.groups[0].synthetic, true);
-            assert.equal(actionOnly.groups[0].text, "启动与准备动作");
-            assert.equal(actionOnly.groups[0].actions.length, 2);
+            assert.equal(actionOnly.stepCount, 0);
+            assert.equal(actionOnly.actionCount, 2);
+            assert.equal(actionOnly.groups.length, 2);
+            assert.equal(actionOnly.groups[0].kind, "action");
+            assert.equal(actionOnly.groups[0].synthetic, undefined);
+            assert.equal(actionOnly.groups[0].text.includes("启动与准备动作"), false);
+            assert.equal(actionOnly.groups[0].action.status, "running");
+            assert.equal(actionOnly.groups[1].action.status, "completed");
+
+            const pairedActions = buildRunProcessStepGroups([
+              { text: "Bash: node --check", event_type: "tool_started", item_type: "function_call", call_id: "call_bash", title: "Bash" },
+              { text: "Bash 完成", event_type: "tool_completed", item_type: "function_call_result", call_id: "call_bash" },
+              { text: "Read: server.py", event_type: "tool_started", item_type: "function_call", call_id: "call_read", title: "Read" },
+              { text: "进展：正在整理结果", event_type: "assistant_progress" },
+              { text: "Write: bad.py", event_type: "tool_started", item_type: "function_call", call_id: "call_write", title: "Write" },
+              { text: "Write 失败", event_type: "tool_failed", item_type: "function_call_result", call_id: "call_write", error_summary: "permission denied" },
+            ]);
+            assert.equal(pairedActions.groups[0].action.callId, "call_bash");
+            assert.equal(pairedActions.groups[0].action.status, "completed");
+            assert.equal(pairedActions.groups[0].action.statusLabel, "已完成");
+            assert.equal(pairedActions.groups[2].action.status, "running");
+            assert.equal(pairedActions.groups[2].action.statusLabel, "进行中");
+            assert.equal(pairedActions.groups[3].action.status, "completed");
+            assert.equal(pairedActions.groups[3].action.statusLabel, "进展记录");
+            assert.equal(pairedActions.groups[4].action.status, "failed");
+            assert.equal(pairedActions.groups[4].action.statusLabel, "失败");
+
+            const typeCases = [
+              [{ text: "Read web/task.js", event_type: "file_read" }, "read"],
+              [{ text: "更新文件", event_type: "file_change" }, "edit"],
+              [{ text: "执行命令", event_type: "command_started" }, "command"],
+              [{ text: "检索资料", event_type: "search_query" }, "search"],
+              [{ text: "打开页面", event_type: "browser_open" }, "web"],
+              [{ text: "发送回执", event_type: "collab_receipt" }, "message"],
+              [{ text: "调用工具", event_type: "tool_started", item_type: "function_call" }, "tool"],
+              [{ text: "系统事件", event_type: "runtime_event" }, "system"],
+              [{ text: "自定义事件", event_type: "custom_event" }, "unknown"],
+            ];
+            assert.deepEqual(typeCases.map(([row]) => normalizeRunProcessActionType(row)), typeCases.map(([, key]) => key));
+
+            const statusRows = [
+              { text: "等待", event_type: "tool_call", status: "pending" },
+              { text: "开始", event_type: "tool_started" },
+              { text: "完成", event_type: "tool_completed" },
+              { text: "失败", event_type: "tool_error" },
+              { text: "取消", event_type: "tool_cancelled" },
+              { text: "跳过", event_type: "tool_skipped" },
+            ];
+            assert.deepEqual(statusRows.map((row) => normalizeRunProcessActionStatus(row)), [
+              "pending",
+              "running",
+              "completed",
+              "failed",
+              "cancelled",
+              "skipped",
+            ]);
+
+            const noRawJson = buildRunProcessStepGroups([
+              { event_type: "tool_started", item_type: "function_call", title: "Read server.py", rawContent: [{ text: "hidden reasoning" }] },
+            ]);
+            assert.equal(noRawJson.groups[0].kind, "action");
+            assert.equal(noRawJson.groups[0].text.includes("rawContent"), false);
+            assert.equal(noRawJson.groups[0].text.includes("hidden reasoning"), false);
+            assert.equal(noRawJson.groups[0].action.target, "Read server.py");
+
+            const claudeActions = buildRunProcessStepGroups([
+              {
+                event_type: "file_read",
+                item_type: "file_read",
+                source: "claude",
+                path: "web/task_parts/70-conversation-timeline.js",
+                text: "读取文件",
+              },
+              {
+                event_type: "tool_started",
+                item_type: "function_call",
+                source: "claude",
+                title: "AskUserQuestion",
+                text: "claude",
+              },
+              {
+                event_type: "tool_started",
+                item_type: "function_call",
+                source: "claude",
+              },
+            ]);
+            assert.equal(claudeActions.groups[0].action.target, "web/task_parts/70-conversation-timeline.js");
+            assert.equal(claudeActions.groups[1].action.target, "AskUserQuestion");
+            assert.notEqual(claudeActions.groups[0].action.target, "claude");
+            assert.notEqual(claudeActions.groups[1].action.target, "claude");
+            assert.notEqual(claudeActions.groups[2].action.target, "claude");
+            assert.equal(claudeActions.groups[2].text.includes("claude"), false);
+
+            const failedLong = buildRunProcessStepGroups([
+              {
+                text: "执行命令: " + "node ".repeat(120),
+                event_type: "command_failed",
+                item_type: "command_execution",
+                command: "node " + "very-long-command ".repeat(80),
+                error_summary: "provider temporary error",
+              },
+            ]);
+            assert.equal(failedLong.groups[0].action.status, "failed");
+            assert.equal(failedLong.groups[0].action.statusLabel, "失败");
+            assert.equal(failedLong.groups[0].action.text.length <= 180, true);
+            assert.equal(failedLong.groups[0].action.detailText.length <= 640, true);
+            assert.equal(failedLong.groups[0].action.target.length <= 120, true);
+            assert.equal(failedLong.groups[0].action.errorSummary, "provider temporary error");
 
             const plain = buildRunProcessStepGroups([
               { text: "普通过程消息一" },
@@ -1309,6 +1436,49 @@ class ConversationTimelineUiLogicTests(unittest.TestCase):
         self.assertIn("border: 0;", timeline_css)
         self.assertIn("background: transparent;", timeline_css)
         self.assertNotIn('". action time"', timeline_css)
+        self.assertIn("renderRunProcessActionNode", timeline_js)
+        self.assertIn('class: "process-panel inline-live"', timeline_js)
+        self.assertIn(".process-action-node", timeline_css)
+        self.assertIn("overflow-wrap: anywhere;", timeline_css)
+
+    def test_process_action_node_is_collapsed_clickable_and_safe(self) -> None:
+        timeline_js = (REPO_ROOT / "web/task_parts/70-conversation-timeline.js").read_text()
+        timeline_css = (REPO_ROOT / "web/task_parts/70-conversation-timeline.css").read_text()
+
+        self.assertIn('role: "button"', timeline_js)
+        self.assertIn('"aria-expanded": expanded ? "true" : "false"', timeline_js)
+        self.assertIn('node.addEventListener("click", toggle);', timeline_js)
+        self.assertIn('node.addEventListener("keydown"', timeline_js)
+        self.assertIn("toggleProcessActionGroupExpanded(runId, step);", timeline_js)
+        self.assertIn("process-action-node-detail", timeline_js)
+        self.assertIn("appendProcessActionDetailRow(detail, \"错误\"", timeline_js)
+        self.assertIn("appendProcessActionDetailRow(detail, \"来源\"", timeline_js)
+        self.assertIn('expanded ? "收起" : "展开"', timeline_js)
+        self.assertIn("grid-template-columns: auto minmax(0, 1fr) auto auto;", timeline_css)
+        self.assertIn("text-overflow: ellipsis;", timeline_css)
+        self.assertIn("white-space: nowrap;", timeline_css)
+        self.assertIn(".process-action-node.status-failed", timeline_css)
+        self.assertIn(".process-action-node-detail-row.is-error", timeline_css)
+
+    def test_inline_process_entry_shows_count_with_unit(self) -> None:
+        timeline_js = (REPO_ROOT / "web/task_parts/70-conversation-timeline.js").read_text()
+
+        self.assertIn('"过程 " + processInfo.count + " 条"', timeline_js)
+        self.assertIn('"过程 " + Math.max(processInfo.count, processInfo.items.length) + " 条"', timeline_js)
+        self.assertNotIn('"过程 " + processInfo.count) : "展开过程"', timeline_js)
+        self.assertNotIn('text: processInfo.count > 0 ? ("过程 " + processInfo.count) : "过程"', timeline_js)
+
+    def test_stale_interrupted_card_is_suppressed_by_latest_done_run(self) -> None:
+        conversation_js = (REPO_ROOT / "web/task_parts/60-conversation.js").read_text()
+        timeline_js = (REPO_ROOT / "web/task_parts/70-conversation-timeline.js").read_text()
+
+        self.assertIn("const currentLatestDoneRunId = (() => {", conversation_js)
+        self.assertIn("currentLatestDoneRunId,", conversation_js)
+        self.assertIn("const currentLatestDoneRunId = String(payload.currentLatestDoneRunId || \"\").trim();", timeline_js)
+        self.assertIn("const staleErrorWithDoneRun = staleProblemState", timeline_js)
+        self.assertIn("最新 run \" + shortId(currentLatestDoneRunId) + \" 已完成", timeline_js)
+        self.assertIn("const allowRecoveryOps = !staleErrorNote &&", timeline_js)
+        self.assertIn("if (!staleErrorNote && (st === \"error\"", timeline_js)
 
 
 if __name__ == "__main__":

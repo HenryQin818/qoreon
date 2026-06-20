@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -69,6 +70,47 @@ class TestRunRoutes(unittest.TestCase):
 
             self.assertEqual(len(second), 1)
             self.assertEqual(str(second[0].get("status") or ""), "error")
+
+    def test_cancel_edit_terminalizes_hidden_queued_run(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            store = server.RunStore(Path(td))
+            created = store.create_run(
+                project_id="task_dashboard",
+                channel_name="子级02-CCB运行时（server-并发-安全-启动）",
+                session_id="session-1",
+                message="撤回这条消息",
+            )
+            run_id = str(created.get("id") or "").strip()
+            audits: list[dict[str, object]] = []
+
+            code, payload = run_routes.perform_run_action_response(
+                run_id=run_id,
+                body={"action": "cancel_edit"},
+                store=store,
+                scheduler=None,
+                run_process_registry=None,
+                audit_action=lambda **kwargs: audits.append(kwargs),
+                now_iso=lambda: "2026-06-10T16:37:55+0800",
+                require_scheduler_enabled=lambda: False,
+                dispatch_terminal_callback_for_run=lambda **_kwargs: None,
+            )
+
+            self.assertEqual(code, 200)
+            self.assertTrue(payload.get("ok"))
+            meta = store.load_meta(run_id) or {}
+            self.assertTrue(meta.get("hidden"))
+            self.assertEqual(meta.get("cancelAction"), "cancel_edit")
+            self.assertEqual(meta.get("cancelledAt"), "2026-06-10T16:37:55+0800")
+            self.assertEqual(meta.get("status"), "interrupted")
+            self.assertEqual(meta.get("display_state"), "interrupted")
+            self.assertEqual(meta.get("outcome_state"), "interrupted_user")
+            self.assertEqual(meta.get("failure_class"), "interrupted")
+            self.assertEqual(meta.get("error_class"), "user_cancelled")
+            self.assertEqual(meta.get("finishedAt"), "2026-06-10T16:37:55+0800")
+            self.assertEqual(meta.get("error"), "cancelled by user before start")
+            self.assertEqual(meta.get("recovery_required"), False)
+            self.assertEqual(meta.get("recovery_mode"), "")
+            self.assertTrue(audits)
 
     def test_list_runs_response_light_skips_session_semantics(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -562,7 +604,7 @@ class TestRunRoutes(unittest.TestCase):
                 "正在比对详情接口与列表摘要的聚合差异",
             )
 
-    def test_get_run_detail_response_for_claude_prefers_terminal_message_and_clears_legacy_process(self) -> None:
+    def test_get_run_detail_response_for_claude_prefers_terminal_message_and_preserves_process(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             store = server.RunStore(Path(td))
             created = store.create_run(
@@ -609,18 +651,214 @@ class TestRunRoutes(unittest.TestCase):
             )
             self.assertEqual(payload.get("partialMessage"), "")
             self.assertEqual(payload.get("agentMessages"), [])
-            self.assertEqual(payload.get("processRows"), [])
+            self.assertEqual(
+                payload.get("processRows"),
+                [{"text": "1. 已完成恢复: 是", "at": "2026-03-20T00:43:32+0800"}],
+            )
+            self.assertEqual(
+                payload.get("processEvents"),
+                [{"text": "1. 已完成恢复: 是", "at": "2026-03-20T00:43:32+0800"}],
+            )
             self.assertEqual((payload.get("run") or {}).get("agentMessagesCount"), 0)
-            self.assertEqual((payload.get("run") or {}).get("partialPreview"), "")
 
             persisted = store.load_meta(run_id) or {}
             self.assertEqual(persisted.get("agentMessagesCount"), 0)
-            self.assertEqual(persisted.get("partialPreview"), "")
-            self.assertEqual(persisted.get("processRows"), [])
+            self.assertEqual(
+                persisted.get("processRows"),
+                [{"text": "1. 已完成恢复: 是", "at": "2026-03-20T00:43:32+0800"}],
+            )
             self.assertEqual(
                 persisted.get("lastPreview"),
                 "1. 已完成恢复: 是\n2. 当前主线: 等待用户指示当前任务\n3. 唯一阻塞: 无",
             )
+
+    def test_get_run_detail_response_for_claude_recovers_process_events_from_log(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            store = server.RunStore(Path(td))
+            created = store.create_run(
+                project_id="task_dashboard",
+                channel_name="子级03-多CLI适配器（codex-claude-opencode）",
+                session_id="session-claude",
+                message="ping",
+                cli_type="claude",
+            )
+            run_id = str(created.get("id") or "").strip()
+            meta = store.load_meta(run_id) or {}
+            meta["status"] = "done"
+            meta["agentMessagesCount"] = 2
+            meta["partialPreview"] = "旧终端过程"
+            store.save_meta(run_id, meta)
+            started = {
+                "type": "tool_call.started",
+                "event_type": "tool_started",
+                "item_type": "function_call",
+                "title": "Read",
+                "text": "调用工具: Read task_dashboard/runtime/run_routes.py",
+                "source": "claude",
+                "raw_ref": "call_claude_001",
+                "call_id": "call_claude_001",
+            }
+            completed = {
+                "type": "tool_call.completed",
+                "event_type": "tool_completed",
+                "item_type": "function_call_result",
+                "title": "Read",
+                "text": "工具完成: Read 读取完成",
+                "source": "claude",
+                "raw_ref": "call_claude_001",
+                "call_id": "call_claude_001",
+            }
+            store._paths(run_id)["log"].write_text(
+                "\n".join(
+                    [
+                        "# command header",
+                        f"[stdout] {json.dumps(started, ensure_ascii=False)}",
+                        "[stdout] Claude 正文",
+                        f"[stdout] {json.dumps(completed, ensure_ascii=False)}",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            code, payload = get_run_detail_response(
+                run_id=run_id,
+                store=store,
+                scheduler=None,
+                maybe_trigger_restart_recovery_lazy=lambda *_args, **_kwargs: 0,
+                maybe_trigger_queued_recovery_lazy=lambda *_args, **_kwargs: 0,
+                build_run_observability_fields=lambda *_args, **_kwargs: {},
+                error_hint=lambda _err: "",
+            )
+
+            expected_events = [
+                {
+                    "event_type": "tool_started",
+                    "item_type": "function_call",
+                    "title": "Read",
+                    "text": "调用工具: Read task_dashboard/runtime/run_routes.py",
+                    "source": "claude",
+                    "raw_ref": "call_claude_001",
+                    "call_id": "call_claude_001",
+                },
+                {
+                    "event_type": "tool_completed",
+                    "item_type": "function_call_result",
+                    "title": "Read",
+                    "text": "工具完成: Read 读取完成",
+                    "source": "claude",
+                    "raw_ref": "call_claude_001",
+                    "call_id": "call_claude_001",
+                },
+            ]
+            self.assertEqual(code, 200)
+            self.assertEqual(payload.get("lastMessage"), "Claude 正文")
+            self.assertEqual(payload.get("agentMessages"), [])
+            self.assertEqual(payload.get("processRows"), expected_events)
+            self.assertEqual(payload.get("processEvents"), expected_events)
+
+            persisted = store.load_meta(run_id) or {}
+            self.assertEqual(persisted.get("processRows"), expected_events)
+            self.assertEqual(persisted.get("process_events"), expected_events)
+            self.assertEqual(persisted.get("processEvents"), expected_events)
+            self.assertEqual(persisted.get("agentMessagesCount"), 0)
+
+    def test_get_run_detail_response_for_claude_syncs_process_events_aliases(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            store = server.RunStore(Path(td))
+            created = store.create_run(
+                project_id="task_dashboard",
+                channel_name="子级03-多CLI适配器（codex-claude-opencode）",
+                session_id="session-claude",
+                message="ping",
+                cli_type="claude",
+            )
+            run_id = str(created.get("id") or "").strip()
+            process_events = [
+                {
+                    "event_type": "tool_started",
+                    "item_type": "function_call",
+                    "title": "Read",
+                    "text": "调用工具: Read task_dashboard/runtime/run_routes.py",
+                    "source": "claude",
+                    "raw_ref": "call_claude_001",
+                    "call_id": "call_claude_001",
+                    "reasoning": "hidden",
+                    "rawContent": "hidden",
+                },
+                {
+                    "event_type": "tool_completed",
+                    "item_type": "function_call_result",
+                    "title": "Read",
+                    "text": "工具完成: Read 读取完成",
+                    "source": "claude",
+                    "raw_ref": "call_claude_001",
+                    "call_id": "call_claude_001",
+                },
+                {
+                    "event_type": "tool_started",
+                    "item_type": "function_call",
+                    "title": "AskUserQuestion",
+                    "text": (
+                        '调用工具: AskUserQuestion {"questions":[{"question":"第一条完整问题正文不应出现在过程轨"},'
+                        '{"question":"第二条完整问题正文不应出现在过程轨"}],"prompt":"完整 prompt 不应出现在过程轨"}'
+                    ),
+                    "source": "claude",
+                    "raw_ref": "call_claude_ask",
+                    "call_id": "call_claude_ask",
+                },
+            ]
+            meta = store.load_meta(run_id) or {}
+            meta["status"] = "done"
+            meta["processRows"] = []
+            meta["process_events"] = []
+            meta["processEvents"] = process_events
+            store.save_meta(run_id, meta)
+            store._paths(run_id)["log"].write_text("[stdout] Claude 正文\n", encoding="utf-8")
+
+            code, payload = get_run_detail_response(
+                run_id=run_id,
+                store=store,
+                scheduler=None,
+                maybe_trigger_restart_recovery_lazy=lambda *_args, **_kwargs: 0,
+                maybe_trigger_queued_recovery_lazy=lambda *_args, **_kwargs: 0,
+                build_run_observability_fields=lambda *_args, **_kwargs: {},
+                error_hint=lambda _err: "",
+            )
+
+            expected_events = [
+                {key: value for key, value in process_events[0].items() if key not in {"reasoning", "rawContent"}},
+                dict(process_events[1]),
+                {
+                    "text": "调用工具: AskUserQuestion 向用户提问 / 问题 2 项",
+                    "event_type": "tool_started",
+                    "item_type": "function_call",
+                    "title": "AskUserQuestion",
+                    "source": "claude",
+                    "raw_ref": "call_claude_ask",
+                    "call_id": "call_claude_ask",
+                },
+            ]
+            self.assertEqual(code, 200)
+            self.assertEqual(payload.get("processRows"), expected_events)
+            self.assertEqual(payload.get("processEvents"), expected_events)
+
+            persisted = store.load_meta(run_id) or {}
+            self.assertEqual(persisted.get("processRows"), expected_events)
+            self.assertEqual(persisted.get("process_events"), expected_events)
+            self.assertEqual(persisted.get("processEvents"), expected_events)
+            process_blob = json.dumps(
+                {
+                    "processRows": persisted.get("processRows"),
+                    "process_events": persisted.get("process_events"),
+                    "processEvents": persisted.get("processEvents"),
+                },
+                ensure_ascii=False,
+            )
+            self.assertNotIn('{"questions"', process_blob)
+            self.assertNotIn("完整 prompt", process_blob)
+            self.assertNotIn("完整问题正文", process_blob)
+            self.assertNotIn("rawContent", process_blob)
+            self.assertNotIn('"reasoning"', process_blob)
 
     def test_get_run_detail_response_caches_terminal_payload_when_files_unchanged(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -670,7 +908,7 @@ class TestRunRoutes(unittest.TestCase):
             self.assertEqual(code, 200)
             self.assertEqual(second.get("lastMessage"), "已完成")
 
-    def test_list_runs_response_for_claude_clears_legacy_process_preview(self) -> None:
+    def test_list_runs_response_for_claude_preserves_process_preview(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             store = server.RunStore(Path(td))
             created = store.create_run(
@@ -712,14 +950,93 @@ class TestRunRoutes(unittest.TestCase):
             row = payload["runs"][0]
             self.assertEqual(row.get("agentMessagesCount"), 0)
             self.assertEqual(row.get("partialPreview"), "")
-            self.assertEqual(row.get("processRows"), [])
+            self.assertEqual(row.get("processRows"), [{"text": "旧过程", "at": "2026-03-20T00:08:15+0800"}])
             self.assertEqual(row.get("lastPreview"), "Claude 正文第一行\nClaude 正文第二行")
 
             persisted = store.load_meta(run_id) or {}
             self.assertEqual(persisted.get("agentMessagesCount"), 0)
             self.assertEqual(persisted.get("partialPreview"), "")
-            self.assertEqual(persisted.get("processRows"), [])
+            self.assertEqual(persisted.get("processRows"), [{"text": "旧过程", "at": "2026-03-20T00:08:15+0800"}])
             self.assertEqual(persisted.get("lastPreview"), "Claude 正文第一行\nClaude 正文第二行")
+
+    def test_list_runs_response_for_claude_syncs_process_event_aliases(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            store = server.RunStore(Path(td))
+            created = store.create_run(
+                project_id="task_dashboard",
+                channel_name="子级03-多CLI适配器（codex-claude-opencode）",
+                session_id="session-claude",
+                message="ping",
+                cli_type="claude",
+            )
+            run_id = str(created.get("id") or "").strip()
+            process_events = [
+                {
+                    "event_type": "tool_started",
+                    "item_type": "function_call",
+                    "title": "Read",
+                    "text": "调用工具: Read task_dashboard/runtime/run_routes.py",
+                    "source": "claude",
+                    "raw_ref": "call_claude_001",
+                    "call_id": "call_claude_001",
+                    "rawContent": "hidden",
+                },
+                {
+                    "event_type": "tool_started",
+                    "item_type": "function_call",
+                    "title": "AskUserQuestion",
+                    "text": (
+                        '调用工具: AskUserQuestion {"questions":[{"question":"第一条完整问题正文不应出现在过程轨"}],'
+                        '"prompt":"完整 prompt 不应出现在过程轨"}'
+                    ),
+                    "source": "claude",
+                    "raw_ref": "call_claude_ask",
+                    "call_id": "call_claude_ask",
+                },
+            ]
+            meta = store.load_meta(run_id) or {}
+            meta["status"] = "done"
+            meta["processRows"] = []
+            meta["process_events"] = []
+            meta["processEvents"] = process_events
+            store.save_meta(run_id, meta)
+
+            code, payload = list_runs_response(
+                query_string="limit=1",
+                store=store,
+                scheduler=None,
+                maybe_trigger_restart_recovery_lazy=lambda *_args, **_kwargs: 0,
+                maybe_trigger_queued_recovery_lazy=lambda *_args, **_kwargs: 0,
+                build_run_observability_fields=lambda *_args, **_kwargs: {},
+            )
+
+            expected_events = [
+                {key: value for key, value in process_events[0].items() if key != "rawContent"},
+                {
+                    "text": "调用工具: AskUserQuestion 向用户提问 / 问题 1 项",
+                    "event_type": "tool_started",
+                    "item_type": "function_call",
+                    "title": "AskUserQuestion",
+                    "source": "claude",
+                    "raw_ref": "call_claude_ask",
+                    "call_id": "call_claude_ask",
+                },
+            ]
+            self.assertEqual(code, 200)
+            row = payload["runs"][0]
+            self.assertEqual(row.get("processRows"), expected_events)
+            self.assertEqual(row.get("process_events"), expected_events)
+            self.assertEqual(row.get("processEvents"), expected_events)
+
+            persisted = store.load_meta(run_id) or {}
+            self.assertEqual(persisted.get("processRows"), expected_events)
+            self.assertEqual(persisted.get("process_events"), expected_events)
+            self.assertEqual(persisted.get("processEvents"), expected_events)
+            persisted_blob = json.dumps(persisted, ensure_ascii=False)
+            self.assertNotIn("rawContent", persisted_blob)
+            self.assertNotIn('{"questions"', persisted_blob)
+            self.assertNotIn("完整 prompt", persisted_blob)
+            self.assertNotIn("完整问题正文", persisted_blob)
 
     def test_get_run_detail_response_for_opencode_prefers_terminal_message_and_clears_legacy_process(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -832,6 +1149,339 @@ class TestRunRoutes(unittest.TestCase):
             self.assertEqual(persisted.get("partialPreview"), "")
             self.assertEqual(persisted.get("processRows"), [])
             self.assertEqual(persisted.get("lastPreview"), "OpenCode 正文第一行\nOpenCode 正文第二行")
+
+    def test_get_run_detail_response_for_gemini_extracts_pretty_json_response(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            store = server.RunStore(Path(td))
+            created = store.create_run(
+                project_id="task_dashboard",
+                channel_name="子级03-多CLI适配器（codex-claude-opencode）",
+                session_id="b4136799-1826-40b6-8e0e-27500175c542",
+                message="ping",
+                cli_type="gemini",
+            )
+            run_id = str(created.get("id") or "").strip()
+            meta = store.load_meta(run_id) or {}
+            meta["agentMessagesCount"] = 161
+            meta["partialPreview"] = "}"
+            meta["processRows"] = [
+                {"text": "{", "at": "2026-05-20T09:18:43+0800"},
+                {"text": '"response": "旧片段",', "at": "2026-05-20T09:18:43+0800"},
+                {"text": "}", "at": "2026-05-20T09:18:43+0800"},
+            ]
+            store.save_meta(run_id, meta)
+            store._paths(run_id)["log"].write_text(
+                "\n".join(
+                    [
+                        "# command header",
+                        "[stderr] Loaded cached credentials.",
+                        "[stdout] {",
+                        '[stdout]   "session_id": "b4136799-1826-40b6-8e0e-27500175c542",',
+                        '[stdout]   "response": "已完成初始化\\n当前职责边界: 总控分工",',
+                        '[stdout]   "stats": {"tokens": {"total": 120}}',
+                        "[stdout] }",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            code, payload = get_run_detail_response(
+                run_id=run_id,
+                store=store,
+                scheduler=None,
+                maybe_trigger_restart_recovery_lazy=lambda *_args, **_kwargs: 0,
+                maybe_trigger_queued_recovery_lazy=lambda *_args, **_kwargs: 0,
+                build_run_observability_fields=lambda *_args, **_kwargs: {},
+                error_hint=lambda _err: "",
+            )
+
+            self.assertEqual(code, 200)
+            self.assertEqual(payload.get("lastMessage"), "已完成初始化\n当前职责边界: 总控分工")
+            self.assertEqual(payload.get("partialMessage"), "")
+            self.assertEqual(payload.get("agentMessages"), [])
+            self.assertEqual(payload.get("processRows"), [])
+            self.assertEqual((payload.get("run") or {}).get("agentMessagesCount"), 0)
+            self.assertEqual((payload.get("run") or {}).get("partialPreview"), "")
+
+            persisted = store.load_meta(run_id) or {}
+            self.assertEqual(persisted.get("agentMessagesCount"), 0)
+            self.assertEqual(persisted.get("partialPreview"), "")
+            self.assertEqual(persisted.get("processRows"), [])
+            self.assertEqual(persisted.get("lastPreview"), "已完成初始化\n当前职责边界: 总控分工")
+
+    def test_list_runs_response_for_gemini_clears_json_fragment_process_preview(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            store = server.RunStore(Path(td))
+            created = store.create_run(
+                project_id="task_dashboard",
+                channel_name="子级03-多CLI适配器（codex-claude-opencode）",
+                session_id="b4136799-1826-40b6-8e0e-27500175c542",
+                message="ping",
+                cli_type="gemini",
+            )
+            run_id = str(created.get("id") or "").strip()
+            meta = store.load_meta(run_id) or {}
+            meta["status"] = "done"
+            meta["agentMessagesCount"] = 161
+            meta["partialPreview"] = "}"
+            meta["lastPreview"] = ""
+            meta["processRows"] = [{"text": "}", "at": "2026-05-20T09:18:43+0800"}]
+            store.save_meta(run_id, meta)
+            store._paths(run_id)["log"].write_text(
+                "\n".join(
+                    [
+                        "# command header",
+                        "[stdout] {",
+                        '[stdout]   "response": "Gemini 正文第一行\\nGemini 正文第二行",',
+                        '[stdout]   "stats": {"tokens": {"total": 120}}',
+                        "[stdout] }",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            code, payload = list_runs_response(
+                query_string="limit=1",
+                store=store,
+                scheduler=None,
+                maybe_trigger_restart_recovery_lazy=lambda *_args, **_kwargs: 0,
+                maybe_trigger_queued_recovery_lazy=lambda *_args, **_kwargs: 0,
+                build_run_observability_fields=lambda *_args, **_kwargs: {},
+            )
+
+            self.assertEqual(code, 200)
+            row = payload["runs"][0]
+            self.assertEqual(row.get("agentMessagesCount"), 0)
+            self.assertEqual(row.get("partialPreview"), "")
+            self.assertEqual(row.get("processRows"), [])
+            self.assertEqual(row.get("lastPreview"), "Gemini 正文第一行\nGemini 正文第二行")
+
+            persisted = store.load_meta(run_id) or {}
+            self.assertEqual(persisted.get("agentMessagesCount"), 0)
+            self.assertEqual(persisted.get("partialPreview"), "")
+            self.assertEqual(persisted.get("processRows"), [])
+            self.assertEqual(persisted.get("lastPreview"), "Gemini 正文第一行\nGemini 正文第二行")
+
+    def test_get_run_detail_response_for_codebuddy_preserves_normalized_process_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            store = server.RunStore(Path(td))
+            created = store.create_run(
+                project_id="task_dashboard",
+                channel_name="子级03-多CLI适配器（codex-claude-opencode）",
+                session_id="codebuddy-session-001",
+                message="ping",
+                cli_type="codebuddy",
+            )
+            run_id = str(created.get("id") or "").strip()
+            process_rows = [
+                {
+                    "event_type": "command_started",
+                    "item_type": "command_execution",
+                    "title": "rg processRows",
+                    "text": "执行命令: rg processRows",
+                    "at": "2026-06-08T10:00:00+0800",
+                    "source": "codebuddy",
+                },
+            ]
+            process_events = [
+                {
+                    "event_type": "command_started",
+                    "item_type": "command_execution",
+                    "title": "rg processRows",
+                    "text": "执行命令: rg processRows",
+                    "at": "2026-06-08T10:00:00+0800",
+                    "source": "codebuddy",
+                },
+            ]
+            meta = store.load_meta(run_id) or {}
+            meta["agentMessagesCount"] = 3
+            meta["partialPreview"] = "旧终端过程"
+            meta["processRows"] = process_rows
+            meta["process_events"] = process_events
+            store.save_meta(run_id, meta)
+            store._paths(run_id)["log"].write_text(
+                "\n".join(
+                    [
+                        "# command header",
+                        "[stdout] CodeBuddy 正文第一行",
+                        "[stdout] CodeBuddy 正文第二行",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            code, payload = get_run_detail_response(
+                run_id=run_id,
+                store=store,
+                scheduler=None,
+                maybe_trigger_restart_recovery_lazy=lambda *_args, **_kwargs: 0,
+                maybe_trigger_queued_recovery_lazy=lambda *_args, **_kwargs: 0,
+                build_run_observability_fields=lambda *_args, **_kwargs: {},
+                error_hint=lambda _err: "",
+            )
+
+            self.assertEqual(code, 200)
+            self.assertEqual(payload.get("lastMessage"), "CodeBuddy 正文第一行\nCodeBuddy 正文第二行")
+            self.assertEqual(payload.get("agentMessages"), [])
+            self.assertEqual(payload.get("processRows"), process_rows)
+            self.assertEqual(payload.get("processEvents"), process_events)
+            self.assertEqual((payload.get("run") or {}).get("agentMessagesCount"), 0)
+
+            persisted = store.load_meta(run_id) or {}
+            self.assertEqual(persisted.get("processRows"), process_rows)
+            self.assertEqual(persisted.get("process_events"), process_events)
+            self.assertEqual(persisted.get("lastPreview"), "CodeBuddy 正文第一行\nCodeBuddy 正文第二行")
+
+    def test_get_run_detail_response_for_codebuddy_recovers_process_events_from_log(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            store = server.RunStore(Path(td))
+            created = store.create_run(
+                project_id="task_dashboard",
+                channel_name="子级03-多CLI适配器（codex-claude-opencode）",
+                session_id="codebuddy-session-002",
+                message="ping",
+                cli_type="codebuddy",
+            )
+            run_id = str(created.get("id") or "").strip()
+            meta = store.load_meta(run_id) or {}
+            meta["status"] = "done"
+            meta["agentMessagesCount"] = 2
+            meta["partialPreview"] = "旧终端过程"
+            store.save_meta(run_id, meta)
+            started = {
+                "type": "tool_call.started",
+                "event_type": "tool_started",
+                "item_type": "function_call",
+                "title": "Bash",
+                "text": "调用工具: Bash ls -la",
+                "source": "codebuddy",
+                "raw_ref": "call_001",
+                "call_id": "call_001",
+            }
+            completed = {
+                "type": "tool_call.completed",
+                "event_type": "tool_completed",
+                "item_type": "function_call_result",
+                "title": "Bash",
+                "text": "工具完成: Bash exitCode:0",
+                "source": "codebuddy",
+                "raw_ref": "call_001",
+                "call_id": "call_001",
+            }
+            store._paths(run_id)["log"].write_text(
+                "\n".join(
+                    [
+                        "# command header",
+                        f"[stdout] {json.dumps(started, ensure_ascii=False)}",
+                        "[stdout] CodeBuddy 正文",
+                        f"[stdout] {json.dumps(completed, ensure_ascii=False)}",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            code, payload = get_run_detail_response(
+                run_id=run_id,
+                store=store,
+                scheduler=None,
+                maybe_trigger_restart_recovery_lazy=lambda *_args, **_kwargs: 0,
+                maybe_trigger_queued_recovery_lazy=lambda *_args, **_kwargs: 0,
+                build_run_observability_fields=lambda *_args, **_kwargs: {},
+                error_hint=lambda _err: "",
+            )
+
+            expected_events = [
+                {
+                    "event_type": "tool_started",
+                    "item_type": "function_call",
+                    "title": "Bash",
+                    "text": "调用工具: Bash ls -la",
+                    "source": "codebuddy",
+                    "raw_ref": "call_001",
+                    "call_id": "call_001",
+                },
+                {
+                    "event_type": "tool_completed",
+                    "item_type": "function_call_result",
+                    "title": "Bash",
+                    "text": "工具完成: Bash exitCode:0",
+                    "source": "codebuddy",
+                    "raw_ref": "call_001",
+                    "call_id": "call_001",
+                },
+            ]
+            self.assertEqual(code, 200)
+            self.assertEqual(payload.get("lastMessage"), "CodeBuddy 正文")
+            self.assertEqual(payload.get("agentMessages"), [])
+            self.assertEqual(payload.get("processRows"), expected_events)
+            self.assertEqual(payload.get("processEvents"), expected_events)
+
+            persisted = store.load_meta(run_id) or {}
+            self.assertEqual(persisted.get("processRows"), expected_events)
+            self.assertEqual(persisted.get("process_events"), expected_events)
+            self.assertEqual(persisted.get("processEvents"), expected_events)
+            self.assertEqual(persisted.get("agentMessagesCount"), 0)
+
+    def test_list_runs_response_for_codebuddy_preserves_process_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            store = server.RunStore(Path(td))
+            created = store.create_run(
+                project_id="task_dashboard",
+                channel_name="子级03-多CLI适配器（codex-claude-opencode）",
+                session_id="codebuddy-session-001",
+                message="ping",
+                cli_type="codebuddy",
+            )
+            run_id = str(created.get("id") or "").strip()
+            process_rows = [
+                {
+                    "event_type": "tool_started",
+                    "item_type": "tool_call",
+                    "title": "read_file",
+                    "text": "调用工具: read_file",
+                    "at": "2026-06-08T10:00:00+0800",
+                    "source": "codebuddy",
+                },
+            ]
+            meta = store.load_meta(run_id) or {}
+            meta["status"] = "done"
+            meta["agentMessagesCount"] = 2
+            meta["partialPreview"] = "旧终端过程"
+            meta["lastPreview"] = ""
+            meta["processRows"] = process_rows
+            store.save_meta(run_id, meta)
+            store._paths(run_id)["log"].write_text(
+                "\n".join(
+                    [
+                        "# command header",
+                        "[stdout] CodeBuddy 正文第一行",
+                        "[stdout] CodeBuddy 正文第二行",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            code, payload = list_runs_response(
+                query_string="limit=1",
+                store=store,
+                scheduler=None,
+                maybe_trigger_restart_recovery_lazy=lambda *_args, **_kwargs: 0,
+                maybe_trigger_queued_recovery_lazy=lambda *_args, **_kwargs: 0,
+                build_run_observability_fields=lambda *_args, **_kwargs: {},
+            )
+
+            self.assertEqual(code, 200)
+            row = payload["runs"][0]
+            self.assertEqual(row.get("agentMessagesCount"), 0)
+            self.assertEqual(row.get("partialPreview"), "")
+            self.assertEqual(row.get("processRows"), process_rows)
+            self.assertEqual(row.get("lastPreview"), "CodeBuddy 正文第一行\nCodeBuddy 正文第二行")
+
+            persisted = store.load_meta(run_id) or {}
+            self.assertEqual(persisted.get("agentMessagesCount"), 0)
+            self.assertEqual(persisted.get("partialPreview"), "")
+            self.assertEqual(persisted.get("processRows"), process_rows)
+            self.assertEqual(persisted.get("lastPreview"), "CodeBuddy 正文第一行\nCodeBuddy 正文第二行")
 
     def test_list_runs_response_includes_codex_generated_image_monitoring_fields(self) -> None:
         with tempfile.TemporaryDirectory() as td:

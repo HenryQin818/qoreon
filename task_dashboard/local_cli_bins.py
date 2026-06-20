@@ -12,13 +12,14 @@ try:
 except Exception:  # pragma: no cover
     tomllib = None  # type: ignore[assignment]
 
-CLI_BIN_KEY_ORDER = ["codex", "claude", "opencode", "gemini", "trae_cli"]
+CLI_BIN_KEY_ORDER = ["codex", "claude", "opencode", "gemini", "trae_cli", "codebuddy"]
 CLI_BIN_KEY_LABELS = {
     "codex": "codex",
     "claude": "claude",
     "opencode": "opencode",
     "gemini": "gemini",
     "trae_cli": "trae-cli",
+    "codebuddy": "codebuddy",
 }
 
 

@@ -235,6 +235,11 @@ class CallbackFeedbackTests(unittest.TestCase):
             self.assertEqual(cv.get("target_project_id"), "task_dashboard")
             self.assertEqual(cv.get("target_channel"), "主体-总控（合并与验收）")
             self.assertEqual(cv.get("target_session_id"), "22222222-2222-2222-2222-222222222222")
+            self.assertEqual((cv.get("delivery_summary") or {}).get("delivery_state"), "delivered")
+            self.assertTrue(bool((cv.get("delivery_summary") or {}).get("delivery_verified")))
+            self.assertEqual((cv.get("receipt_summary_v2") or {}).get("receipt_state"), "received")
+            self.assertTrue(bool((cv.get("receipt_summary_v2") or {}).get("receipt_received")))
+            self.assertEqual((cv.get("callback_route_summary") or {}).get("receipt_route_state"), "expected_callback_route")
             rr = cv.get("route_resolution") or {}
             self.assertEqual((rr.get("source_ref") or {}).get("project_id"), "task_dashboard")
             self.assertEqual((rr.get("source_ref") or {}).get("session_id"), "22222222-2222-2222-2222-222222222222")
@@ -257,6 +262,9 @@ class CallbackFeedbackTests(unittest.TestCase):
             self.assertEqual(src_cv.get("target_project_id"), "task_dashboard")
             self.assertEqual(src_cv.get("target_channel"), "主体-总控（合并与验收）")
             self.assertEqual(src_cv.get("target_session_id"), "22222222-2222-2222-2222-222222222222")
+            self.assertEqual((src_cv.get("delivery_summary") or {}).get("delivery_state"), "delivered")
+            self.assertEqual((src_cv.get("receipt_summary_v2") or {}).get("receipt_callback_run_id"), cb_run_id)
+            self.assertEqual((src_cv.get("callback_route_summary") or {}).get("receipt_route_state"), "expected_callback_route")
 
     def test_done_callback_downgrades_self_referential_running_preview(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -431,6 +439,88 @@ class CallbackFeedbackTests(unittest.TestCase):
             self.assertEqual(src_rr.get("source"), "sender_agent")
             self.assertEqual((src_rr.get("final_target") or {}).get("session_id"), "44444444-4444-4444-4444-444444444444")
 
+    def test_user_interrupt_with_manual_origin_suppresses_auto_callback(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            store = server.RunStore(Path(td))
+            target = {
+                "channel_name": "主体-总控（合并与验收）",
+                "session_id": "44444444-4444-4444-4444-444444444444",
+            }
+            source = store.create_run(
+                "task_dashboard",
+                "子级02-CCB运行时（server-并发-安全-启动）",
+                "33333333-3333-3333-3333-333333333333",
+                "执行中断",
+                sender_type="agent",
+                sender_id="主体-总控（合并与验收）",
+                sender_name="主体-总控（合并与验收）",
+                extra_meta={
+                    "callback_to": target,
+                    "interaction_mode": "task_with_receipt",
+                },
+            )
+            meta = store.load_meta(source["id"]) or {}
+            meta["status"] = "error"
+            meta["error"] = "interrupted by user"
+            meta["interrupt_origin"] = "user"
+            meta["finishedAt"] = server._now_iso()
+            meta["callback_dispatches"] = [
+                {"status": "pending", "target": target},
+                {"status": "sent", "callback_run_id": "already-sent"},
+            ]
+            store.save_meta(source["id"], meta)
+
+            enq = []
+            with mock.patch("server._enqueue_run_execution", side_effect=lambda *args, **kwargs: enq.append(args)):
+                cb_run_id = server._dispatch_terminal_callback_for_run(store, source["id"], meta=meta)
+
+            self.assertEqual(cb_run_id, "")
+            self.assertEqual(enq, [])
+            src_after = store.load_meta(source["id"]) or {}
+            self.assertTrue(src_after.get("receipt_suppressed"))
+            self.assertEqual(src_after.get("receipt_suppressed_reason"), "user_interrupt")
+            self.assertEqual(src_after.get("auto_receipt_policy"), "suppressed_by_user_interrupt")
+            self.assertEqual(src_after.get("chain_state"), "cancelled_by_user")
+            self.assertEqual(src_after.get("suppressed_callback_to"), target)
+            dispatches = src_after.get("callback_dispatches") or []
+            self.assertEqual(dispatches[0].get("status"), "receipt_suppressed")
+            self.assertEqual(dispatches[1].get("status"), "sent")
+
+    def test_timeout_interrupt_still_dispatches_callback(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            store = server.RunStore(Path(td))
+            target = {
+                "channel_name": "主体-总控（合并与验收）",
+                "session_id": "44444444-4444-4444-4444-444444444444",
+            }
+            source = store.create_run(
+                "task_dashboard",
+                "子级02-CCB运行时（server-并发-安全-启动）",
+                "33333333-3333-3333-3333-333333333333",
+                "执行超时",
+                sender_type="agent",
+                sender_id="主体-总控（合并与验收）",
+                sender_name="主体-总控（合并与验收）",
+                extra_meta={"callback_to": target},
+            )
+            meta = store.load_meta(source["id"]) or {}
+            meta["status"] = "error"
+            meta["error"] = "timeout>1200s"
+            meta["finishedAt"] = server._now_iso()
+            store.save_meta(source["id"], meta)
+
+            enq = []
+            with mock.patch("server._enqueue_run_execution", side_effect=lambda *args, **kwargs: enq.append(args)):
+                cb_run_id = server._dispatch_terminal_callback_for_run(store, source["id"], meta=meta)
+
+            self.assertTrue(cb_run_id)
+            self.assertEqual(len(enq), 1)
+            cb_meta = store.load_meta(cb_run_id) or {}
+            self.assertEqual(cb_meta.get("event_type"), "interrupted")
+            self.assertEqual(cb_meta.get("event_reason"), "timeout_interrupt")
+            src_after = store.load_meta(source["id"]) or {}
+            self.assertFalse(bool(src_after.get("receipt_suppressed")))
+
     def test_callback_auto_run_does_not_recurse(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             store = server.RunStore(Path(td))
@@ -487,6 +577,10 @@ class CallbackFeedbackTests(unittest.TestCase):
             self.assertEqual(len(dispatches), 1)
             self.assertEqual(dispatches[0].get("status"), "self_suppressed")
             self.assertEqual(dispatches[0].get("note"), "self_target_same_channel_session")
+            cv = src_after.get("communication_view") or {}
+            self.assertEqual((cv.get("callback_route_summary") or {}).get("receipt_route_state"), "self_suppressed")
+            self.assertEqual((cv.get("receipt_summary_v2") or {}).get("receipt_state"), "missing")
+            self.assertEqual((cv.get("receipt_summary_v2") or {}).get("receipt_missing_reason"), "self_suppressed")
 
     def test_error_interrupted_uses_window_summary_after_first_immediate(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -605,8 +699,9 @@ class CallbackFeedbackTests(unittest.TestCase):
             self.assertEqual(cv.get("dispatch_state"), "pending")
             self.assertEqual(cv.get("dispatch_run_id"), "")
             self.assertFalse(bool(cv.get("route_mismatch")))
+            self.assertEqual((cv.get("delivery_summary") or {}).get("delivery_state"), "pending")
 
-    def test_route_mismatch_callback_marks_route_mismatch(self) -> None:
+    def test_callback_to_cross_session_marks_expected_callback_route(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             store = server.RunStore(Path(td))
             source = store.create_run(
@@ -640,17 +735,135 @@ class CallbackFeedbackTests(unittest.TestCase):
             self.assertEqual(len(enq), 1)
             cb_meta = store.load_meta(cb_run_id) or {}
             cv = cb_meta.get("communication_view") or {}
-            self.assertEqual(cv.get("event_reason"), "route_mismatch")
-            self.assertEqual(cv.get("dispatch_state"), "route_mismatch")
-            self.assertTrue(bool(cv.get("route_mismatch")))
+            self.assertEqual(cv.get("event_reason"), "success")
+            self.assertEqual(cv.get("dispatch_state"), "resolved")
+            self.assertFalse(bool(cv.get("route_mismatch")))
             self.assertEqual(cv.get("dispatch_run_id"), cb_run_id)
+            self.assertEqual((cv.get("callback_route_summary") or {}).get("receipt_route_state"), "expected_callback_route")
 
             src_after = store.load_meta(source["id"]) or {}
             src_cv = src_after.get("communication_view") or {}
-            self.assertEqual(src_cv.get("event_reason"), "route_mismatch")
-            self.assertEqual(src_cv.get("dispatch_state"), "route_mismatch")
-            self.assertTrue(bool(src_cv.get("route_mismatch")))
+            self.assertEqual(src_cv.get("event_reason"), "success")
+            self.assertEqual(src_cv.get("dispatch_state"), "resolved")
+            self.assertFalse(bool(src_cv.get("route_mismatch")))
             self.assertEqual(src_cv.get("dispatch_run_id"), cb_run_id)
+            self.assertEqual((src_cv.get("callback_route_summary") or {}).get("receipt_route_state"), "expected_callback_route")
+
+    def test_sender_agent_fallback_keeps_route_mismatch_in_callback_route_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            store = server.RunStore(Path(td))
+            source = store.create_run(
+                "task_dashboard",
+                "子级02-CCB运行时（server-并发-安全-启动）",
+                "aaaa1111-1111-1111-1111-111111111111",
+                "执行异常",
+                sender_type="agent",
+                sender_id="主体-总控（合并与验收）",
+                sender_name="主体-总控（合并与验收）",
+            )
+            meta = store.load_meta(source["id"]) or {}
+            meta["status"] = "error"
+            meta["error"] = "boom"
+            meta["finishedAt"] = server._now_iso()
+            store.save_meta(source["id"], meta)
+
+            with mock.patch(
+                "server._resolve_primary_target_by_channel",
+                return_value={
+                    "channel_name": "主体-总控（合并与验收）",
+                    "session_id": "bbbb2222-2222-2222-2222-222222222222",
+                },
+            ), mock.patch("server._enqueue_run_execution"):
+                cb_run_id = server._dispatch_terminal_callback_for_run(store, source["id"], meta=meta)
+
+            self.assertTrue(cb_run_id)
+            src_after = store.load_meta(source["id"]) or {}
+            cv = src_after.get("communication_view") or {}
+            self.assertEqual(cv.get("event_reason"), "route_mismatch")
+            self.assertEqual(cv.get("dispatch_state"), "route_mismatch")
+            self.assertTrue(bool(cv.get("route_mismatch")))
+            self.assertEqual((cv.get("callback_route_summary") or {}).get("receipt_route_state"), "route_mismatch")
+            self.assertEqual((cv.get("delivery_summary") or {}).get("delivery_state"), "delivered")
+            self.assertEqual((cv.get("receipt_summary_v2") or {}).get("receipt_state"), "not_required")
+
+    def test_task_with_receipt_without_callback_to_marks_missing_callback_to(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            store = server.RunStore(Path(td))
+            source = store.create_run(
+                "task_dashboard",
+                "子级02-CCB运行时（server-并发-安全-启动）",
+                "99999999-9999-9999-9999-999999999999",
+                "执行完成",
+                sender_type="agent",
+                sender_id="legacy",
+                sender_name="历史脚本",
+                extra_meta={"interaction_mode": "task_with_receipt"},
+            )
+            meta = store.load_meta(source["id"]) or {}
+            meta["status"] = "done"
+            meta["finishedAt"] = server._now_iso()
+            meta["lastPreview"] = "执行完成"
+            store.save_meta(source["id"], meta)
+
+            with mock.patch("server._resolve_primary_target_by_channel", return_value=None), \
+                    mock.patch("server._resolve_master_control_target", return_value=None):
+                cb_run_id = server._dispatch_terminal_callback_for_run(store, source["id"], meta=meta)
+
+            self.assertEqual(cb_run_id, "")
+            src_after = store.load_meta(source["id"]) or {}
+            cv = src_after.get("communication_view") or {}
+            self.assertEqual((cv.get("callback_route_summary") or {}).get("receipt_route_state"), "missing_callback_to")
+            self.assertEqual((cv.get("receipt_summary_v2") or {}).get("receipt_state"), "missing")
+            self.assertEqual((cv.get("receipt_summary_v2") or {}).get("receipt_missing_reason"), "missing_callback_to")
+
+    def test_provider_transient_failure_stays_separate_from_missing_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            store = server.RunStore(Path(td))
+            target = {
+                "channel_name": "主体-总控（合并与验收）",
+                "session_id": "bbbb2222-2222-2222-2222-222222222222",
+            }
+            session_store = server.SessionStore(Path(td))
+            session_store.create_session(
+                "task_dashboard",
+                target["channel_name"],
+                cli_type="codex",
+                session_id=target["session_id"],
+            )
+            source = store.create_run(
+                "task_dashboard",
+                "子级02-CCB运行时（server-并发-安全-启动）",
+                "aaaa1111-1111-1111-1111-111111111111",
+                "provider error",
+                sender_type="agent",
+                sender_id=target["channel_name"],
+                sender_name=target["channel_name"],
+                extra_meta={"callback_to": target},
+            )
+            meta = store.load_meta(source["id"]) or {}
+            meta["status"] = "error"
+            meta["error"] = "status 429 provider temporarily unavailable"
+            meta["finishedAt"] = server._now_iso()
+            meta["failure_class"] = "provider_transient"
+            meta["provider_error"] = {"kind": "rate_limit", "retryable": True, "matched_patterns": ["429"]}
+            meta["side_effect_risk"] = "none"
+            meta["recovery_mode"] = "auto_retry"
+            meta["recovery_required"] = False
+            meta["retry_exhausted"] = False
+            store.save_meta(source["id"], meta)
+
+            with mock.patch("server._enqueue_run_execution"):
+                cb_run_id = server._dispatch_terminal_callback_for_run(store, source["id"], meta=meta)
+
+            self.assertTrue(cb_run_id)
+            src_after = store.load_meta(source["id"]) or {}
+            receipt_v2 = (src_after.get("communication_view") or {}).get("receipt_summary_v2") or {}
+            self.assertEqual(receipt_v2.get("receipt_state"), "received")
+            self.assertNotEqual(receipt_v2.get("receipt_state"), "missing")
+            self.assertEqual(receipt_v2.get("failure_class"), "provider_transient")
+            self.assertEqual((receipt_v2.get("provider_error") or {}).get("kind"), "rate_limit")
+            self.assertEqual(receipt_v2.get("side_effect_risk"), "none")
+            self.assertEqual(receipt_v2.get("recovery_mode"), "auto_retry")
 
     def test_callback_window_bypasses_on_need_confirmation_change(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -789,6 +1002,15 @@ class CallbackFeedbackTests(unittest.TestCase):
                 sender_type="agent",
                 sender_id="主体-总控（合并与验收）",
                 sender_name="主体-总控（合并与验收）",
+                extra_meta={
+                    "interaction_mode": "task_with_receipt",
+                    "target_ref": {
+                        "project_id": "task_dashboard",
+                        "channel_name": "子级02-CCB运行时（server-并发-安全-启动）",
+                        "session_id": "71717171-7171-7171-7171-717171717171",
+                    },
+                    "visible_in_channel_chat": True,
+                },
             )
             source = store.create_run(
                 "task_dashboard",
@@ -840,6 +1062,11 @@ class CallbackFeedbackTests(unittest.TestCase):
             self.assertEqual(rollup.get("host_run_id"), host["id"])
             self.assertEqual(rollup.get("latest_status"), "queued")
             self.assertEqual(rollup.get("agents"), ["服务开发-通讯能力"])
+            host_cv = host_after.get("communication_view") or {}
+            self.assertEqual((host_cv.get("delivery_summary") or {}).get("delivery_state"), "delivered")
+            self.assertEqual((host_cv.get("receipt_summary_v2") or {}).get("receipt_state"), "received")
+            self.assertEqual((host_cv.get("receipt_summary_v2") or {}).get("receipt_callback_run_id"), cb_run_id)
+            self.assertEqual((host_cv.get("callback_route_summary") or {}).get("receipt_route_state"), "expected_callback_route")
 
     def test_queue_aggregator_merges_into_earliest_queued_anchor(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -901,6 +1128,9 @@ class CallbackFeedbackTests(unittest.TestCase):
             dispatches2 = src2_after.get("callback_dispatches") or []
             self.assertTrue(dispatches2)
             self.assertEqual(dispatches2[0].get("status"), "merged_anchor")
+            src2_cv = src2_after.get("communication_view") or {}
+            self.assertEqual((src2_cv.get("callback_route_summary") or {}).get("receipt_route_state"), "merged_anchor")
+            self.assertEqual((src2_cv.get("receipt_summary_v2") or {}).get("receipt_state"), "received")
 
     def test_queue_aggregator_projects_multiple_receipts_to_same_host_run(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -987,6 +1217,7 @@ class CallbackFeedbackTests(unittest.TestCase):
             self.assertEqual(str((by_source.get(src2["id"]) or {}).get("source_channel") or ""), "子级02-CCB运行时（server-并发-安全-启动）")
             self.assertEqual(str((by_source.get(src2["id"]) or {}).get("callback_run_id") or ""), cb1)
             self.assertEqual(str((by_source.get(src2["id"]) or {}).get("dispatch_status") or ""), "merged_anchor")
+            self.assertEqual(str((by_source.get(src2["id"]) or {}).get("receipt_route_state") or ""), "merged_anchor")
             rollup = host_after.get("receipt_rollup") or {}
             self.assertEqual(rollup.get("total_callbacks"), 2)
             self.assertEqual(rollup.get("error_count"), 2)

@@ -139,6 +139,9 @@ class GeminiAdapter(CLIAdapter):
             "--output-format",
             "json",
         ]
+        model_name = str(model or "").strip()
+        if model_name:
+            cmd.extend(["--model", model_name])
         # Gemini CLI does not have codex-style profile labels. Keep the field for interface compatibility.
         return cmd
 
@@ -157,13 +160,22 @@ class GeminiAdapter(CLIAdapter):
         Command: gemini --prompt "<seed_prompt>" --output-format json
         """
         _ = sandbox_mode
-        return [
+        cmd = [
             resolve_cli_executable("gemini"),
             "--prompt",
             str(seed_prompt or "Please reply with: OK"),
             "--output-format",
             "json",
         ]
+        model_name = str(model or "").strip()
+        if model_name:
+            cmd.extend(["--model", model_name])
+        return cmd
+
+    @classmethod
+    def supports_model(cls) -> bool:
+        """Gemini CLI supports explicit model selection via --model."""
+        return True
 
     @classmethod
     def parse_output_line(cls, line: str) -> Optional[dict[str, Any]]:
@@ -181,29 +193,89 @@ class GeminiAdapter(CLIAdapter):
             try:
                 obj = json.loads(stripped)
             except json.JSONDecodeError:
+                if cls._looks_like_json_fragment(stripped):
+                    return None
                 return {"type": "text", "text": stripped}
 
-            if isinstance(obj, dict):
-                if str(obj.get("type") or "") in {"item.completed", "text", "message"}:
-                    return obj
-                response = str(obj.get("response") or "").strip()
-                if response:
-                    return {"type": "message", "content": response}
-                text = str(obj.get("text") or "").strip()
-                if text:
-                    return {"type": "text", "text": text}
-                err = obj.get("error")
-                if isinstance(err, dict):
-                    err = err.get("message")
-                err_txt = str(err or "").strip()
-                if err_txt:
-                    return {"type": "message", "content": err_txt}
-                return obj
+            text = cls._extract_text_from_json(obj)
+            if text:
+                return {"type": "message", "content": text}
+            return None
 
-            if isinstance(obj, list):
-                return {"items": obj}
+        if cls._looks_like_json_fragment(stripped):
+            return None
 
         return {"type": "text", "text": stripped}
+
+    @classmethod
+    def _looks_like_json_fragment(cls, text: str) -> bool:
+        txt = str(text or "").strip()
+        if not txt:
+            return False
+        if txt in {"{", "}", "[", "]", "},", "],"}:
+            return True
+        if txt.startswith('"') and (txt.endswith(",") or ":" in txt):
+            return True
+        if txt.startswith(("}", "]")):
+            return True
+        return False
+
+    @classmethod
+    def _extract_text_from_json(cls, value: Any) -> str:
+        if isinstance(value, dict):
+            msg_type = str(value.get("type") or "")
+            if msg_type == "item.completed":
+                item = value.get("item") or {}
+                if isinstance(item, dict) and str(item.get("type") or "") == "agent_message":
+                    return str(item.get("text") or "").strip()
+            if msg_type in {"text", "message", "agent_message"}:
+                direct = str(value.get("content") or value.get("text") or "").strip()
+                if direct:
+                    return direct
+
+            for key in ("response", "text", "content", "message"):
+                direct = value.get(key)
+                if isinstance(direct, str) and direct.strip():
+                    return direct.strip()
+                nested = cls._extract_text_from_json(direct)
+                if nested:
+                    return nested
+
+            err = value.get("error")
+            if isinstance(err, dict):
+                err_txt = str(err.get("message") or err.get("text") or "").strip()
+                if err_txt:
+                    return err_txt
+            elif isinstance(err, str) and err.strip():
+                return err.strip()
+
+            candidates = value.get("candidates")
+            if isinstance(candidates, list):
+                text = cls._extract_text_from_json(candidates)
+                if text:
+                    return text
+
+            parts = value.get("parts")
+            if isinstance(parts, list):
+                text = cls._extract_text_from_json(parts)
+                if text:
+                    return text
+
+            item = value.get("item")
+            if isinstance(item, dict):
+                text = cls._extract_text_from_json(item)
+                if text:
+                    return text
+
+        if isinstance(value, list):
+            parts: list[str] = []
+            for item in value:
+                text = cls._extract_text_from_json(item)
+                if text:
+                    parts.append(text)
+            return "\n".join(parts).strip()
+
+        return ""
 
     @classmethod
     def get_process_signature(cls, session_id: str) -> str:

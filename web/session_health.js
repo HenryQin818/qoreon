@@ -362,6 +362,9 @@
     const before = latest.before_pct;
     const after = latest.after_pct;
     if (before == null || after == null) return "";
+    if (isMarkerSampleIncrease(latest)) {
+      return `最近一次 compact 标记前后采样 ${fmtNumber(before)}% / ${fmtNumber(after)}%`;
+    }
     return `最近一次 ${fmtNumber(before)}% → ${fmtNumber(after)}%`;
   }
 
@@ -397,6 +400,7 @@
     if (row.risk_level === "unsupported") return "当前页只支持 Codex";
     if (!Number(row.compacted_count || 0)) return "当前还没有出现 compact";
     const bits = [];
+    if (row.latest_token_usage_pct != null) bits.push(`当前最新占用 ${fmtNumber(row.latest_token_usage_pct)}%`);
     if (row.avg_turns_between_compactions != null) bits.push(`压缩间推进 ${fmtFloat(row.avg_turns_between_compactions, 0)} 轮`);
     if (row.turns_since_last_compaction != null) bits.push(`最近压缩后推进 ${fmtNumber(row.turns_since_last_compaction)} 轮`);
     if (row.last_compacted_at) bits.push(`最近压缩 ${timeAgo(row.last_compacted_at)}`);
@@ -411,6 +415,22 @@
       .reverse();
   }
 
+  function isMarkerSampleIncrease(item) {
+    if (!item || item.before_pct == null || item.after_pct == null) return false;
+    if (String(item.transition_kind || "") === "marker_sample_increase") return true;
+    const before = Number(item.before_pct);
+    const after = Number(item.after_pct);
+    return Number.isFinite(before) && Number.isFinite(after) && after > before;
+  }
+
+  function compactionSampleText(item) {
+    const before = formatPct(item.before_pct);
+    const after = formatPct(item.after_pct);
+    return isMarkerSampleIncrease(item)
+      ? `${before}% / ${after}%`
+      : `${before}% → ${after}%`;
+  }
+
   function createPaceHistoryBlock(row) {
     if (row.risk_level === "unsupported") {
       return el("div", { class: "pace-history-empty", text: "当前页只支持 Codex compact 历史" });
@@ -422,9 +442,8 @@
     return el("div", { class: "pace-history-wrap" }, [
       el("div", { class: "pace-history-label", text: "最近几次压缩记录" }),
       el("div", { class: "pace-history" }, items.map((item) => {
-        const before = formatPct(item.before_pct);
-        const after = formatPct(item.after_pct);
         const compactedAt = String(item.compacted_at || "").trim();
+        const sampleIncrease = isMarkerSampleIncrease(item);
         return el("div", { class: "pace-history-item" }, [
           el("span", {
             class: "pace-history-time",
@@ -433,7 +452,8 @@
           }),
           el("span", {
             class: "pace-history-change",
-            text: `${before}% → ${after}%`,
+            title: sampleIncrease ? "compact 标记前后采样倒挂，不代表低占用触发压缩" : "compact 前后占用采样",
+            text: compactionSampleText(item),
           }),
         ]);
       })),

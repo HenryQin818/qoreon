@@ -16,23 +16,14 @@ from pathlib import Path
 
 from task_dashboard.cli import main
 
-
-def _restore_env(previous: dict[str, str | None]) -> None:
-    for key, value in previous.items():
-        if value is None:
-            os.environ.pop(key, None)
-        else:
-            os.environ[key] = value
-
-
 if __name__ == "__main__":
-    build_env_keys = ("TASK_DASHBOARD_SESSION_HEALTH_SKIP_LOG_SCAN", "TASK_DASHBOARD_STATIC_BUILD_FAST")
-    previous_build_env = {key: os.environ.get(key) for key in build_env_keys}
-    os.environ.setdefault("TASK_DASHBOARD_SESSION_HEALTH_SKIP_LOG_SCAN", "1")
-    os.environ.setdefault("TASK_DASHBOARD_STATIC_BUILD_FAST", "1")
     script_path = Path(__file__).resolve()
     repo_root = script_path.parent
-    repo_rel = Path(".")
+    workspace_root = repo_root
+    try:
+        repo_rel = repo_root.relative_to(workspace_root)
+    except Exception:
+        repo_rel = Path(repo_root.name)
     default_out_task = str(repo_rel / "dist" / "project-task-dashboard.html")
     default_out_overview = str(repo_rel / "dist" / "project-overview-dashboard.html")
     default_out_communication = str(repo_rel / "dist" / "project-communication-audit.html")
@@ -46,9 +37,10 @@ if __name__ == "__main__":
     default_out_agent_curtain = str(repo_rel / "dist" / "project-agent-curtain.html")
     default_out_agent_relationship_board = str(repo_rel / "dist" / "project-agent-relationship-board.html")
     default_out_session_health = str(repo_rel / "dist" / "project-session-health-dashboard.html")
+    default_out_runstore_health = str(repo_rel / "dist" / "project-runstore-health.html")
     forwarded = [
         "--root",
-        str(repo_root),
+        str(workspace_root),
         "--out-task",
         default_out_task,
         "--out-overview",
@@ -75,10 +67,23 @@ if __name__ == "__main__":
         default_out_agent_relationship_board,
         "--out-session-health",
         default_out_session_health,
+        "--out-runstore-health",
+        default_out_runstore_health,
         *sys.argv[1:],
     ]
+    env_defaults = {
+        "TASK_DASHBOARD_SESSION_HEALTH_SKIP_LOG_SCAN": "1",
+        "TASK_DASHBOARD_STATIC_BUILD_FAST": "1",
+    }
+    previous_env = {key: os.environ.get(key) for key in env_defaults}
+    for key, value in env_defaults.items():
+        os.environ.setdefault(key, value)
     try:
         exit_code = main(forwarded)
     finally:
-        _restore_env(previous_build_env)
+        for key, old_value in previous_env.items():
+            if old_value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = old_value
     raise SystemExit(exit_code)

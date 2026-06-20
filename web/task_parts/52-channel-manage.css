@@ -152,6 +152,92 @@
       min-height: 148px;
       resize: vertical;
     }
+    .channel-agents-md-modal {
+      width: min(760px, 96vw);
+    }
+    .channel-agents-md-actions {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .channel-agents-md-role {
+      width: 150px;
+      min-height: 34px;
+      font-size: 12px;
+    }
+    .channel-agents-md-textarea {
+      min-height: 360px;
+      resize: vertical;
+      font-family: var(--mono);
+      font-size: 12px;
+      line-height: 1.65;
+      white-space: pre;
+    }
+    .channel-static-instruction-section {
+      border-color: rgba(15,118,110,0.16);
+      background: linear-gradient(135deg, rgba(240,253,250,0.92), rgba(255,255,255,0.86));
+    }
+    .channel-static-instruction-body {
+      display: grid;
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .channel-static-instruction-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: center;
+      border: 1px solid rgba(15,23,42,0.08);
+      border-radius: 12px;
+      padding: 10px 12px;
+      background: rgba(255,255,255,0.84);
+    }
+    .channel-static-instruction-title {
+      font-weight: 800;
+      font-size: 13px;
+      color: rgba(15,23,42,0.92);
+    }
+    .channel-static-instruction-sub {
+      margin-top: 3px;
+      color: rgba(71,85,105,0.84);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    .channel-static-instruction-status {
+      border-radius: 999px;
+      padding: 5px 9px;
+      font-size: 12px;
+      font-weight: 800;
+      white-space: nowrap;
+      border: 1px solid rgba(100,116,139,0.18);
+      background: rgba(248,250,252,0.92);
+      color: rgba(71,85,105,0.94);
+    }
+    .channel-static-instruction-status.good {
+      border-color: rgba(22,163,74,0.22);
+      background: rgba(240,253,244,0.96);
+      color: rgba(21,128,61,0.96);
+    }
+    .channel-static-instruction-status.warn {
+      border-color: rgba(217,119,6,0.24);
+      background: rgba(255,251,235,0.98);
+      color: rgba(180,83,9,0.96);
+    }
+    .channel-static-instruction-status.bad {
+      border-color: rgba(220,38,38,0.24);
+      background: rgba(254,242,242,0.98);
+      color: rgba(185,28,28,0.96);
+    }
+    .channel-static-instruction-repair-btn {
+      white-space: nowrap;
+    }
+    .new-channel-agents-md:disabled {
+      opacity: 0.56;
+      cursor: not-allowed;
+      background: rgba(248,249,251,0.70);
+    }
     .channel-manage-result-body {
       display: grid;
       gap: 8px;
@@ -191,5 +277,11 @@
       }
       .channel-manage-section {
         padding: 14px;
+      }
+      .channel-static-instruction-row {
+        grid-template-columns: minmax(0, 1fr);
+      }
+      .channel-static-instruction-status {
+        width: fit-content;
       }
     }

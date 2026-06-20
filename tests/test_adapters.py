@@ -1,3 +1,4 @@
+import json
 import os
 import sqlite3
 import tempfile
@@ -13,7 +14,9 @@ from task_dashboard.adapters import (
     OpenCodeAdapter,
     GeminiAdapter,
     TraeAdapter,
+    CodeBuddyAdapter,
 )
+from task_dashboard.adapters.codebuddy_output import extract_final_text, normalize_process_events
 from task_dashboard.adapters.base import resolve_cli_executable, resolve_cli_executable_details
 
 
@@ -50,6 +53,56 @@ class TestCodexAdapter(unittest.TestCase):
         self.assertIn(session_id, cmd)
         self.assertIn(message, cmd)
         self.assertIn(str(output_path), cmd)
+
+    def test_codex_adapter_build_resume_command_separates_prompt_args(self) -> None:
+        """Protect Markdown frontmatter prompts from CLI option parsing."""
+        session_id = "019bde9b-4793-70e0-b18a-a437279b2d18"
+        message = "---\ntask_id: demo\n---\nbody"
+
+        cmd = CodexAdapter.build_resume_command(
+            session_id=session_id,
+            message=message,
+            output_path=Path("/tmp/output.json"),
+        )
+
+        resume_index = cmd.index("resume")
+        self.assertEqual(cmd[resume_index + 1], session_id)
+        self.assertEqual(cmd[resume_index + 2], "--")
+        self.assertEqual(cmd[resume_index + 3], message)
+
+    def test_codex_adapter_build_resume_command_adds_image_args_before_session(self) -> None:
+        """D24 image passthrough uses Codex native image argv, not prompt text."""
+        session_id = "019bde9b-4793-70e0-b18a-a437279b2d18"
+        image_path = "/tmp/qoreon-d24-image.png"
+        message = "请识别图片内容"
+
+        cmd = CodexAdapter.build_resume_command(
+            session_id=session_id,
+            message=message,
+            output_path=Path("/tmp/output.json"),
+            attachments=[
+                {
+                    "kind": "image",
+                    "content_type": "image/png",
+                    "resolved_local_path": image_path,
+                },
+                {
+                    "kind": "document",
+                    "content_type": "text/plain",
+                    "resolved_local_path": "/tmp/not-image.txt",
+                },
+            ],
+        )
+
+        resume_index = cmd.index("resume")
+        session_index = cmd.index(session_id)
+        self.assertIn("-i", cmd[resume_index + 1 : session_index])
+        image_flag_index = cmd.index("-i")
+        self.assertEqual(cmd[image_flag_index + 1], image_path)
+        self.assertNotIn("/tmp/not-image.txt", cmd)
+        self.assertNotIn("--last", cmd)
+        self.assertEqual(cmd[session_index + 1], "--")
+        self.assertEqual(cmd[session_index + 2], message)
 
     def test_codex_adapter_build_resume_command_with_model(self) -> None:
         """Verify model flag is passed through when provided."""
@@ -207,22 +260,81 @@ class TestClaudeAdapter(unittest.TestCase):
             message="Hello, Claude!",
             output_path=Path("/tmp/claude-output.txt"),
         )
-        self.assertEqual(Path(cmd[0]).name, "claude")
-        self.assertIn("--dangerously-skip-permissions", cmd)
+        self.assertIn("task_dashboard.adapters.claude_runner", cmd)
+        self.assertIn("resume", cmd)
         self.assertIn("--resume", cmd)
-        self.assertIn("--print", cmd)
+        self.assertIn("019bde9b-4793-70e0-b18a-a437279b2d18", cmd)
+        self.assertIn("--output-path", cmd)
+        self.assertIn("/tmp/claude-output.txt", cmd)
 
     def test_claude_adapter_build_create_command_uses_full_permissions(self) -> None:
         cmd = ClaudeAdapter.build_create_command(
             seed_prompt="Please reply with: OK",
             output_path=Path("/tmp/claude-create.txt"),
         )
-        self.assertEqual(Path(cmd[0]).name, "claude")
-        self.assertIn("--dangerously-skip-permissions", cmd)
-        self.assertIn("--print", cmd)
+        self.assertIn("task_dashboard.adapters.claude_runner", cmd)
+        self.assertIn("create", cmd)
+        self.assertIn("--output-path", cmd)
+        self.assertIn("/tmp/claude-create.txt", cmd)
+
+    def test_claude_adapter_build_resume_command_supports_model(self) -> None:
+        cmd = ClaudeAdapter.build_resume_command(
+            session_id="019bde9b-4793-70e0-b18a-a437279b2d18",
+            message="Hello, Claude!",
+            output_path=Path("/tmp/claude-output.txt"),
+            model="claude-fable-5",
+        )
+
+        self.assertIn("--model", cmd)
+        self.assertEqual(cmd[cmd.index("--model") + 1], "claude-fable-5")
+
+    def test_claude_adapter_build_resume_command_normalizes_fable_alias(self) -> None:
+        cmd = ClaudeAdapter.build_resume_command(
+            session_id="019bde9b-4793-70e0-b18a-a437279b2d18",
+            message="Hello, Claude!",
+            output_path=Path("/tmp/claude-output.txt"),
+            model="fable",
+        )
+
+        self.assertIn("--model", cmd)
+        self.assertEqual(cmd[cmd.index("--model") + 1], "claude-fable-5")
+
+    def test_claude_adapter_build_resume_command_normalizes_deprecated_model(self) -> None:
+        cmd = ClaudeAdapter.build_resume_command(
+            session_id="019bde9b-4793-70e0-b18a-a437279b2d18",
+            message="Hello, Claude!",
+            output_path=Path("/tmp/claude-output.txt"),
+            model="claude-opus-4-20250514",
+        )
+
+        self.assertIn("--model", cmd)
+        self.assertEqual(cmd[cmd.index("--model") + 1], "claude-opus-4-8")
+
+    def test_claude_adapter_defaults_invalid_model(self) -> None:
+        cmd = ClaudeAdapter.build_resume_command(
+            session_id="019bde9b-4793-70e0-b18a-a437279b2d18",
+            message="Hello, Claude!",
+            output_path=Path("/tmp/claude-output.txt"),
+            model="辅助04-原型设计",
+        )
+
+        self.assertIn("--model", cmd)
+        self.assertEqual(cmd[cmd.index("--model") + 1], "claude-opus-4-8")
+
+    def test_claude_adapter_supports_model(self) -> None:
+        self.assertTrue(ClaudeAdapter.supports_model())
 
     def test_claude_adapter_parse_output_line_ignores_plain_text(self) -> None:
         self.assertIsNone(ClaudeAdapter.parse_output_line("这是 Claude 的普通正文"))
+
+    def test_claude_adapter_parse_output_line_extracts_process_event(self) -> None:
+        parsed = ClaudeAdapter.parse_output_line(
+            '{"type":"tool_call.started","event_type":"tool_started",'
+            '"title":"Read","text":"调用工具: Read path: config.toml","source":"claude"}'
+        )
+
+        self.assertEqual((parsed or {}).get("event_type"), "tool_started")
+        self.assertEqual((parsed or {}).get("source"), "claude")
 
 
 class TestOpenCodeAdapter(unittest.TestCase):
@@ -326,6 +438,44 @@ class TestGeminiAdapter(unittest.TestCase):
         self.assertIn("--output-format", cmd)
         self.assertIn("json", cmd)
 
+    def test_gemini_adapter_build_resume_command_supports_model(self) -> None:
+        cmd = GeminiAdapter.build_resume_command(
+            session_id="019bde9b-4793-70e0-b18a-a437279b2d18",
+            message="Hello, Gemini!",
+            output_path=Path("/tmp/output.json"),
+            model="gemini-2.5-flash",
+        )
+        self.assertIn("--model", cmd)
+        self.assertIn("gemini-2.5-flash", cmd)
+
+    def test_gemini_adapter_build_create_command_supports_model(self) -> None:
+        cmd = GeminiAdapter.build_create_command(
+            seed_prompt="Hello, Gemini!",
+            output_path=Path("/tmp/output.json"),
+            model="gemini-2.5-flash",
+        )
+        self.assertIn("--model", cmd)
+        self.assertIn("gemini-2.5-flash", cmd)
+
+    def test_gemini_adapter_supports_model(self) -> None:
+        self.assertTrue(GeminiAdapter.supports_model())
+
+    def test_gemini_adapter_extracts_pretty_json_response(self) -> None:
+        parsed = GeminiAdapter.parse_output_line(
+            '{\n'
+            '  "session_id": "b4136799-1826-40b6-8e0e-27500175c542",\n'
+            '  "response": "已完成初始化\\n当前职责边界: 总控分工",\n'
+            '  "stats": {"tokens": {"total": 120}}\n'
+            '}'
+        )
+        self.assertEqual((parsed or {}).get("type"), "message")
+        self.assertEqual((parsed or {}).get("content"), "已完成初始化\n当前职责边界: 总控分工")
+
+    def test_gemini_adapter_ignores_pretty_json_fragments(self) -> None:
+        self.assertIsNone(GeminiAdapter.parse_output_line("{"))
+        self.assertIsNone(GeminiAdapter.parse_output_line('  "response": "正文",'))
+        self.assertIsNone(GeminiAdapter.parse_output_line("}"))
+
 
 class TestTraeAdapter(unittest.TestCase):
     """Tests for TraeAdapter."""
@@ -354,6 +504,213 @@ class TestTraeAdapter(unittest.TestCase):
         self.assertTrue(TraeAdapter.supports_model())
 
 
+class TestCodeBuddyAdapter(unittest.TestCase):
+    """Tests for CodeBuddyAdapter."""
+
+    def test_codebuddy_adapter_info(self) -> None:
+        info = CodeBuddyAdapter.info()
+        self.assertEqual(info.id, "codebuddy")
+        self.assertEqual(info.name, "CodeBuddy Code")
+        self.assertTrue(info.enabled)
+
+    def test_codebuddy_adapter_build_resume_command(self) -> None:
+        cmd = CodeBuddyAdapter.build_resume_command(
+            session_id="ccb-smoke-001",
+            message="Hello, CodeBuddy!",
+            output_path=Path("/tmp/codebuddy-output.txt"),
+            model="deepseek-v4-pro",
+        )
+        joined = " ".join(cmd)
+        self.assertIn("task_dashboard.adapters.codebuddy_runner", cmd)
+        self.assertIn("resume", cmd)
+        self.assertIn("--session-id", cmd)
+        self.assertIn("ccb-smoke-001", cmd)
+        self.assertIn("--output-path", cmd)
+        self.assertIn("/tmp/codebuddy-output.txt", cmd)
+        self.assertIn("--model", cmd)
+        self.assertIn("deepseek-v4-pro", cmd)
+        self.assertIn("Hello, CodeBuddy!", cmd)
+        self.assertIn("codebuddy_runner", joined)
+
+    def test_codebuddy_adapter_permission_mode_runtime_whitelist(self) -> None:
+        cmd = CodeBuddyAdapter.build_resume_command(
+            session_id="ccb-smoke-001",
+            message="Hello, CodeBuddy!",
+            output_path=Path("/tmp/codebuddy-output.txt"),
+            permission_mode="bypassPermissions",
+        )
+        self.assertIn("--permission-mode", cmd)
+        self.assertEqual(cmd[cmd.index("--permission-mode") + 1], "bypassPermissions")
+
+        default_cmd = CodeBuddyAdapter.build_resume_command(
+            session_id="ccb-smoke-001",
+            message="Hello, CodeBuddy!",
+            output_path=Path("/tmp/codebuddy-output.txt"),
+            permission_mode="default",
+        )
+        self.assertNotIn("--permission-mode", default_cmd)
+
+        plan_cmd = CodeBuddyAdapter.build_resume_command(
+            session_id="ccb-smoke-001",
+            message="Hello, CodeBuddy!",
+            output_path=Path("/tmp/codebuddy-output.txt"),
+            permission_mode="plan",
+        )
+        self.assertIn("--permission-mode", plan_cmd)
+        self.assertEqual(plan_cmd[plan_cmd.index("--permission-mode") + 1], "plan")
+
+        invalid_cmd = CodeBuddyAdapter.build_resume_command(
+            session_id="ccb-smoke-001",
+            message="Hello, CodeBuddy!",
+            output_path=Path("/tmp/codebuddy-output.txt"),
+            permission_mode="not-allowed",
+        )
+        self.assertNotIn("--permission-mode", invalid_cmd)
+
+    def test_codebuddy_adapter_permission_mode_env_fallback_and_runtime_priority(self) -> None:
+        with mock.patch.dict("os.environ", {"TASK_DASHBOARD_CODEBUDDY_PERMISSION_MODE": "bypassPermissions"}, clear=False):
+            env_cmd = CodeBuddyAdapter.build_resume_command(
+                session_id="ccb-smoke-001",
+                message="Hello, CodeBuddy!",
+                output_path=Path("/tmp/codebuddy-output.txt"),
+            )
+            priority_cmd = CodeBuddyAdapter.build_resume_command(
+                session_id="ccb-smoke-001",
+                message="Hello, CodeBuddy!",
+                output_path=Path("/tmp/codebuddy-output.txt"),
+                permission_mode="default",
+            )
+
+        self.assertIn("--permission-mode", env_cmd)
+        self.assertEqual(env_cmd[env_cmd.index("--permission-mode") + 1], "bypassPermissions")
+        self.assertNotIn("--permission-mode", priority_cmd)
+
+    def test_codebuddy_adapter_build_create_command(self) -> None:
+        cmd = CodeBuddyAdapter.build_create_command(
+            seed_prompt="Please reply with OK",
+            output_path=Path("/tmp/codebuddy-create.txt"),
+            model="kimi-k2.6",
+        )
+        self.assertIn("create", cmd)
+        self.assertIn("--output-path", cmd)
+        self.assertIn("/tmp/codebuddy-create.txt", cmd)
+        self.assertIn("--model", cmd)
+        self.assertIn("kimi-k2.6", cmd)
+
+    def test_codebuddy_adapter_supports_model(self) -> None:
+        self.assertTrue(CodeBuddyAdapter.supports_model())
+
+    def test_codebuddy_extracts_final_result_from_event_array(self) -> None:
+        data = [
+            {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "prompt"}]},
+            {
+                "type": "reasoning",
+                "rawContent": [{"type": "reasoning_text", "text": "do not expose"}],
+            },
+            {
+                "type": "message",
+                "role": "assistant",
+                "status": "completed",
+                "content": [{"type": "output_text", "text": "assistant text"}],
+            },
+            {"type": "result", "subtype": "success", "is_error": False, "result": "final text"},
+        ]
+        self.assertEqual(extract_final_text(data), "final text")
+
+    def test_codebuddy_extract_final_text_rejects_raw_user_json_result(self) -> None:
+        data = [
+            {
+                "type": "result",
+                "subtype": "success",
+                "is_error": False,
+                "result": '[{"type":"message","role":"user","content":[{"type":"input_text","text":"prompt"}]}]',
+            }
+        ]
+        self.assertEqual(extract_final_text(data), "")
+
+    def test_codebuddy_parse_output_line_ignores_plain_text(self) -> None:
+        self.assertIsNone(CodeBuddyAdapter.parse_output_line("普通正文由 runner 写入 last，不进入过程轨"))
+
+    def test_codebuddy_parse_output_line_extracts_compact_json_result(self) -> None:
+        parsed = CodeBuddyAdapter.parse_output_line(
+            '[{"type":"reasoning","rawContent":[{"text":"hidden"}]},'
+            '{"type":"result","subtype":"success","is_error":false,"result":"OK"}]'
+        )
+        self.assertEqual((parsed or {}).get("type"), "message")
+        self.assertEqual((parsed or {}).get("content"), "OK")
+
+    def test_codebuddy_normalizes_process_events_without_final_duplication(self) -> None:
+        events = normalize_process_events(
+            [
+                {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "prompt"}]},
+                {"type": "reasoning", "rawContent": [{"type": "reasoning_text", "text": "hidden"}]},
+                {
+                    "type": "function_call",
+                    "callId": "call_001",
+                    "name": "Agent",
+                    "arguments": '{"description":"Explore project structure","prompt":"long prompt"}',
+                },
+                {
+                    "type": "function_call_result",
+                    "callId": "call_001",
+                    "name": "Agent",
+                    "status": "completed",
+                    "output": {"type": "text", "text": "Project structure explored"},
+                },
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "Final answer"}],
+                },
+            ],
+            final_text="Final answer",
+        )
+
+        self.assertEqual([event["event_type"] for event in events], ["tool_started", "tool_completed"])
+        self.assertEqual(events[0]["source"], "codebuddy")
+        self.assertIn("调用工具: Agent description: Explore project structure", events[0]["text"])
+        self.assertIn("工具完成: Agent Project structure explored", events[1]["text"])
+
+    def test_codebuddy_normalizes_tool_arguments_without_raw_json_or_prompt(self) -> None:
+        events = normalize_process_events(
+            [
+                {
+                    "type": "function_call",
+                    "callId": "call_ask_001",
+                    "name": "AskUserQuestion",
+                    "arguments": json.dumps(
+                        {
+                            "questions": [
+                                {"question": "第一条完整问题正文不应出现在过程轨"},
+                                {"question": "第二条完整问题正文不应出现在过程轨"},
+                            ],
+                            "prompt": "完整 prompt 不应出现在过程轨",
+                        },
+                        ensure_ascii=False,
+                    ),
+                }
+            ]
+        )
+
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["event_type"], "tool_started")
+        self.assertEqual(events[0]["text"], "调用工具: AskUserQuestion 向用户提问 / 问题 2 项")
+        blob = json.dumps(events, ensure_ascii=False)
+        self.assertNotIn('{"questions"', blob)
+        self.assertNotIn("完整 prompt", blob)
+        self.assertNotIn("完整问题正文", blob)
+
+    def test_codebuddy_parse_output_line_extracts_normalized_process_event(self) -> None:
+        parsed = CodeBuddyAdapter.parse_output_line(
+            '{"type":"tool_call.started","event_type":"tool_started","item_type":"function_call",'
+            '"title":"Agent","text":"调用工具: Agent Explore project structure","source":"codebuddy"}'
+        )
+
+        self.assertEqual((parsed or {}).get("type"), "tool_call.started")
+        self.assertEqual((parsed or {}).get("event_type"), "tool_started")
+        self.assertEqual((parsed or {}).get("source"), "codebuddy")
+
+
 class TestAdapterRegistry(unittest.TestCase):
     """Tests for the adapter registry functions."""
 
@@ -364,6 +721,7 @@ class TestAdapterRegistry(unittest.TestCase):
         self.assertEqual(get_adapter("opencode"), OpenCodeAdapter)
         self.assertEqual(get_adapter("gemini"), GeminiAdapter)
         self.assertEqual(get_adapter("trae"), TraeAdapter)
+        self.assertEqual(get_adapter("codebuddy"), CodeBuddyAdapter)
 
     def test_get_adapter_or_error(self) -> None:
         """Verify get_adapter_or_error raises ValueError for unknown CLI type."""

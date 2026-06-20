@@ -229,6 +229,68 @@ class SenderContractTests(unittest.TestCase):
         self.assertNotIn("communication_view", extra)
         self.assertNotIn("receipt_summary", extra)
 
+    def test_parse_announce_request_defaults_claude_workdir_to_channel_root(self) -> None:
+        out = parse_announce_request(
+            {
+                "projectId": "task_dashboard",
+                "channelName": "子级02-CCB运行时（server-并发-安全-启动）",
+                "sessionId": "sid-claude",
+                "message": "hello",
+            },
+            extract_sender_fields=lambda payload: normalize_sender_fields(payload),
+            extract_run_extra_fields=lambda payload: {},
+            derive_session_work_context=lambda *args, **kwargs: {
+                "environment": "stable",
+                "worktree_root": "/repo",
+                "workdir": "/repo",
+                "branch": "main",
+            },
+            coerce_bool=lambda value, default=False: bool(value) if value is not None else default,
+            build_local_server_origin=lambda host, port: "",
+            session_data={"id": "sid-claude", "cli_type": "claude", "workdir": "/repo"},
+            environment_name="stable",
+            worktree_root="/repo",
+            local_server_host="127.0.0.1",
+            local_server_port=18765,
+            resolve_channel_workdir=lambda _pid, _channel: "/repo/任务规划/子级02-CCB运行时（server-并发-安全-启动）",
+            resolve_project_workdir=lambda _pid: "/repo",
+        )
+
+        extra = out["run_extra_fields"]
+        self.assertEqual(extra.get("workdir"), "/repo/任务规划/子级02-CCB运行时（server-并发-安全-启动）")
+        context = extra["project_execution_context"]
+        self.assertEqual((context.get("target") or {}).get("workdir"), extra.get("workdir"))
+
+    def test_parse_announce_request_keeps_explicit_workdir_for_codebuddy(self) -> None:
+        out = parse_announce_request(
+            {
+                "projectId": "task_dashboard",
+                "channelName": "子级02-CCB运行时（server-并发-安全-启动）",
+                "sessionId": "sid-codebuddy",
+                "message": "hello",
+                "workdir": "/custom/workdir",
+            },
+            extract_sender_fields=lambda payload: normalize_sender_fields(payload),
+            extract_run_extra_fields=lambda payload: {},
+            derive_session_work_context=lambda *args, **kwargs: {
+                "environment": "stable",
+                "worktree_root": "/repo",
+                "workdir": "/repo",
+                "branch": "main",
+            },
+            coerce_bool=lambda value, default=False: bool(value) if value is not None else default,
+            build_local_server_origin=lambda host, port: "",
+            session_data={"id": "sid-codebuddy", "cli_type": "codebuddy", "workdir": "/repo"},
+            environment_name="stable",
+            worktree_root="/repo",
+            local_server_host="127.0.0.1",
+            local_server_port=18765,
+            resolve_channel_workdir=lambda _pid, _channel: "/repo/任务规划/子级02-CCB运行时（server-并发-安全-启动）",
+            resolve_project_workdir=lambda _pid: "/repo",
+        )
+
+        self.assertEqual(out["run_extra_fields"].get("workdir"), "/custom/workdir")
+
     def test_extract_run_extra_fields_reads_run_extra_meta_upgrade_fields(self) -> None:
         extra = _extract_run_extra_fields(
             {

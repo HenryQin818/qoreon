@@ -180,12 +180,16 @@ class ProjectSchedulerRuntimeRegistry:
         }
 
     def get_status(self, project_id: str) -> dict[str, Any]:
-        return _ensure_auto_scheduler_status_shape(
-            _build_project_scheduler_status(
+        runtime_flags = self._worker_runtime_flags(project_id)
+        status = _build_project_scheduler_status(
             self.store,
             project_id,
-            runtime_flags=self._worker_runtime_flags(project_id),
-            )
+            runtime_flags=runtime_flags,
+        )
+        if not status and bool(runtime_flags.get("worker_running")):
+            status = {"project_id": str(project_id or "").strip(), **runtime_flags}
+        return _ensure_auto_scheduler_status_shape(
+            status
         )
 
     def _set_worker_fields(self, project_id: str, **kwargs: Any) -> None:

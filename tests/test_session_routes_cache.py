@@ -1,5 +1,7 @@
 import os
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -109,10 +111,14 @@ class SessionRoutesCacheTests(unittest.TestCase):
                         "project_id": "task_dashboard",
                         "channel_name": "子级02-CCB运行时（server-并发-安全-启动）",
                         "alias": "后端-任务业务",
+                        "model": "claude-fable-5",
+                        "project_execution_context": {"target": {"project_id": "task_dashboard"}},
                         "task_tracking": {"current_task_ref": {"task_id": "heavy-task"}},
                     }
                 ]
 
+        context_calls = []
+        runtime_kwargs = {}
         with mock.patch.object(
             session_routes,
             "build_sessions_list_payload",
@@ -126,9 +132,9 @@ class SessionRoutesCacheTests(unittest.TestCase):
                 worktree_root="/tmp/task-dashboard",
                 apply_effective_primary_flags=lambda _store, _pid, rows: rows,
                 decorate_sessions_display_fields=lambda rows: rows,
-                apply_session_context_rows=lambda rows, **_kwargs: rows,
+                apply_session_context_rows=lambda rows, **_kwargs: context_calls.append(_kwargs) or rows,
                 apply_session_work_context=lambda row, **_kwargs: row,
-                attach_runtime_state_to_sessions=lambda _store, rows, **_kwargs: [
+                attach_runtime_state_to_sessions=lambda _store, rows, **_kwargs: runtime_kwargs.update(_kwargs) or [
                     {
                         **row,
                         "runtime_state": {"display_state": "idle"},
@@ -146,9 +152,302 @@ class SessionRoutesCacheTests(unittest.TestCase):
         self.assertEqual((out.get("sessions_read_model") or {}).get("payload_mode"), "summary")
         row = (out.get("sessions") or [])[0]
         self.assertEqual(row.get("id"), "session-a")
+        self.assertEqual(row.get("model"), "claude-fable-5")
         self.assertEqual(row.get("runtime_state"), {"display_state": "idle"})
         self.assertEqual(row.get("agent_display_name"), "后端-任务业务")
         self.assertNotIn("task_tracking", row)
+        self.assertNotIn("project_execution_context", row)
+        self.assertEqual(context_calls, [])
+        self.assertTrue(runtime_kwargs.get("runtime_index_allow_stale"))
+        self.assertFalse(runtime_kwargs.get("runtime_index_wait_for_inflight"))
+        self.assertFalse(runtime_kwargs.get("probe_external_when_idle"))
+        read_model = out.get("sessions_read_model") or {}
+        self.assertTrue(read_model.get("isPartial"))
+        self.assertIn("model", read_model.get("summary_fields") or [])
+        self.assertIn("project_execution_context", read_model.get("deferred_fields") or [])
+        self.assertEqual(out.get("statusFreshness"), "partial")
+
+    def test_list_sessions_response_light_mode_skips_context_and_runtime(self) -> None:
+        class _SessionStore:
+            def list_sessions(self, *_args, **_kwargs):
+                return [
+                    {
+                        "id": "session-a",
+                        "project_id": "task_dashboard",
+                        "channel_name": "子级02-CCB运行时（server-并发-安全-启动）",
+                        "alias": "后端-light",
+                        "model": "claude-fable-5",
+                        "project_execution_context": {"target": {"project_id": "task_dashboard"}},
+                    }
+                ]
+
+        code, out = session_routes.list_sessions_response(
+            query_string="project_id=task_dashboard&payloadMode=light",
+            session_store=_SessionStore(),
+            store=object(),
+            environment_name="stable",
+            worktree_root="/tmp/task-dashboard",
+            apply_effective_primary_flags=lambda _store, _pid, rows: rows,
+            decorate_sessions_display_fields=lambda rows: rows,
+            apply_session_context_rows=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError("light mode must not build project_execution_context")
+            ),
+            apply_session_work_context=lambda row, **_kwargs: row,
+            attach_runtime_state_to_sessions=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError("light mode must not synchronously attach runtime state")
+            ),
+            heartbeat_runtime=None,
+            load_session_heartbeat_config=lambda _row: {},
+            heartbeat_summary_payload=lambda _row: {},
+        )
+
+        self.assertEqual(code, 200)
+        self.assertEqual(out.get("payloadMode"), "light")
+        self.assertTrue(out.get("isPartial"))
+        self.assertEqual(out.get("statusFreshness"), "degraded")
+        row = (out.get("sessions") or [])[0]
+        self.assertEqual(row.get("model"), "claude-fable-5")
+        self.assertEqual(row.get("agent_display_name"), "后端-light")
+        self.assertNotIn("project_execution_context", row)
+        runtime_state = row.get("runtime_state") or {}
+        self.assertTrue(runtime_state.get("degraded"))
+        self.assertEqual(runtime_state.get("degraded_reason"), "runtime_not_attached")
+        hints = out.get("loadingHints") or {}
+        self.assertIn("project_execution_context", hints.get("deferredFields") or [])
+        self.assertIn("model", (out.get("sessions_read_model") or {}).get("summary_fields") or [])
+
+    def test_list_sessions_allow_stale_returns_expired_cache_without_rebuild(self) -> None:
+        cache_key = session_routes._sessions_payload_cache_key(
+            scope="sessions",
+            project_id="task_dashboard",
+            channel_name="",
+            include_deleted=False,
+            environment_name="stable",
+            worktree_root="/tmp/task-dashboard",
+            payload_mode="summary",
+        )
+        old_mono = time.monotonic() - 3600
+        inflight_event = threading.Event()
+        session_routes._SESSIONS_PAYLOAD_CACHE[cache_key] = {
+            "checked_at_mono": old_mono,
+            "build_started_at_mono": old_mono,
+            "project_id": "task_dashboard",
+            "payload": {"sessions": [{"id": "cached-session"}], "count": 1},
+        }
+        session_routes._SESSIONS_PAYLOAD_CACHE_INFLIGHT[cache_key] = {
+            "event": inflight_event,
+            "started_at_mono": time.monotonic(),
+            "project_id": "task_dashboard",
+        }
+
+        with mock.patch.object(
+            session_routes,
+            "build_sessions_summary_payload",
+            side_effect=AssertionError("allow_stale should not rebuild while stale cache exists"),
+        ):
+            code, out = session_routes.list_sessions_response(
+                query_string="project_id=task_dashboard&payloadMode=summary&allow_stale=1",
+                session_store=object(),
+                store=object(),
+                environment_name="stable",
+                worktree_root="/tmp/task-dashboard",
+                apply_effective_primary_flags=lambda *_args, **_kwargs: [],
+                decorate_sessions_display_fields=lambda rows: rows,
+                apply_session_context_rows=lambda rows, **_kwargs: rows,
+                apply_session_work_context=lambda row, **_kwargs: row,
+                attach_runtime_state_to_sessions=lambda _store, rows, **_kwargs: rows,
+                heartbeat_runtime=None,
+                load_session_heartbeat_config=lambda _row: {},
+                heartbeat_summary_payload=lambda _row: {},
+        )
+
+        self.assertEqual(code, 200)
+        row = (out.get("sessions") or [])[0]
+        self.assertEqual(row.get("id"), "cached-session")
+        self.assertTrue(bool((row.get("runtime_state") or {}).get("degraded")))
+        self.assertEqual((row.get("communication_status_summary") or {}).get("degraded_reason"), "stale_cache_inflight")
+        read_model = out.get("sessions_read_model") or {}
+        self.assertTrue(read_model.get("allow_stale"))
+        self.assertTrue(read_model.get("stale"))
+        self.assertTrue(read_model.get("from_cache"))
+        self.assertEqual(read_model.get("degraded_reason"), "stale_cache_inflight")
+        self.assertGreaterEqual(int(read_model.get("cache_age_ms") or 0), 1)
+
+    def test_list_sessions_allow_stale_cache_hit_skips_runtime_state(self) -> None:
+        cache_key = session_routes._sessions_payload_cache_key(
+            scope="sessions",
+            project_id="task_dashboard",
+            channel_name="",
+            include_deleted=False,
+            environment_name="stable",
+            worktree_root="/tmp/task-dashboard",
+            payload_mode="light",
+        )
+        now_mono = time.monotonic()
+        session_routes._SESSIONS_PAYLOAD_CACHE[cache_key] = {
+            "checked_at_mono": now_mono,
+            "build_started_at_mono": now_mono,
+            "project_id": "task_dashboard",
+            "payload": {"sessions": [{"id": "cached-session", "alias": "缓存会话"}], "count": 1},
+        }
+        with mock.patch.object(
+            session_routes,
+            "build_sessions_summary_payload",
+            side_effect=AssertionError("allow_stale should return cache without rebuilding"),
+        ):
+            code, out = session_routes.list_sessions_response(
+                query_string="project_id=task_dashboard&payloadMode=light&allow_stale=1",
+                session_store=object(),
+                store=object(),
+                environment_name="stable",
+                worktree_root="/tmp/task-dashboard",
+                apply_effective_primary_flags=lambda *_args, **_kwargs: [],
+                decorate_sessions_display_fields=lambda rows: rows,
+                apply_session_context_rows=lambda rows, **_kwargs: rows,
+                apply_session_work_context=lambda row, **_kwargs: row,
+                attach_runtime_state_to_sessions=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                    AssertionError("allow_stale cache hit must not touch runtime state")
+                ),
+                heartbeat_runtime=None,
+                load_session_heartbeat_config=lambda _row: {},
+                heartbeat_summary_payload=lambda _row: {},
+            )
+
+        self.assertEqual(code, 200)
+        row = (out.get("sessions") or [])[0]
+        self.assertEqual(row.get("id"), "cached-session")
+        runtime_state = row.get("runtime_state") or {}
+        self.assertEqual(runtime_state.get("display_state"), "idle")
+        self.assertTrue(runtime_state.get("degraded"))
+        self.assertEqual(runtime_state.get("degraded_reason"), "cache_hit_no_runtime")
+        self.assertNotIn("session_display_state", row)
+        self.assertEqual(row.get("latest_run_summary"), {})
+        self.assertEqual(row.get("latest_effective_run_summary"), {})
+        communication = row.get("communication_status_summary") or {}
+        self.assertEqual(communication.get("delivery_state"), "unknown")
+        self.assertTrue(communication.get("degraded"))
+        self.assertEqual(communication.get("degraded_reason"), "cache_hit_no_runtime")
+        projection = communication.get("projection_summary") or {}
+        self.assertEqual(projection.get("reason"), "degraded_unknown")
+        self.assertTrue(projection.get("degraded"))
+        read_model = out.get("sessions_read_model") or {}
+        self.assertTrue(read_model.get("allow_stale"))
+        self.assertTrue(read_model.get("stale"))
+        self.assertTrue(read_model.get("from_cache"))
+        self.assertTrue(read_model.get("degraded"))
+        self.assertEqual(read_model.get("degraded_reason"), "cache_hit_no_runtime")
+
+    def test_list_sessions_allow_stale_no_cache_skips_runtime_state_and_caches_directory(self) -> None:
+        class _SessionStore:
+            def list_sessions(self, *_args, **_kwargs):
+                return [
+                    {
+                        "id": "session-a",
+                        "project_id": "task_dashboard",
+                        "channel_name": "子级02-CCB运行时（server-并发-安全-启动）",
+                        "alias": "后端-会话读链",
+                    }
+                ]
+
+        cache_key = session_routes._sessions_payload_cache_key(
+            scope="sessions",
+            project_id="task_dashboard",
+            channel_name="",
+            include_deleted=False,
+            environment_name="stable",
+            worktree_root="/tmp/task-dashboard",
+            payload_mode="light",
+        )
+        session_routes._SESSIONS_PAYLOAD_CACHE_INFLIGHT[cache_key] = {
+            "event": threading.Event(),
+            "started_at_mono": time.monotonic(),
+            "project_id": "task_dashboard",
+        }
+        code, out = session_routes.list_sessions_response(
+            query_string="project_id=task_dashboard&payloadMode=light&allow_stale=1",
+            session_store=_SessionStore(),
+            store=object(),
+            environment_name="stable",
+            worktree_root="/tmp/task-dashboard",
+            apply_effective_primary_flags=lambda _store, _pid, rows: rows,
+            decorate_sessions_display_fields=lambda rows: rows,
+            apply_session_context_rows=lambda rows, **_kwargs: rows,
+            apply_session_work_context=lambda row, **_kwargs: row,
+            attach_runtime_state_to_sessions=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError("allow_stale no-cache path must not touch runtime state")
+            ),
+            heartbeat_runtime=None,
+            load_session_heartbeat_config=lambda _row: {},
+            heartbeat_summary_payload=lambda _row: {},
+        )
+
+        self.assertEqual(code, 200)
+        self.assertEqual(out.get("payloadMode"), "light")
+        row = (out.get("sessions") or [])[0]
+        self.assertEqual(row.get("id"), "session-a")
+        self.assertEqual(row.get("agent_display_name"), "后端-会话读链")
+        runtime_state = row.get("runtime_state") or {}
+        self.assertEqual(runtime_state.get("display_state"), "idle")
+        self.assertTrue(runtime_state.get("degraded"))
+        self.assertNotIn("session_display_state", row)
+        self.assertEqual(row.get("latest_run_summary"), {})
+        self.assertEqual(row.get("latest_effective_run_summary"), {})
+        communication = row.get("communication_status_summary") or {}
+        self.assertEqual(communication.get("delivery_state"), "unknown")
+        self.assertTrue(communication.get("degraded"))
+        projection = communication.get("projection_summary") or {}
+        self.assertEqual(projection.get("reason"), "degraded_unknown")
+        self.assertTrue(projection.get("degraded"))
+        read_model = out.get("sessions_read_model") or {}
+        self.assertTrue(read_model.get("allow_stale"))
+        self.assertTrue(read_model.get("stale"))
+        self.assertFalse(read_model.get("from_cache"))
+        self.assertTrue(read_model.get("degraded"))
+        self.assertEqual(read_model.get("degraded_reason"), "inflight_no_cache")
+        self.assertIn(cache_key, session_routes._SESSIONS_PAYLOAD_CACHE)
+
+    def test_list_sessions_allow_stale_without_payload_mode_defaults_to_summary(self) -> None:
+        class _SessionStore:
+            def list_sessions(self, *_args, **_kwargs):
+                return [
+                    {
+                        "id": "session-a",
+                        "project_id": "task_dashboard",
+                        "channel_name": "子级06-数据治理与契约（规格-校验-修复）",
+                        "alias": "性能治理",
+                    }
+                ]
+
+        with mock.patch.object(
+            session_routes,
+            "build_sessions_list_payload",
+            side_effect=AssertionError("allow_stale without payloadMode should not use full builder"),
+        ):
+            code, out = session_routes.list_sessions_response(
+                query_string="project_id=task_dashboard&allow_stale=1",
+                session_store=_SessionStore(),
+                store=object(),
+                environment_name="stable",
+                worktree_root="/tmp/task-dashboard",
+                apply_effective_primary_flags=lambda _store, _pid, rows: rows,
+                decorate_sessions_display_fields=lambda rows: rows,
+                apply_session_context_rows=lambda rows, **_kwargs: rows,
+                apply_session_work_context=lambda row, **_kwargs: row,
+                attach_runtime_state_to_sessions=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                    AssertionError("allow_stale default summary path must not touch runtime state")
+                ),
+                heartbeat_runtime=None,
+                load_session_heartbeat_config=lambda _row: {},
+                heartbeat_summary_payload=lambda _row: {},
+            )
+
+        self.assertEqual(code, 200)
+        self.assertEqual(out.get("payloadMode"), "summary")
+        self.assertEqual((out.get("sessions") or [])[0].get("agent_display_name"), "性能治理")
+        read_model = out.get("sessions_read_model") or {}
+        self.assertTrue(read_model.get("allow_stale"))
+        self.assertTrue(read_model.get("stale"))
+        self.assertTrue(read_model.get("degraded"))
 
     def test_list_channel_sessions_response_reuses_cached_payload(self) -> None:
         payload = {

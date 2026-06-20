@@ -98,6 +98,7 @@ from .claude_adapter import ClaudeAdapter
 from .opencode_adapter import OpenCodeAdapter
 from .gemini_adapter import GeminiAdapter
 from .trae_adapter import TraeAdapter
+from .codebuddy_adapter import CodeBuddyAdapter
 
 # Re-export for convenience.
 __all__ = [
@@ -114,4 +115,5 @@ __all__ = [
     "OpenCodeAdapter",
     "GeminiAdapter",
     "TraeAdapter",
+    "CodeBuddyAdapter",
 ]

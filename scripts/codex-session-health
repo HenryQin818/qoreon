@@ -1,0 +1,169 @@
+#!/usr/bin/env python3
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+from typing import Any
+
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+REPO_ROOT = SCRIPT_DIR.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from task_dashboard.session_health import (  # noqa: E402
+    _baseline_band,
+    _estimate_baseline_floor_pct,
+    _health_action,
+    _observed_baseline_floor,
+    analyze_codex_session_logs,
+    index_codex_log_files,
+)
+
+
+def _as_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _as_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def build_report(session_id: str, *, recent: int) -> dict[str, Any]:
+    log_roots = [
+        Path.home() / ".codex" / "sessions",
+        Path.home() / ".codex" / "archived_sessions",
+    ]
+    log_index = index_codex_log_files(log_roots)
+    metrics = analyze_codex_session_logs(session_id, log_index)
+    observations = list(metrics.get("compaction_observations") or [])
+    recent_observations = observations[-max(1, recent):]
+
+    observed_floor_pct, observed_reasons, observed_sustained_high_floor = _observed_baseline_floor(observations)
+    recent_compactions_24h = 0
+    recent_compactions_7d = 0
+    compaction_timestamps = list(metrics.get("compaction_timestamps") or [])
+    if compaction_timestamps:
+        from datetime import datetime, timedelta
+
+        now = datetime.now().astimezone()
+        for raw in compaction_timestamps:
+            try:
+                ts = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            if now - ts.astimezone() <= timedelta(days=1):
+                recent_compactions_24h += 1
+            if now - ts.astimezone() <= timedelta(days=7):
+                recent_compactions_7d += 1
+
+    if observed_floor_pct is not None:
+        baseline_floor_pct = observed_floor_pct
+        baseline_floor_reasons = observed_reasons
+        sustained_high_floor = observed_sustained_high_floor
+        baseline_floor_source = "observed"
+    else:
+        baseline_floor_pct, baseline_floor_reasons, sustained_high_floor = _estimate_baseline_floor_pct(
+            int(metrics.get("compacted_count") or 0),
+            recent_compactions_24h,
+            recent_compactions_7d,
+            _as_float(metrics.get("avg_turns_between_compactions")),
+            _as_float(metrics.get("avg_hours_between_compactions")),
+            _as_int(metrics.get("turns_since_last_compaction")),
+        )
+        baseline_floor_source = "estimated"
+
+    risk_level, baseline_floor_status = _baseline_band(baseline_floor_pct, sustained_high_floor)
+    return {
+        "session_id": session_id,
+        "has_log": bool(metrics.get("has_log")),
+        "log_paths": metrics.get("log_paths") or [],
+        "log_paths_count": metrics.get("log_paths_count") or 0,
+        "log_size_mb": metrics.get("log_size_mb") or 0.0,
+        "turn_context_count": metrics.get("turn_context_count") or 0,
+        "compacted_count": metrics.get("compacted_count") or 0,
+        "last_compacted_at": metrics.get("last_compacted_at") or "",
+        "recent_compactions_24h": recent_compactions_24h,
+        "recent_compactions_7d": recent_compactions_7d,
+        "recent_after_usage_pcts": metrics.get("recent_after_usage_pcts") or [],
+        "last_after_usage_pct": metrics.get("last_after_usage_pct"),
+        "latest_token_usage_pct": metrics.get("latest_token_usage_pct"),
+        "latest_token_usage_at": metrics.get("latest_token_usage_at") or "",
+        "compaction_observations": recent_observations,
+        "baseline_floor_pct": baseline_floor_pct,
+        "baseline_floor_source": baseline_floor_source,
+        "baseline_floor_status": baseline_floor_status,
+        "baseline_floor_reasons": baseline_floor_reasons,
+        "sustained_high_floor": sustained_high_floor,
+        "health_action": _health_action(baseline_floor_pct, sustained_high_floor),
+    }
+
+
+def _print_text(report: dict[str, Any]) -> None:
+    print(f"session_id: {report['session_id']}")
+    print(f"has_log: {'yes' if report['has_log'] else 'no'}")
+    print(f"log_paths: {report['log_paths_count']} files")
+    for path in report["log_paths"]:
+        print(f"  - {path}")
+    print(f"log_size_mb: {report['log_size_mb']}")
+    print(f"turn_context_count: {report['turn_context_count']}")
+    print(f"compacted_count: {report['compacted_count']}")
+    print(f"last_compacted_at: {report['last_compacted_at'] or '-'}")
+    latest_usage = report.get("latest_token_usage_pct")
+    latest_usage_at = str(report.get("latest_token_usage_at") or "").strip()
+    if latest_usage is not None:
+        print(f"latest_token_usage: {latest_usage}% at {latest_usage_at or '-'}")
+    print(
+        "baseline_floor: "
+        f"{report['baseline_floor_pct']}% "
+        f"({report['baseline_floor_source']}, {report['baseline_floor_status']}, {report['health_action']})"
+    )
+    if report["baseline_floor_reasons"]:
+        print("baseline_reasons:")
+        for item in report["baseline_floor_reasons"]:
+            print(f"  - {item}")
+    observations = list(report.get("compaction_observations") or [])
+    if observations:
+        print("recent_compactions:")
+        for item in observations:
+            compacted_at = item.get("compacted_at") or "-"
+            before = item.get("before_pct")
+            after = item.get("after_pct")
+            before_text = "-" if before is None else f"{before}%"
+            after_text = "-" if after is None else f"{after}%"
+            transition = " / " if str(item.get("transition_kind") or "") == "marker_sample_increase" else " -> "
+            print(f"  - {compacted_at}: {before_text}{transition}{after_text}")
+    else:
+        print("recent_compactions: -")
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(description="查看指定 Codex 会话的上下文压缩健康情况")
+    ap.add_argument("session_id", help="要查询的 Codex session_id")
+    ap.add_argument("--recent", type=int, default=10, help="展示最近几次 compact 记录，默认 10")
+    ap.add_argument("--json", action="store_true", help="输出 JSON")
+    args = ap.parse_args(argv)
+
+    report = build_report(str(args.session_id).strip(), recent=max(1, int(args.recent or 10)))
+    if args.json:
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        return 0
+    _print_text(report)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

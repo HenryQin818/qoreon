@@ -1221,6 +1221,12 @@
       display: grid;
       gap: 8px;
     }
+    .process-panel.inline-live {
+      background: rgba(248,250,252,0.78);
+      border-color: rgba(47,111,237,0.10);
+      margin-top: 6px;
+      padding: 8px;
+    }
     .process-meta { margin-bottom: 2px; }
     .process-list {
       display: grid;
@@ -1365,6 +1371,152 @@
     }
     .process-action-time {
       font-size: 10px;
+    }
+    .process-action-node {
+      display: grid;
+      grid-template-columns: 20px minmax(0, 1fr) minmax(56px, max-content);
+      gap: 7px;
+      align-items: start;
+      padding: 6px 8px;
+      border-radius: 11px;
+      background: rgba(248,250,252,0.90);
+      border: 1px solid rgba(15,23,42,0.06);
+      font-size: 12px;
+      line-height: 1.42;
+      min-width: 0;
+      cursor: pointer;
+      transition: background 150ms ease, border-color 150ms ease;
+    }
+    .process-action-node.no-time {
+      grid-template-columns: 20px minmax(0, 1fr);
+    }
+    .process-action-node:hover {
+      background: rgba(255,255,255,0.96);
+      border-color: rgba(47,111,237,0.14);
+    }
+    .process-action-node:focus-visible {
+      outline: 2px solid rgba(47,111,237,0.24);
+      outline-offset: 2px;
+    }
+    .process-action-node.status-failed,
+    .process-action-node.status-cancelled {
+      border-color: rgba(220,38,38,0.18);
+      background: rgba(254,242,242,0.72);
+    }
+    .process-action-node-main {
+      display: grid;
+      gap: 6px;
+      min-width: 0;
+    }
+    .process-action-node-line {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto auto;
+      align-items: center;
+      gap: 5px;
+      min-width: 0;
+    }
+    .process-action-node-badge,
+    .process-action-node-status {
+      display: inline-flex;
+      align-items: center;
+      min-height: 17px;
+      border-radius: 999px;
+      padding: 0 6px;
+      white-space: nowrap;
+      font-size: 10px;
+      font-weight: 800;
+    }
+    .process-action-node-badge {
+      background: rgba(47,111,237,0.10);
+      color: rgba(30,64,175,0.82);
+    }
+    .process-action-node-status {
+      background: rgba(15,23,42,0.06);
+      color: rgba(15,23,42,0.58);
+    }
+    .process-action-node.status-running .process-action-node-status,
+    .process-action-node.status-pending .process-action-node-status {
+      background: rgba(217,119,6,0.12);
+      color: rgba(146,64,14,0.86);
+    }
+    .process-action-node.status-failed .process-action-node-status,
+    .process-action-node.status-cancelled .process-action-node-status {
+      background: rgba(220,38,38,0.10);
+      color: rgba(153,27,27,0.86);
+    }
+    .process-action-node.status-skipped .process-action-node-status {
+      background: rgba(100,116,139,0.12);
+      color: rgba(71,85,105,0.82);
+    }
+    .process-action-node.type-edit .process-action-node-badge {
+      background: rgba(22,163,74,0.10);
+      color: rgba(22,101,52,0.84);
+    }
+    .process-action-node.type-command .process-action-node-badge {
+      background: rgba(15,23,42,0.08);
+      color: rgba(15,23,42,0.70);
+    }
+    .process-action-node.type-message .process-action-node-badge {
+      background: rgba(14,165,233,0.11);
+      color: rgba(3,105,161,0.86);
+    }
+    .process-action-node.type-web .process-action-node-badge,
+    .process-action-node.type-search .process-action-node-badge {
+      background: rgba(124,58,237,0.10);
+      color: rgba(91,33,182,0.84);
+    }
+    .process-action-node-text {
+      min-width: 0;
+      color: rgba(0,0,0,0.72);
+      font-weight: 560;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .process-action-node-caret {
+      color: rgba(30,64,175,0.58);
+      font-size: 10px;
+      font-weight: 750;
+      white-space: nowrap;
+    }
+    .process-action-node-detail {
+      display: grid;
+      gap: 4px;
+      padding: 6px 8px;
+      border-radius: 9px;
+      background: rgba(255,255,255,0.74);
+      border: 1px solid rgba(15,23,42,0.055);
+    }
+    .process-action-node-detail-row {
+      display: grid;
+      grid-template-columns: 42px minmax(0, 1fr);
+      gap: 6px;
+      align-items: start;
+      min-width: 0;
+      font-size: 11px;
+      line-height: 1.45;
+    }
+    .process-action-node-detail-label {
+      color: rgba(0,0,0,0.42);
+      font-weight: 750;
+      white-space: nowrap;
+    }
+    .process-action-node-detail-value {
+      min-width: 0;
+      color: rgba(0,0,0,0.64);
+      overflow-wrap: anywhere;
+      word-break: break-word;
+      white-space: pre-wrap;
+    }
+    .process-action-node-detail-row.is-error .process-action-node-detail-value {
+      color: rgba(153,27,27,0.88);
+      font-weight: 650;
+    }
+    .process-action-node-time {
+      font-size: 10px;
+      justify-self: end;
+      white-space: nowrap;
+      padding-top: 2px;
     }
     .process-idx {
       display: inline-grid;
@@ -1866,6 +2018,11 @@
       background: rgba(15,110,138,0.12);
       color: #0f6e8a;
     }
+    .mdebug-cli.cli-codebuddy {
+      border-color: rgba(219,39,119,0.24);
+      background: rgba(219,39,119,0.10);
+      color: #be185d;
+    }
     .mdebug-cli.cli-other {
       border-color: rgba(0,0,0,0.14);
       background: rgba(0,0,0,0.06);
@@ -2131,4 +2288,8 @@
       .process-action-list { padding-left: 30px; }
       .process-action-item { grid-template-columns: auto minmax(0, 1fr); }
       .process-action-time { grid-column: 2; }
+      .process-action-node { grid-template-columns: 18px minmax(0, 1fr); }
+      .process-action-node-line { grid-template-columns: auto minmax(0, 1fr) auto; }
+      .process-action-node-caret { display: none; }
+      .process-action-node-time { grid-column: 2; justify-self: start; padding-top: 0; }
     }

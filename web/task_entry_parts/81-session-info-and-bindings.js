@@ -174,57 +174,7 @@
     }
 
     function buildNewConvInitMessage(channelName) {
-      if (typeof buildUnifiedAgentInitMessage === "function") {
-        return buildUnifiedAgentInitMessage(channelName);
-      }
-      const channelLabel = String(channelName || "").trim() || "当前通道";
-      return [
-        "[Agent培训] " + channelLabel,
-        "在开始当前协作前，你必须先完成以下初始化训练。未完成前，不要回复“已完成初始化”，也不要直接开始正式任务。",
-        "",
-        "1. 明确职责边界",
-        "- 只围绕当前通道和当前任务主线执行，不自行扩题。",
-        "- 默认处理后回原发送 Agent；若消息中有 callback_to.session_id，优先回该 session。",
-        "",
-        "2. 对齐项目真源",
-        "- 项目配置 = 真源默认上下文。",
-        "- Agent = 身份，session = 当前承载结果。",
-        "- 不清楚工作区、分支、真源时，先查项目内真源，不自行猜测。",
-        "",
-        "3. 阅读必读入口并学习项目技能",
-        "- README.md",
-        "- 活动任务/",
-        "- 活动反馈/",
-        "- 产出物/材料/",
-        "- 产出物/沉淀/",
-        "- 当前项目 skills 真源/索引文件",
-        "- 至少重点学习：agent-init-training-playbook、collab-message-send（或当前项目等效的正式消息技能）、当前通道自己的专项 skill。",
-        "",
-        "4. 学会怎么发正式消息",
-        "- 跨 Agent / 跨通道协作只能走同源 /api/codex/announce（announce_to_channel），不能把内部草稿、内部 spawn、非正式 resume 当成“已通知通道”。",
-        "- 正式消息默认用你当前执行 Agent 自己的身份发送，不借用项目主会话、总控或其他通道 Agent 身份。",
-        "- 没有 announce_run_id 时，不得写已发出 / 已送达 / 已通知通道。",
-        "- 正式通知成功至少分三层判断：已生成待发送正文 / 已提交发送，待验证 / 已完成证据闭环。",
-        "",
-        "5. 学会什么时候必须回执",
-        "- 收到任务先首回执，执行后再回结构化结论。",
-        "- 只有 notify_only 才可不回。",
-        "- 后续默认按 任务 / 反馈 / 产出物 推进；普通任务优先任务文件收口块，反馈文件仅用于增强验收包。",
-        "",
-        "6. 完成一次消息能力验证",
-        "- 去项目通讯录/CCR 中找到一个“不是你自己”的 Agent，发送 1 条最小初始化验证消息。",
-        "- 如果当前项目没有可用通讯录或找不到目标，再回唯一阻塞，不得跳过这一步。",
-        "",
-        "7. 学习完成后的固定回执格式",
-        "已完成初始化",
-        "当前职责边界: <一句话>",
-        "当前主线: <一句话>",
-        "已学习技能: <列出本轮已学习的关键 skills>",
-        "通讯录验证: 已向 <agent名称> 发送正式消息",
-        "验证证据: <run_id / 目标session_id>",
-        "唯一阻塞: <无/一句话>",
-        "首个动作: <一句话>",
-      ].join("\n");
+      return "";
     }
 
     function syncNewConvInitMessage(force = false) {
@@ -288,6 +238,7 @@
         ["newConvReuseStrategy", "change"],
         ["newConvEnvironment", "change"],
         ["newConvModel", "input"],
+        ["newConvCodeBuddyModel", "change"],
         ["newConvPurpose", "input"],
         ["newConvWorktreeRoot", "input"],
         ["newConvWorkdir", "input"],
@@ -296,6 +247,13 @@
         const node = document.getElementById(id);
         if (!node) return;
         node.addEventListener(eventName, () => {
+          if (id === "newConvModel") {
+            const cliSelect = document.getElementById("newConvCliType");
+            node.dataset.modelCliType = String((cliSelect && cliSelect.value) || "codex").trim().toLowerCase() || "codex";
+            node.dataset.modelSource = "user";
+            node.dataset.standardModel = normalizeSessionModel(node.value);
+            delete node.dataset.codebuddyModelApplied;
+          }
           syncNewConvAdvancedSummary();
         });
       });
@@ -331,9 +289,9 @@
       if (hintEl) {
         hintEl.textContent = next === "attach"
           ? (legacyBindingEntry
-            ? "这是旧入口兼容管理模式：建议先确认 Session ID 与 CLI 类型一致；该绑定接口只保留给兼容维护与历史排查，新链路仍以会话列表与候选接口为准。"
-            : "建议先确认 Session ID 与 CLI 类型一致；该绑定接口仅保留为兼容管理入口，新链路仍以会话列表与候选接口为准。")
-          : "将创建新的 CLI 会话并自动绑定到通道，并自动发送你设置的首条消息。";
+          ? "这是旧入口兼容管理模式：建议先确认 Session ID 与 CLI 类型一致；该绑定接口只保留给兼容维护与历史排查，新链路仍以会话列表与候选接口为准。"
+          : "建议先确认 Session ID 与 CLI 类型一致；该绑定接口仅保留为兼容管理入口，新链路仍以会话列表与候选接口为准。")
+          : "将创建新的 CLI 会话并绑定到通道；默认不发送初始化消息，Agent 可读取通道目录 AGENTS.md。";
       }
       if (next === "attach" && sidInput) sidInput.value = "";
       if (next === "create") syncNewConvInitMessage(false);
@@ -348,8 +306,32 @@
       const sess = sessionForChannel(NEW_CONV_UI.projectId, NEW_CONV_UI.channelName);
       if (sidInput) sidInput.value = "";
       if (cliSelect && cur && cur.cli_type) cliSelect.value = String(cur.cli_type || "codex");
-      if (modelInput) modelInput.value = normalizeSessionModel(sess && sess.model);
+      if (modelInput) {
+        const cliType = String((cliSelect && cliSelect.value) || "codex").trim().toLowerCase() || "codex";
+        const model = normalizeSessionModel(sess && sess.model);
+        modelInput.value = model;
+        modelInput.dataset.modelCliType = cliType;
+        modelInput.dataset.modelSource = "preset";
+        delete modelInput.dataset.codebuddyModelApplied;
+        if (isCodeBuddyCliType(cliType)) {
+          modelInput.dataset.codebuddyModel = model;
+          delete modelInput.dataset.standardModel;
+        } else {
+          modelInput.dataset.standardModel = model;
+          delete modelInput.dataset.codebuddyModel;
+        }
+      }
       syncNewConvModelUI();
+    }
+
+    function selectedNewConvModelValue(cliTypeRaw, modelInput, codeBuddySelect) {
+      if (isCodeBuddyCliType(cliTypeRaw)) {
+        const selected = normalizeSessionModel(codeBuddySelect && codeBuddySelect.value)
+          || normalizeSessionModel(modelInput && modelInput.value)
+          || codeBuddyDefaultModel();
+        return selected;
+      }
+      return normalizeSessionModel(modelInput && modelInput.value);
     }
 
     function collectNewConvEnvironmentOptions(prefill) {
@@ -434,14 +416,90 @@
       if (reuseSelect) reuseSelect.value = String(prefill.reuse_strategy || "create_new");
       if (purposeInput) purposeInput.value = String(prefill.purpose || "");
       syncNewConvAdvancedSummary();
+      syncNewConvChannelTypeSummary();
+    }
+
+    function syncNewConvChannelTypeSummary() {
+      const summaryEl = document.getElementById("newConvChannelTypeSummary");
+      if (!summaryEl) return;
+      const channelName = String(NEW_CONV_UI.channelName || "").trim();
+      if (!channelName) {
+        summaryEl.textContent = "选择通道后显示继承自通道类型的标准角色、AGENTS.md 与 workdir 策略。";
+        return;
+      }
+      if (typeof buildNewConvChannelTypeInheritanceText === "function") {
+        summaryEl.textContent = buildNewConvChannelTypeInheritanceText(channelName);
+        return;
+      }
+      summaryEl.textContent = "继承摘要：项目 AGENTS.md + 通道 AGENTS.md；标准角色按通道类型自动带出。";
+    }
+
+    function syncNewConvStaticInstructionHint(cliTypeRaw) {
+      const node = document.getElementById("newConvStaticInstructionHint");
+      if (!node) return;
+      if (isCodeBuddyCliType(cliTypeRaw)) {
+        node.hidden = false;
+        node.textContent = "静态规则：AGENTS.md 仍是唯一编辑真源；创建/绑定 CodeBuddy 后会生成或同步 CODEBUDDY.md 受管镜像，CodeBuddy 优先读取该镜像文件。";
+      } else {
+        node.hidden = true;
+        node.textContent = "";
+      }
     }
 
     function syncNewConvModelUI() {
       const cliSelect = document.getElementById("newConvCliType");
       const modelInput = document.getElementById("newConvModel");
-      if (!modelInput) return;
+      const codeBuddySelect = document.getElementById("newConvCodeBuddyModel");
+      const hintEl = document.getElementById("newConvCliHint");
       const cli = String((cliSelect && cliSelect.value) || "codex").trim() || "codex";
-      modelInput.placeholder = modelInputPlaceholderByCli(cli);
+      const normalized = cli.toLowerCase();
+      if (modelInput) {
+        modelInput.placeholder = modelInputPlaceholderByCli(cli);
+        const previousCli = String(modelInput.dataset.modelCliType || "").trim().toLowerCase();
+        if (isCodeBuddyCliType(normalized)) {
+          if (previousCli && !isCodeBuddyCliType(previousCli)) {
+            modelInput.dataset.standardModel = normalizeSessionModel(modelInput.value);
+          }
+          const current = normalizeSessionModel(
+            modelInput.dataset.codebuddyModel
+            || (isCodeBuddyCliType(previousCli) ? modelInput.value : "")
+          );
+          const selected = populateCodeBuddyModelSelect(codeBuddySelect, current || codeBuddyDefaultModel());
+          modelInput.value = selected;
+          modelInput.hidden = true;
+          modelInput.disabled = true;
+          modelInput.dataset.codebuddyModelApplied = current ? "0" : "1";
+          modelInput.dataset.codebuddyModel = selected;
+          modelInput.dataset.modelCliType = "codebuddy";
+          modelInput.dataset.modelSource = current ? (modelInput.dataset.modelSource || "preset") : "default";
+        } else {
+          if (isCodeBuddyCliType(previousCli)) {
+            modelInput.value = normalizeSessionModel(modelInput.dataset.standardModel);
+          }
+          modelInput.hidden = false;
+          modelInput.disabled = false;
+          delete modelInput.dataset.codebuddyModelApplied;
+          modelInput.dataset.modelCliType = normalized;
+          if (!modelInput.dataset.modelSource || modelInput.dataset.modelSource === "default") {
+            modelInput.dataset.modelSource = "preset";
+          }
+        }
+      }
+      if (codeBuddySelect) {
+        const show = isCodeBuddyCliType(normalized);
+        codeBuddySelect.hidden = !show;
+        codeBuddySelect.disabled = !show;
+        if (!show) codeBuddySelect.innerHTML = "";
+      }
+      if (!hintEl) return;
+      if (normalized === "codebuddy") {
+        hintEl.textContent = "CodeBuddy Code：默认 deepseek-v4-pro 仅为创建预设，可改选，不代表所有环境已验收；界面可读名如 DeepSeek V4 Pro，实际保存值为模型 ID：deepseek-v4-pro。AGENTS.md 是唯一规则真源，CODEBUDDY.md 是受管镜像；权限模式与工具白名单由本机 CodeBuddy 配置控制，运行详情只消费后端归一后的 terminal text 输出。";
+      } else if (normalized === "trae") {
+        hintEl.textContent = "Trae Agent CLI：模型可选；运行前需由后端环境配置 TRAE_CONFIG_FILE。";
+      } else {
+        hintEl.textContent = "留空模型时使用所选 CLI 的默认模型。";
+      }
+      syncNewConvStaticInstructionHint(normalized);
     }
 
     function openNewConvModal(preProjectId, preChannelName, preferredMode = "create", options = {}) {
@@ -504,7 +562,9 @@
       if (!chSelect) return;
       chSelect.innerHTML = "";
       const proj = projectById(projectId);
-      const channels = (proj && Array.isArray(proj.channels)) ? proj.channels : [];
+      const fallbackChannels = (proj && Array.isArray(proj.channels)) ? proj.channels : [];
+      const unionChannels = (typeof unionChannelNames === "function") ? unionChannelNames(projectId) : [];
+      const channels = Array.isArray(unionChannels) && unionChannels.length ? unionChannels : fallbackChannels;
       if (!channels.length) {
         chSelect.appendChild(el("option", { value: "", text: "无可用通道" }));
         return;
@@ -532,6 +592,36 @@
       const src = (raw && typeof raw === "object") ? raw : {};
       const fb = (fallback && typeof fallback === "object") ? fallback : {};
       const sid = firstNonEmptyText([src.id, src.session_id, src.sessionId, fb.sessionId, fb.id]);
+      const srcPermissionModePresent = Object.prototype.hasOwnProperty.call(src, "codebuddy_permission_mode")
+        || Object.prototype.hasOwnProperty.call(src, "codebuddyPermissionMode")
+        || src._codebuddy_permission_mode_present === true
+        || src.codebuddyPermissionModePresent === true;
+      const mergedPermissionMode = typeof mergeConversationSessionPermissionModeValue === "function"
+        ? mergeConversationSessionPermissionModeValue({
+          ...(src || {}),
+          _codebuddy_permission_mode_present: srcPermissionModePresent,
+          source: firstNonEmptyText([
+            src.codebuddy_permission_mode_source,
+            src.codebuddyPermissionModeSource,
+            src.source,
+            srcPermissionModePresent ? "session-detail" : "",
+          ]),
+        }, fb)
+        : (
+          typeof normalizeCodeBuddyPermissionMode === "function"
+            ? normalizeCodeBuddyPermissionMode(firstNonEmptyText([
+              srcPermissionModePresent ? src.codebuddy_permission_mode : "",
+              srcPermissionModePresent ? src.codebuddyPermissionMode : "",
+              fb.codebuddy_permission_mode,
+              fb.codebuddyPermissionMode,
+            ]))
+            : firstNonEmptyText([
+              srcPermissionModePresent ? src.codebuddy_permission_mode : "",
+              srcPermissionModePresent ? src.codebuddyPermissionMode : "",
+              fb.codebuddy_permission_mode,
+              fb.codebuddyPermissionMode,
+            ], "default")
+        );
       const srcContext = (src.context && typeof src.context === "object") ? src.context : {};
       const fbContext = (fb.context && typeof fb.context === "object") ? fb.context : {};
       const rawHeartbeat = (src.heartbeat && typeof src.heartbeat === "object") ? src.heartbeat : {};
@@ -554,6 +644,16 @@
         branch: firstNonEmptyText([src.branch, srcContext.branch, fb.branch, fbContext.branch]),
         cli_type: firstNonEmptyText([src.cli_type, src.cliType, fb.cli_type], "codex"),
         model: normalizeSessionModel(firstNonEmptyText([src.model, fb.model])),
+        codebuddy_permission_mode: mergedPermissionMode,
+        codebuddyPermissionMode: mergedPermissionMode,
+        _codebuddy_permission_mode_present: srcPermissionModePresent || !!firstNonEmptyText([fb.codebuddy_permission_mode, fb.codebuddyPermissionMode]),
+        codebuddy_permission_mode_source: firstNonEmptyText([
+          src.codebuddy_permission_mode_source,
+          src.codebuddyPermissionModeSource,
+          src.source,
+          fb.codebuddy_permission_mode_source,
+          fb.codebuddyPermissionModeSource,
+        ]),
         reasoning_effort: normalizeReasoningEffort(firstNonEmptyText([src.reasoning_effort, src.reasoningEffort, fb.reasoning_effort])),
         status: firstNonEmptyText([src.status, fb.status], "active"),
         display_name: firstNonEmptyText([
@@ -1897,6 +1997,11 @@
         model: normalizeSessionModel(form.model),
         reasoning_effort: cliType === "codex" ? normalizeReasoningEffort(form.reasoning_effort) : "",
       };
+      if (isCodeBuddyCliType(cliType)) {
+        payload.codebuddy_permission_mode = typeof normalizeCodeBuddyPermissionMode === "function"
+          ? normalizeCodeBuddyPermissionMode(form.codebuddy_permission_mode || form.codebuddyPermissionMode)
+          : String(form.codebuddy_permission_mode || form.codebuddyPermissionMode || "default").trim();
+      }
       // 历史 status 兼容逻辑由后端统一迁移，前端编辑弹框不再直接改写该字段。
       const heartbeatPayload = buildSessionHeartbeatPayloadForSessionSave();
       if (heartbeatPayload && heartbeatPayload.heartbeat) {
@@ -1928,6 +2033,32 @@
         });
         persistConversationAvatarAssignment(sid, form.avatar_id);
         SESSION_INFO_UI.base = updated;
+        if (isCodeBuddyCliType(cliType) && normalizeSessionModel(updated.model) && typeof syncConversationComposerCodeBuddyModelToLocal === "function") {
+          syncConversationComposerCodeBuddyModelToLocal(
+            sid,
+            normalizeSessionModel(updated.model),
+            SESSION_INFO_UI.projectId || STATE.project || ""
+          );
+        }
+        if (
+          typeof isClaudeCliType === "function"
+          && isClaudeCliType(cliType)
+          && normalizeSessionModel(updated.model)
+          && typeof syncConversationComposerClaudeModelToLocal === "function"
+        ) {
+          syncConversationComposerClaudeModelToLocal(
+            sid,
+            normalizeSessionModel(updated.model),
+            SESSION_INFO_UI.projectId || STATE.project || ""
+          );
+        }
+        if (isCodeBuddyCliType(cliType) && updated.codebuddy_permission_mode && typeof syncConversationComposerCodeBuddyPermissionModeToLocal === "function") {
+          syncConversationComposerCodeBuddyPermissionModeToLocal(
+            sid,
+            updated.codebuddy_permission_mode,
+            SESSION_INFO_UI.projectId || STATE.project || ""
+          );
+        }
         for (let i = 0; i < PCONV.sessions.length; i++) {
           const row = PCONV.sessions[i];
           if (String(getSessionId(row) || "").trim() !== sid) continue;
@@ -1954,6 +2085,13 @@
             codexTitle: updated.codex_title,
             cli_type: updated.cli_type,
             model: updated.model,
+            ...(isCodeBuddyCliType(cliType) ? {
+              codebuddy_permission_mode: updated.codebuddy_permission_mode,
+              codebuddyPermissionMode: updated.codebuddyPermissionMode || updated.codebuddy_permission_mode,
+              codebuddy_permission_mode_source: "session-info",
+              codebuddyPermissionModeSource: "session-info",
+              _codebuddy_permission_mode_present: true,
+            } : {}),
             reasoning_effort: updated.reasoning_effort,
             status: updated.status,
             is_primary: updated.is_primary,
@@ -2033,6 +2171,55 @@
       addKv(basicKv, "最近使用", compactDateTime(base.last_used_at) || "-");
       basic.appendChild(basicKv);
       wrap.appendChild(basic);
+
+      const staticFiles = typeof normalizeStaticInstructionFilesPayload === "function"
+        ? normalizeStaticInstructionFilesPayload(base)
+        : null;
+      const sessionCliType = String(form.cli_type || base.cli_type || "codex").trim().toLowerCase() || "codex";
+      const staticSource = typeof staticInstructionSourceDisplay === "function"
+        ? staticInstructionSourceDisplay(staticFiles || null)
+        : "AGENTS.md";
+      const staticMirror = staticFiles && typeof staticInstructionMirrorForCli === "function"
+        ? staticInstructionMirrorForCli(staticFiles, sessionCliType)
+        : null;
+      const defaultMirrorName = typeof staticInstructionDefaultMirrorFileName === "function"
+        ? staticInstructionDefaultMirrorFileName(sessionCliType)
+        : (sessionCliType === "codebuddy" ? "CODEBUDDY.md" : "");
+      const mirrorName = staticMirror && typeof staticInstructionFileName === "function"
+        ? staticInstructionFileName(staticMirror, defaultMirrorName || "无")
+        : (defaultMirrorName || "无");
+      const mirrorStatusRaw = staticMirror && typeof staticInstructionSyncStatus === "function"
+        ? staticInstructionSyncStatus(staticMirror)
+        : "";
+      const mirrorStatusText = staticMirror && typeof staticInstructionStatusText === "function"
+        ? staticInstructionStatusText(mirrorStatusRaw)
+        : (defaultMirrorName ? "等待服务端同步状态" : "无需镜像");
+      const staticRules = el("section", { class: "conv-session-info-block conv-session-static-instruction-block" });
+      staticRules.appendChild(el("div", { class: "conv-session-info-title", text: "静态规则文件（只读）" }));
+      const staticKv = el("div", { class: "conv-session-kv" });
+      addKv(staticKv, "规则真源", staticSource, true);
+      addKv(staticKv, "CLI 镜像", mirrorName, !!mirrorName && mirrorName !== "无");
+      addKv(staticKv, "同步状态", mirrorStatusText);
+      staticRules.appendChild(staticKv);
+      const staticSummary = el("div", { class: "conv-session-exec-summary" });
+      staticSummary.appendChild(el("span", {
+        class: "detail-context-chip good",
+        text: "只编辑 AGENTS.md",
+      }));
+      if (sessionCliType === "codebuddy") {
+        staticSummary.appendChild(el("span", {
+          class: "detail-context-chip " + (typeof staticInstructionStatusTone === "function" ? staticInstructionStatusTone(mirrorStatusRaw) : "muted"),
+          text: "CodeBuddy 读取 CODEBUDDY.md 受管镜像",
+        }));
+      }
+      if (mirrorStatusRaw === "conflict" || mirrorStatusRaw === "blocked") {
+        staticSummary.appendChild(el("span", {
+          class: "detail-context-chip warn",
+          text: "存在冲突，请回通道配置页使用受控修复入口",
+        }));
+      }
+      staticRules.appendChild(staticSummary);
+      wrap.appendChild(staticRules);
 
       const execContext = buildProjectExecutionContextMeta(base.project_execution_context || null);
       const targetRef = normalizeProjectExecutionContextRef(execContext.target || null);
@@ -2242,13 +2429,29 @@
       channelSel.addEventListener("change", () => { form.channel_name = String(channelSel.value || ""); });
       formNode.appendChild(mkField("所属通道（channel_name）", channelSel));
 
-      const modelInput = el("input", {
+      const modelTextInput = el("input", {
         class: "input",
         value: String(form.model || ""),
         placeholder: modelInputPlaceholderByCli(form.cli_type || base.cli_type || "codex"),
       });
-      modelInput.addEventListener("input", () => { form.model = String(modelInput.value || ""); });
-      formNode.appendChild(mkField("模型（model）", modelInput));
+      modelTextInput.addEventListener("input", () => { form.model = String(modelTextInput.value || ""); });
+      const codeBuddyModelSelect = el("select", { class: "input", style: "cursor:pointer;" });
+      codeBuddyModelSelect.addEventListener("change", () => {
+        form.model = String(codeBuddyModelSelect.value || codeBuddyDefaultModel());
+      });
+      const modelFieldWrap = el("div", { class: "conv-session-model-control" });
+      modelFieldWrap.appendChild(modelTextInput);
+      modelFieldWrap.appendChild(codeBuddyModelSelect);
+      formNode.appendChild(mkField("模型（model）", modelFieldWrap));
+
+      const codeBuddyPermissionSelect = el("select", { class: "input", style: "cursor:pointer;" });
+      codeBuddyPermissionSelect.addEventListener("change", () => {
+        form.codebuddy_permission_mode = typeof normalizeCodeBuddyPermissionMode === "function"
+          ? normalizeCodeBuddyPermissionMode(codeBuddyPermissionSelect.value)
+          : String(codeBuddyPermissionSelect.value || "default");
+      });
+      const permissionField = mkField("授权模式（CodeBuddy）", codeBuddyPermissionSelect);
+      formNode.appendChild(permissionField);
 
       const reasoningField = el("div", { class: "conv-session-field" });
       reasoningField.appendChild(el("label", { text: "推理强度（reasoning_effort，仅 codex）" }));
@@ -2266,7 +2469,35 @@
       const syncFormByCli = () => {
         const cliType = String(form.cli_type || base.cli_type || "codex").trim().toLowerCase() || "codex";
         form.cli_type = cliType;
-        modelInput.placeholder = modelInputPlaceholderByCli(cliType);
+        modelTextInput.placeholder = modelInputPlaceholderByCli(cliType);
+        if (isCodeBuddyCliType(cliType)) {
+          form.model = normalizeSessionModel(form.model) || codeBuddyDefaultModel();
+          populateCodeBuddyModelSelect(codeBuddyModelSelect, form.model);
+          form.codebuddy_permission_mode = typeof normalizeCodeBuddyPermissionMode === "function"
+            ? normalizeCodeBuddyPermissionMode(form.codebuddy_permission_mode || form.codebuddyPermissionMode)
+            : String(form.codebuddy_permission_mode || form.codebuddyPermissionMode || "default");
+          if (typeof populateCodeBuddyPermissionModeSelect === "function") {
+            populateCodeBuddyPermissionModeSelect(codeBuddyPermissionSelect, form.codebuddy_permission_mode);
+          } else {
+            codeBuddyPermissionSelect.value = form.codebuddy_permission_mode || "default";
+          }
+          modelTextInput.hidden = true;
+          modelTextInput.disabled = true;
+          codeBuddyModelSelect.hidden = false;
+          codeBuddyModelSelect.disabled = false;
+          permissionField.style.display = "";
+          codeBuddyPermissionSelect.disabled = false;
+        } else {
+          modelTextInput.value = normalizeSessionModel(form.model);
+          modelTextInput.hidden = false;
+          modelTextInput.disabled = false;
+          codeBuddyModelSelect.hidden = true;
+          codeBuddyModelSelect.disabled = true;
+          codeBuddyModelSelect.innerHTML = "";
+          permissionField.style.display = "none";
+          codeBuddyPermissionSelect.disabled = true;
+          codeBuddyPermissionSelect.innerHTML = "";
+        }
         reasoningField.style.display = cliType === "codex" ? "" : "none";
         if (cliType !== "codex") {
           form.reasoning_effort = "";

@@ -15,6 +15,11 @@ from task_dashboard.helpers import (
     parse_iso_ts as _parse_iso_ts,
     safe_text as _safe_text,
 )
+from task_dashboard.task_identity import (
+    build_task_identity_key,
+    resolve_task_reference,
+    runtime_base_dir_for_repo,
+)
 from task_dashboard.runtime.callback_dispatch import (
     apply_callback_dispatch_views as runtime_apply_callback_dispatch_views,
     build_callback_dispatch_payloads as runtime_build_callback_dispatch_payloads,
@@ -105,6 +110,18 @@ _CALLBACK_WINDOWS: dict[str, dict[str, Any]] = {}
 _CALLBACK_DISPATCH_CLAIM_LOCK = threading.Lock()
 _CALLBACK_DISPATCH_INFLIGHT: set[str] = set()
 _RECEIPT_ACTIVE_RUNTIME_STATUSES = {"queued", "running", "retry_waiting", "external_busy"}
+_INVALID_DONE_PREVIEW_MARKERS = (
+    "仍在 running",
+    "还在 running",
+    "等待当前 run",
+    "等待本 run",
+    "等待该",
+    "等待最新 qa run",
+    "等待最新 qa 重验 run",
+    "未收口",
+    "未形成可签收的最终结果",
+    "不能把运行中间态当成最终结果",
+)
 
 
 def _normalize_message_ref_local(value: Any, *, allow_run_id: bool = False) -> dict[str, str]:
@@ -290,11 +307,19 @@ def _extract_callback_progress_profile(source_meta: dict[str, Any], event_type: 
     receipt = receipt_summary if isinstance(receipt_summary, dict) else {}
     source_channel = _resolve_source_channel_text(source_meta, receipt) or "未知通道"
     source_agent_name = _resolve_source_agent_text(source_meta, receipt)
-    task_path = (
+    raw_task_path = (
         _safe_text(receipt.get("callback_task"), 1200).strip()
         or _callback_meta_text(source_meta, "task_path", "taskPath")
         or "未关联任务"
     )
+    raw_task_id = (
+        _safe_text(receipt.get("callback_task_id"), 120).strip()
+        or _callback_meta_text(source_meta, "task_id", "taskId")
+    )
+    project_id = _safe_text(source_meta.get("projectId"), 120).strip()
+    resolved_task = _resolve_callback_task_ref(project_id, raw_task_path, raw_task_id)
+    task_path = str(resolved_task.get("task_path") or raw_task_path).strip() or "未关联任务"
+    task_id = str(resolved_task.get("task_id") or raw_task_id).strip()
     topic = _callback_meta_text(
         source_meta,
         "callback_topic",
@@ -356,6 +381,7 @@ def _extract_callback_progress_profile(source_meta: dict[str, Any], event_type: 
         "source_channel": source_channel,
         "source_agent_name": _safe_text(source_agent_name, 200).strip(),
         "task_path": task_path,
+        "task_id": task_id,
         "topic": _safe_text(topic, 120).strip().lower() or "event",
         "stage": _safe_text(stage, 80).strip().lower() or "unknown",
         "blocking_status": _safe_text(blocking_status, 20).strip().lower() or "unblocked",
@@ -374,18 +400,38 @@ def _callback_progress_signature(profile: dict[str, str]) -> tuple[str, str, str
     )
 
 
+def _resolve_callback_task_ref(project_id: str, task_path: str, task_id: str = "") -> dict[str, str]:
+    repo_root = __getattr__("_repo_root")()
+    return resolve_task_reference(
+        repo_root=repo_root,
+        runtime_base_dir=runtime_base_dir_for_repo(repo_root),
+        project_id=str(project_id or "").strip(),
+        task_path=str(task_path or "").strip(),
+        task_id=str(task_id or "").strip(),
+    )
+
+
 def _callback_throttle_key(
     project_id: str,
     source_channel: str,
     task_path: str,
     topic: str,
     stage: str,
+    task_id: str = "",
 ) -> str:
+    repo_root = __getattr__("_repo_root")()
+    task_identity_key = build_task_identity_key(
+        repo_root=repo_root,
+        runtime_base_dir=runtime_base_dir_for_repo(repo_root),
+        project_id=str(project_id or "").strip(),
+        task_path=str(task_path or "").strip(),
+        task_id=str(task_id or "").strip(),
+    )
     return "||".join(
         [
             str(project_id or "").strip(),
             str(source_channel or "").strip(),
-            str(task_path or "").strip(),
+            str(task_identity_key or str(task_path or "").strip()),
             str(topic or "").strip().lower(),
             str(stage or "").strip().lower(),
         ]
@@ -633,6 +679,55 @@ def _classify_terminal_callback_event(meta: dict[str, Any]) -> tuple[str, str]:
     return "error", ""
 
 
+def _user_interrupt_receipt_suppression_requested(meta: dict[str, Any], event_type: str, event_reason: str) -> bool:
+    if event_type != "interrupted" or event_reason != "user_interrupt":
+        return False
+    row = meta if isinstance(meta, dict) else {}
+    origin = str(row.get("interrupt_origin") or row.get("interruptOrigin") or "").strip().lower()
+    requested_by = str(row.get("interrupt_requested_by") or row.get("interruptRequestedBy") or "").strip().lower()
+    return origin == "user" or requested_by == "user"
+
+
+def _mark_user_interrupt_receipt_suppressed(source_meta: dict[str, Any]) -> dict[str, Any]:
+    meta = source_meta if isinstance(source_meta, dict) else {}
+    now = _now_iso()
+    meta["interrupt_origin"] = "user"
+    meta["interrupt_requested_by"] = "user"
+    meta["chain_state"] = "cancelled_by_user"
+    meta["auto_receipt_policy"] = "suppressed_by_user_interrupt"
+    meta["receipt_suppressed"] = True
+    meta["receipt_suppressed_reason"] = "user_interrupt"
+    meta["receipt_suppressed_at"] = now
+    source_run_id = str(meta.get("id") or "").strip()
+    if source_run_id:
+        meta["suppressed_source_run_id"] = source_run_id
+    callback_to = __getattr__("_normalize_callback_to")(meta.get("callback_to"))
+    if callback_to:
+        meta["suppressed_callback_to"] = callback_to
+    rows = meta.get("callback_dispatches")
+    if isinstance(rows, list):
+        updated: list[Any] = []
+        suppressed_count = 0
+        update_start = max(len(rows) - 50, 0)
+        for idx, row in enumerate(rows):
+            if not isinstance(row, dict):
+                updated.append(row)
+                continue
+            item = dict(row)
+            status = str(item.get("status") or "").strip().lower()
+            callback_run_id = str(item.get("callback_run_id") or "").strip()
+            if idx >= update_start and not callback_run_id and status not in {"sent", "merged_anchor", "self_suppressed"}:
+                item["status"] = "receipt_suppressed"
+                item["note"] = "suppressed_by_user_interrupt"
+                item["suppressed_at"] = now
+                suppressed_count += 1
+            updated.append(item)
+        meta["callback_dispatches"] = updated
+        if suppressed_count:
+            meta["receipt_suppressed_dispatches_count"] = suppressed_count
+    return meta
+
+
 def _is_callback_auto_run(meta: dict[str, Any]) -> bool:
     trigger_type = str(meta.get("trigger_type") or "").strip().lower()
     return trigger_type.startswith("callback_auto")
@@ -642,6 +737,8 @@ def _source_run_callback_eligible(meta: dict[str, Any]) -> bool:
     if not isinstance(meta, dict):
         return False
     if bool(meta.get("hidden")):
+        return False
+    if str(meta.get("providerRetryRunId") or "").strip() and not bool(meta.get("providerRetryExhausted")):
         return False
     if _is_callback_auto_run(meta):
         return False
@@ -850,6 +947,8 @@ def _build_callback_communication_view(
     dispatch_run_id: str,
     route_mismatch: bool,
     route_resolution: Any,
+    receipt_route_state: str = "",
+    dispatch_status: str = "",
 ) -> dict[str, Any]:
     target_payload = {}
     if isinstance(route_resolution, dict):
@@ -886,6 +985,268 @@ def _build_callback_communication_view(
         out["event_reason"] = "unverified"
     if out["dispatch_state"] not in {"resolved", "fallback", "route_mismatch", "pending"}:
         out["dispatch_state"] = "pending"
+    route_resolution_v1 = __getattr__("_compact_route_resolution_v1")(route_resolution)
+    if route_resolution_v1:
+        out["route_resolution"] = route_resolution_v1
+    route_state = _derive_callback_route_state(
+        source_meta,
+        target={
+            "channel_name": target_channel,
+            "session_id": target_session_id,
+        },
+        route_resolution=route_resolution,
+        dispatch_status=dispatch_status,
+        fallback_state=receipt_route_state,
+    )
+    out["delivery_summary"] = _build_delivery_summary(
+        source_meta,
+        dispatch_state=out["dispatch_state"],
+        dispatch_run_id=out["dispatch_run_id"],
+        route_mismatch=bool(route_mismatch),
+        target_channel=target_channel,
+        target_session_id=target_session_id,
+    )
+    out["receipt_summary_v2"] = _build_receipt_summary_v2(
+        source_meta,
+        dispatch_state=out["dispatch_state"],
+        dispatch_run_id=out["dispatch_run_id"],
+        route_state=route_state,
+        dispatch_status=dispatch_status,
+    )
+    out["callback_route_summary"] = _build_callback_route_summary(
+        source_meta,
+        target_channel=target_channel,
+        target_session_id=target_session_id,
+        route_state=route_state,
+        route_mismatch=bool(route_mismatch),
+        route_resolution=route_resolution,
+    )
+    return out
+
+
+def _route_target_from_resolution(route_resolution: Any) -> dict[str, Any]:
+    rr = route_resolution if isinstance(route_resolution, dict) else {}
+    target = rr.get("final_target") or rr.get("resolved_target") or {}
+    return target if isinstance(target, dict) else {}
+
+
+def _derive_callback_route_state(
+    source_meta: dict[str, Any],
+    *,
+    target: dict[str, Any],
+    route_resolution: Any,
+    dispatch_status: str = "",
+    fallback_state: str = "",
+) -> str:
+    explicit = str(fallback_state or "").strip().lower()
+    allowed = {
+        "not_required",
+        "pending",
+        "expected_callback_route",
+        "route_mismatch",
+        "missing_callback_to",
+        "self_suppressed",
+        "merged_anchor",
+        "callback_failed",
+        "unknown",
+    }
+    if explicit in allowed:
+        return explicit
+    status = str(dispatch_status or "").strip().lower()
+    if status == "self_suppressed":
+        return "self_suppressed"
+    if status == "merged_anchor":
+        return "merged_anchor"
+
+    rr = route_resolution if isinstance(route_resolution, dict) else {}
+    source = str(rr.get("source") or "").strip().lower()
+    target_payload = target if isinstance(target, dict) and target else _route_target_from_resolution(rr)
+    target_session_id = str(target_payload.get("session_id") or "").strip()
+    target_channel = str(target_payload.get("channel_name") or "").strip()
+    callback_to = __getattr__("_normalize_callback_to")(source_meta.get("callback_to"))
+    source_ref = _normalize_message_ref_local(source_meta.get("source_ref"), allow_run_id=True)
+    interaction_mode = str(source_meta.get("interaction_mode") or "").strip().lower()
+
+    if not target_session_id:
+        if interaction_mode == "task_with_receipt" and not callback_to:
+            return "missing_callback_to"
+        return "pending" if str(rr.get("source") or "").strip().lower() in {"", "unresolved"} else "callback_failed"
+
+    if callback_to:
+        cb_session_id = str(callback_to.get("session_id") or "").strip()
+        cb_channel = str(callback_to.get("channel_name") or "").strip()
+        if cb_session_id and cb_session_id == target_session_id:
+            return "expected_callback_route"
+        if not cb_session_id:
+            return "missing_callback_to"
+        if cb_channel and cb_channel == target_channel and source == "callback_to":
+            return "expected_callback_route"
+        return "route_mismatch"
+
+    if interaction_mode == "task_with_receipt":
+        return "missing_callback_to"
+
+    source_ref_session_id = str((source_ref or {}).get("session_id") or "").strip()
+    if source_ref_session_id and source_ref_session_id == target_session_id:
+        return "expected_callback_route"
+    if source in {"callback_to", "source_ref"}:
+        return "expected_callback_route"
+
+    source_session_id = str(source_meta.get("sessionId") or "").strip()
+    if source_session_id and target_session_id and source_session_id != target_session_id:
+        return "route_mismatch"
+    return "expected_callback_route" if target_session_id else "unknown"
+
+
+def _build_delivery_summary(
+    source_meta: dict[str, Any],
+    *,
+    dispatch_state: str,
+    dispatch_run_id: str,
+    route_mismatch: bool,
+    target_channel: str = "",
+    target_session_id: str = "",
+) -> dict[str, Any]:
+    state = str(dispatch_state or "").strip().lower()
+    run_id = str(dispatch_run_id or "").strip()
+    if run_id:
+        delivery_state = "delivered"
+    elif state == "pending":
+        delivery_state = "pending"
+    elif state in {"fallback", "route_mismatch", "resolved"}:
+        delivery_state = "pending"
+    else:
+        delivery_state = "unknown"
+    out: dict[str, Any] = {
+        "version": "v1",
+        "delivery_state": delivery_state,
+        "delivery_verified": bool(run_id),
+        "delivery_checked_at": _now_iso(),
+    }
+    source_run_id = str(source_meta.get("id") or "").strip()
+    if source_run_id:
+        out["source_run_id"] = source_run_id
+    if run_id:
+        out["dispatch_run_id"] = run_id
+    if target_channel:
+        out["target_channel"] = target_channel
+    if target_session_id:
+        out["target_session_id"] = target_session_id
+    if route_mismatch:
+        out["route_warning"] = "route_mismatch"
+    return out
+
+
+def _build_receipt_summary_v2(
+    source_meta: dict[str, Any],
+    *,
+    dispatch_state: str,
+    dispatch_run_id: str,
+    route_state: str,
+    dispatch_status: str = "",
+) -> dict[str, Any]:
+    interaction_mode = str(source_meta.get("interaction_mode") or "").strip().lower()
+    callback_to = __getattr__("_normalize_callback_to")(source_meta.get("callback_to"))
+    receipt_required = bool(interaction_mode == "task_with_receipt" or callback_to)
+    callback_run_id = str(dispatch_run_id or "").strip()
+    status = str(dispatch_status or "").strip().lower()
+    route = str(route_state or "").strip().lower()
+    receipt_received = bool(callback_run_id or status in {"sent", "merged_anchor", "summary_window_member"})
+    missing_reason = ""
+    if route in {"missing_callback_to", "self_suppressed"}:
+        receipt_required = True
+        receipt_state = "missing"
+        missing_reason = route
+    elif not receipt_required:
+        receipt_state = "not_required"
+    elif receipt_received:
+        receipt_state = "received"
+    elif str(dispatch_state or "").strip().lower() == "pending":
+        receipt_state = "pending"
+    else:
+        receipt_state = "unknown"
+
+    out: dict[str, Any] = {
+        "version": "v1",
+        "receipt_required": bool(receipt_required),
+        "receipt_state": receipt_state,
+        "receipt_received": bool(receipt_received),
+        "receipt_route_state": route or "unknown",
+        "receipt_summary_empty": not bool(_terminal_preview_text(source_meta)),
+        "updated_at": _now_iso(),
+    }
+    source_run_id = str(source_meta.get("id") or "").strip()
+    if source_run_id:
+        out["source_run_id"] = source_run_id
+    if callback_run_id:
+        out["receipt_callback_run_id"] = callback_run_id
+    if missing_reason:
+        out["receipt_missing_reason"] = missing_reason
+    for key in (
+        "failure_class",
+        "side_effect_risk",
+        "recovery_mode",
+        "recovery_required",
+        "retry_exhausted",
+    ):
+        if key in source_meta:
+            value = source_meta.get(key)
+            if isinstance(value, bool):
+                out[key] = value
+            else:
+                text = _safe_text(value, 240).strip()
+                if text:
+                    out[key] = text
+    provider_error = source_meta.get("provider_error")
+    if isinstance(provider_error, dict):
+        pe: dict[str, Any] = {}
+        kind = _safe_text(provider_error.get("kind"), 80).strip()
+        if kind:
+            pe["kind"] = kind
+        if "retryable" in provider_error:
+            pe["retryable"] = bool(provider_error.get("retryable"))
+        patterns = provider_error.get("matched_patterns")
+        if isinstance(patterns, list):
+            vals = [_safe_text(x, 120).strip() for x in patterns]
+            vals = [x for x in vals if x]
+            if vals:
+                pe["matched_patterns"] = vals[:20]
+        if pe:
+            out["provider_error"] = pe
+    else:
+        provider_error_text = _safe_text(provider_error, 240).strip()
+        if provider_error_text:
+            out["provider_error"] = provider_error_text
+    return out
+
+
+def _build_callback_route_summary(
+    source_meta: dict[str, Any],
+    *,
+    target_channel: str,
+    target_session_id: str,
+    route_state: str,
+    route_mismatch: bool,
+    route_resolution: Any,
+) -> dict[str, Any]:
+    callback_to = __getattr__("_normalize_callback_to")(source_meta.get("callback_to"))
+    source_ref = _normalize_message_ref_local(source_meta.get("source_ref"), allow_run_id=True)
+    expected_session_id = str((callback_to or {}).get("session_id") or (source_ref or {}).get("session_id") or "").strip()
+    out: dict[str, Any] = {
+        "version": "v1",
+        "receipt_route_state": str(route_state or "unknown").strip().lower(),
+        "route_mismatch": bool(route_mismatch),
+        "updated_at": _now_iso(),
+    }
+    source_run_id = str(source_meta.get("id") or "").strip()
+    if source_run_id:
+        out["source_run_id"] = source_run_id
+    if expected_session_id:
+        out["expected_session_id"] = expected_session_id
+    if target_session_id:
+        out["actual_session_id"] = target_session_id
+    if target_channel:
+        out["target_channel"] = target_channel
     route_resolution_v1 = __getattr__("_compact_route_resolution_v1")(route_resolution)
     if route_resolution_v1:
         out["route_resolution"] = route_resolution_v1
@@ -1080,6 +1441,7 @@ def _normalize_receipt_items(items: Any) -> list[dict[str, Any]]:
             "event_type",
             "event_reason",
             "dispatch_status",
+            "receipt_route_state",
             "display_host_run_id",
             "source_channel",
             "source_agent_name",
@@ -1378,6 +1740,13 @@ def _build_receipt_projection_item(
     route_mismatch = (cb_meta.get("communication_view") or {}).get("route_mismatch") if isinstance(cb_meta.get("communication_view"), dict) else None
     if isinstance(route_mismatch, bool):
         out["route_mismatch"] = route_mismatch
+    callback_route = (cb_meta.get("communication_view") or {}).get("callback_route_summary") if isinstance(cb_meta.get("communication_view"), dict) else None
+    if isinstance(callback_route, dict):
+        receipt_route_state = str(callback_route.get("receipt_route_state") or "").strip().lower()
+        if receipt_route_state:
+            out["receipt_route_state"] = receipt_route_state
+    if str(dispatch_status or "").strip().lower() == "merged_anchor":
+        out["receipt_route_state"] = "merged_anchor"
     trigger_type = str(out.get("trigger_type") or "").strip().lower()
     if trigger_type == "callback_auto_summary":
         out["is_summary"] = True
@@ -1399,6 +1768,95 @@ def _build_receipt_projection_item(
     if callback_anchor_action:
         out["callback_anchor_action"] = callback_anchor_action
     return out
+
+
+def _apply_host_receipt_summaries(
+    host_meta: dict[str, Any],
+    *,
+    items: list[dict[str, Any]],
+    rollup: dict[str, Any],
+) -> None:
+    communication_view = host_meta.get("communication_view")
+    cv = dict(communication_view) if isinstance(communication_view, dict) else {}
+    host_run_id = str(host_meta.get("id") or "").strip()
+    visible = bool(host_meta.get("visible_in_channel_chat") or host_meta.get("visibleInChannelChat"))
+    target_ref = host_meta.get("target_ref") if isinstance(host_meta.get("target_ref"), dict) else {}
+    target_session_id = str(target_ref.get("session_id") or host_meta.get("sessionId") or "").strip()
+    target_channel = str(target_ref.get("channel_name") or host_meta.get("channelName") or "").strip()
+    delivery_state = "delivered" if visible else "unknown"
+    new_delivery_summary = {
+        "version": "v1",
+        "delivery_state": delivery_state,
+        "delivery_verified": bool(visible),
+        "delivery_checked_at": str(host_meta.get("createdAt") or host_meta.get("startedAt") or _now_iso()).strip(),
+        "source_run_id": host_run_id,
+        "target_channel": target_channel,
+        "target_session_id": target_session_id,
+    }
+    existing_delivery_summary = cv.get("delivery_summary") if isinstance(cv.get("delivery_summary"), dict) else {}
+    if bool(existing_delivery_summary.get("delivery_verified")) or str(existing_delivery_summary.get("delivery_state") or "").strip().lower() == "delivered":
+        cv["delivery_summary"] = dict(existing_delivery_summary)
+    else:
+        cv["delivery_summary"] = new_delivery_summary
+
+    interaction_mode = str(host_meta.get("interaction_mode") or "").strip().lower()
+    receipt_required = bool(interaction_mode == "task_with_receipt")
+    latest = items[-1] if items else {}
+    callback_run_id = str((rollup or {}).get("last_callback_run_id") or latest.get("callback_run_id") or "").strip()
+    receipt_received = bool(callback_run_id or items)
+    if not receipt_required:
+        receipt_state = "not_required"
+    elif receipt_received:
+        receipt_state = "received"
+    elif visible:
+        receipt_state = "pending"
+    else:
+        receipt_state = "unknown"
+    route_state = str(latest.get("receipt_route_state") or "").strip().lower()
+    if not route_state:
+        route_state = "route_mismatch" if bool(latest.get("route_mismatch")) else ("expected_callback_route" if receipt_received else "pending")
+    receipt_summary_v2: dict[str, Any] = {
+        "version": "v1",
+        "receipt_required": bool(receipt_required),
+        "receipt_state": receipt_state,
+        "receipt_received": bool(receipt_received),
+        "receipt_route_state": route_state,
+        "receipt_summary_empty": False if receipt_received else not bool(str(host_meta.get("lastPreview") or "").strip()),
+        "updated_at": _now_iso(),
+        "source_run_id": host_run_id,
+    }
+    if callback_run_id:
+        receipt_summary_v2["receipt_callback_run_id"] = callback_run_id
+    existing_receipt_summary = cv.get("receipt_summary_v2") if isinstance(cv.get("receipt_summary_v2"), dict) else {}
+    if bool(existing_receipt_summary.get("receipt_received")) or str(existing_receipt_summary.get("receipt_state") or "").strip().lower() in {"received", "missing"}:
+        merged_receipt_summary = dict(receipt_summary_v2)
+        merged_receipt_summary.update(existing_receipt_summary)
+        cv["receipt_summary_v2"] = merged_receipt_summary
+    else:
+        cv["receipt_summary_v2"] = receipt_summary_v2
+
+    callback_route_summary: dict[str, Any] = {
+        "version": "v1",
+        "receipt_route_state": route_state,
+        "route_mismatch": route_state == "route_mismatch",
+        "updated_at": _now_iso(),
+        "source_run_id": host_run_id,
+    }
+    host_callback_to = host_meta.get("callback_to") if isinstance(host_meta.get("callback_to"), dict) else {}
+    host_source_ref = host_meta.get("source_ref") if isinstance(host_meta.get("source_ref"), dict) else {}
+    expected_session_id = str(host_callback_to.get("session_id") or host_source_ref.get("session_id") or "").strip()
+    actual_session_id = str(latest.get("target_session_id") or target_session_id or "").strip()
+    if expected_session_id:
+        callback_route_summary["expected_session_id"] = expected_session_id
+    if actual_session_id:
+        callback_route_summary["actual_session_id"] = actual_session_id
+    existing_route_summary = cv.get("callback_route_summary") if isinstance(cv.get("callback_route_summary"), dict) else {}
+    latest_source_run_id = str(latest.get("source_run_id") or "").strip()
+    if latest_source_run_id and latest_source_run_id == host_run_id and existing_route_summary:
+        cv["callback_route_summary"] = dict(existing_route_summary)
+    else:
+        cv["callback_route_summary"] = callback_route_summary
+    host_meta["communication_view"] = cv
 
 
 def _project_receipt_to_host_run(
@@ -1453,6 +1911,7 @@ def _project_receipt_to_host_run(
         host_meta["receipt_rollup"] = rollup
     else:
         host_meta.pop("receipt_rollup", None)
+    _apply_host_receipt_summaries(host_meta, items=items, rollup=rollup)
     store.save_meta(host_run_id, host_meta)
     return host_run_id
 
@@ -1533,15 +1992,12 @@ def _callback_summary_timer_key(key: str) -> str:
     return str(key or "").strip()
 
 
-def _inspect_callback_task_activity(
-    task_path: str,
-    *,
-    project_id: str = "",
-    task_id: str = "",
-) -> dict[str, Any]:
-    text = str(task_path or "").strip()
+def _inspect_callback_task_activity(task_path: str, *, project_id: str = "", task_id: str = "") -> dict[str, Any]:
+    resolved = _resolve_callback_task_ref(project_id, task_path, task_id)
+    text = str(resolved.get("task_path") or task_path or "").strip()
     out: dict[str, Any] = {
         "task_path": text,
+        "task_id": str(resolved.get("task_id") or task_id or "").strip(),
         "state": "none",
         "is_archived": False,
         "reason": "none",
@@ -1554,34 +2010,6 @@ def _inspect_callback_task_activity(
     path = Path(text)
     root = __getattr__("_repo_root")()
     candidate = path if path.is_absolute() else (root / path)
-
-    resolved_task_path = ""
-    resolved_task_id = ""
-    if project_id or task_id:
-        try:
-            from task_dashboard.task_identity import resolve_task_reference
-
-            resolved = resolve_task_reference(
-                repo_root=root,
-                runtime_base_dir=root,
-                project_id=str(project_id or "").strip(),
-                task_path=text,
-                task_id=str(task_id or "").strip(),
-            )
-            resolved_task_path = str(resolved.get("task_path") or "").strip()
-            resolved_task_id = str(resolved.get("task_id") or "").strip()
-        except Exception:
-            resolved_task_path = ""
-            resolved_task_id = ""
-    if resolved_task_id:
-        out["task_id"] = resolved_task_id
-    if resolved_task_path and resolved_task_path != norm:
-        resolved_candidate = root / resolved_task_path
-        if resolved_candidate.exists():
-            out["task_path"] = resolved_task_path
-            candidate = resolved_candidate
-            norm = resolved_task_path.replace("\\", "/")
-            filename = Path(norm).name
 
     def _mark_archived(reason: str) -> dict[str, Any]:
         out["state"] = "archived"
@@ -1622,17 +2050,24 @@ def _inspect_callback_task_activity(
     return out
 
 
-def _invalid_terminal_preview_reason(source_meta: dict[str, Any], event_type: str, last_preview: str) -> str:
+def _terminal_preview_text(source_meta: dict[str, Any]) -> str:
+    return str(source_meta.get("lastPreview") or source_meta.get("partialPreview") or "").strip()
+
+
+def _invalid_terminal_preview_reason(source_meta: dict[str, Any], event_type: str) -> str:
     if str(event_type or "").strip().lower() != "done":
         return ""
-    preview = str(last_preview or "")
+    preview = _terminal_preview_text(source_meta)
     if not preview:
         return ""
-    run_id = str(source_meta.get("id") or "").strip()
-    if not run_id or run_id not in preview:
+    preview_lower = preview.lower()
+    source_run_id = str(source_meta.get("id") or "").strip()
+    references_self = bool(source_run_id and source_run_id in preview)
+    if not references_self and ("当前 run" in preview_lower or "本 run" in preview_lower):
+        references_self = True
+    if not references_self:
         return ""
-    lowered = preview.lower()
-    if "running" in lowered or "仍在执行" in preview or "仍在运行" in preview:
+    if any(marker in preview_lower for marker in _INVALID_DONE_PREVIEW_MARKERS):
         return "self_referential_running"
     return ""
 
@@ -1657,7 +2092,11 @@ def _build_terminal_receipt_summary(
     task_path = str(profile.get("task_path") or "").strip() or "未关联任务"
     source_run_id = str(source_meta.get("id") or "").strip()
     trigger_type = str(source_meta.get("trigger_type") or "").strip().lower() or "manual_dispatch"
-    task_activity = _inspect_callback_task_activity(task_path)
+    task_activity = _inspect_callback_task_activity(
+        task_path,
+        project_id=source_project_id,
+        task_id=str(profile.get("task_id") or "").strip(),
+    )
     is_late = bool(task_activity.get("is_archived"))
     stage = str(profile.get("stage") or "").strip() or ("收口" if event_type == "done" else "推进")
     current_conclusion = str(profile.get("current_conclusion") or "").strip() or _default_callback_conclusion(event_type)
@@ -1697,22 +2136,24 @@ def _build_terminal_receipt_summary(
 
     progress = progress_map.get(event_type, "系统回执已生成。")
     error = str(source_meta.get("error") or "").strip()
-    last_preview = str(source_meta.get("lastPreview") or "").strip()
+    last_preview = _terminal_preview_text(source_meta)
+    invalid_terminal_preview_reason = _invalid_terminal_preview_reason(source_meta, event_type)
+    if invalid_terminal_preview_reason:
+        current_conclusion = "执行结果无效，需最小复验"
+        progress = "来源任务已完成执行，但最终正文疑似引用运行中间态，已按安全口径降级。"
+    elif event_type == "error" and error:
+        progress = f"{progress}（错误摘要：{_safe_text(error, 120)}）"
+    if event_type == "done" and last_preview:
+        if not invalid_terminal_preview_reason:
+            progress = f"{progress}（结果摘要：{_safe_text(last_preview, 120)}）"
+
     need_peer = need_peer_map.get(event_type, "请主负责确认下一步动作。")
     expected_result = expected_map.get(event_type, "推进链路保持可追溯。")
     need_confirm = need_confirm_map.get(event_type, "无")
-    invalid_preview_reason = _invalid_terminal_preview_reason(source_meta, event_type, last_preview)
-    if invalid_preview_reason:
-        current_conclusion = "执行结果无效，需最小复验"
-        progress = "来源任务终态预览仍引用本 run 执行中状态，已降级为无效终态结果。"
-        need_peer = "请按当前主线重发最小复验，提供非自引用的最终结论。"
-        expected_result = "形成可验收的最小复验回执后再进入收口。"
-        need_confirm = "是否重发最小复验"
-        last_preview = ""
-    if event_type == "error" and error:
-        progress = f"{progress}（错误摘要：{_safe_text(error, 120)}）"
-    if event_type == "done" and last_preview:
-        progress = f"{progress}（结果摘要：{_safe_text(last_preview, 120)}）"
+    if invalid_terminal_preview_reason:
+        need_peer = "请按当前主线重发最小复验，不要轮询当前 run 自身状态作为验收依据。"
+        expected_result = "重发最小复验并产出可签收的最终结论。"
+        need_confirm = "需重试"
     if is_late:
         need_peer = "关联任务已归档，本条回执已降级为留痕提示；无需重复验收确认。"
         expected_result = "保持归档状态并补齐必要留痕。"
@@ -1728,6 +2169,16 @@ def _build_terminal_receipt_summary(
         actions.append(f"反馈文件：{feedback_path}")
     else:
         actions.append("反馈文件待补录（验收仍以反馈目录文件为准）")
+
+    technical = {
+        "event_type": str(event_type or "").strip().lower(),
+        "event_reason": str(event_reason or "").strip().lower(),
+        "source_run_id": source_run_id,
+        "trigger_type": trigger_type,
+        "route_resolution": __getattr__("_compact_route_resolution_v1")(route_resolution),
+    }
+    if invalid_terminal_preview_reason:
+        technical["invalid_terminal_preview_reason"] = invalid_terminal_preview_reason
 
     return {
         "version": "v1",
@@ -1751,14 +2202,7 @@ def _build_terminal_receipt_summary(
         "need_confirm": str(profile.get("need_confirmation") or "").strip() or need_confirm,
         "late_callback": is_late,
         "late_reason": str(task_activity.get("reason") or "none"),
-        "technical": {
-            "event_type": str(event_type or "").strip().lower(),
-            "event_reason": str(event_reason or "").strip().lower(),
-            "source_run_id": source_run_id,
-            "trigger_type": trigger_type,
-            "invalid_terminal_preview_reason": invalid_preview_reason,
-            "route_resolution": __getattr__("_compact_route_resolution_v1")(route_resolution),
-        },
+        "technical": technical,
     }
 
 
@@ -1863,9 +2307,8 @@ def _build_terminal_callback_message(
         source_meta.get("trigger_type") or "manual_dispatch"
     ).strip().lower()
     error = str(source_meta.get("error") or "").strip()
-    last_preview = str(source_meta.get("lastPreview") or "").strip()
-    if _invalid_terminal_preview_reason(source_meta, event_type, last_preview):
-        last_preview = ""
+    last_preview = _terminal_preview_text(source_meta)
+    invalid_terminal_preview_reason = str(tech.get("invalid_terminal_preview_reason") or "").strip()
     feedback_path = str(source_meta.get("feedback_file_path") or "").strip()
     event_label = {"done": "完成", "error": "异常", "interrupted": "中断"}.get(event_type, event_type or "事件")
     lines = [_render_receipt_summary_message(summary), "", "技术明细（折叠）："]
@@ -1886,6 +2329,8 @@ def _build_terminal_callback_message(
         lines.append("- 反馈文件: 待补录（验收仍以 `反馈/【待验收】【反馈】...` 为准）")
     if error and event_type != "done":
         lines.append(f"- 错误摘要: {_safe_text(error, 260)}")
+    elif invalid_terminal_preview_reason:
+        lines.append("- 结果摘要: 已忽略（最终正文疑似引用运行中间态）")
     elif last_preview:
         lines.append(f"- 结果摘要: {_safe_text(last_preview, 260)}")
     else:
@@ -1974,6 +2419,7 @@ def _flush_callback_summary_window(
             "event_type": event_type,
             "source_run_id": source_run_ids[0],
             "task_path": str(state.get("task_path") or "").strip(),
+            "task_id": str(state.get("task_id") or "").strip(),
             "execution_stage": str(state.get("stage") or "").strip().lower(),
             "current_conclusion": str(state.get("current_conclusion") or "").strip(),
             "need_confirmation": str(state.get("need_confirmation") or "").strip(),
@@ -2031,11 +2477,12 @@ def _register_callback_window(
     profile = _extract_callback_progress_profile(source_meta, event_type)
     source_channel = str(profile.get("source_channel") or "").strip()
     task_path = str(profile.get("task_path") or "").strip()
+    task_id = str(profile.get("task_id") or "").strip()
     topic = str(profile.get("topic") or "").strip()
     stage = str(profile.get("stage") or "").strip()
     if not (project_id and source_channel and task_path):
         return True, ""
-    key = _callback_throttle_key(project_id, source_channel, task_path, topic, stage)
+    key = _callback_throttle_key(project_id, source_channel, task_path, topic, stage, task_id=task_id)
     window_seconds = _default_callback_summary_window_s()
     now_ts = time.time()
     signature = _callback_progress_signature(profile)
@@ -2061,6 +2508,7 @@ def _register_callback_window(
                 "pending": [],
                 "route_resolution": dict(route_resolution or {}),
                 "task_path": task_path,
+                "task_id": task_id,
                 "topic": topic,
                 "stage": stage,
                 "blocking_status": str(profile.get("blocking_status") or "").strip(),
@@ -2131,6 +2579,16 @@ def _dispatch_terminal_callback_for_run(
     event_type, event_reason = _classify_terminal_callback_event(source_meta)
     if not event_type:
         return ""
+    if not _user_interrupt_receipt_suppression_requested(source_meta, event_type, event_reason):
+        if event_type == "interrupted" and event_reason == "user_interrupt":
+            latest = dict(store.load_meta(source_run_id) or {})
+            if latest and str(latest.get("id") or "").strip() == source_run_id:
+                if _user_interrupt_receipt_suppression_requested(latest, event_type, event_reason):
+                    source_meta = latest
+    if _user_interrupt_receipt_suppression_requested(source_meta, event_type, event_reason):
+        source_meta = _mark_user_interrupt_receipt_suppressed(source_meta)
+        store.save_meta(source_run_id, source_meta)
+        return ""
     source_session_id = str(source_meta.get("sessionId") or "").strip()
     source_channel_name = _resolve_source_channel_text(source_meta)
 
@@ -2141,6 +2599,8 @@ def _dispatch_terminal_callback_for_run(
         route_mismatch_flag: bool,
         event: str,
         route_resolution_in: Any = None,
+        receipt_route_state: str = "",
+        dispatch_status: str = "",
     ) -> None:
         source_meta["communication_view"] = _build_callback_communication_view(
             source_meta,
@@ -2149,6 +2609,8 @@ def _dispatch_terminal_callback_for_run(
             dispatch_run_id=dispatch_run_id,
             route_mismatch=route_mismatch_flag,
             route_resolution=route_resolution_in,
+            receipt_route_state=receipt_route_state,
+            dispatch_status=dispatch_status,
         )
         store.save_meta(source_run_id, source_meta)
 
@@ -2236,11 +2698,18 @@ def _dispatch_terminal_callback_for_run(
                 route_mismatch_flag=False,
                 event="unverified",
                 route_resolution_in=route_resolution,
+                receipt_route_state="self_suppressed",
+                dispatch_status="self_suppressed",
             )
             return ""
 
         profile = _extract_callback_progress_profile(source_meta, event_type)
-        route_mismatch = bool(source_session_id and target_session_id and source_session_id != target_session_id)
+        receipt_route_state = _derive_callback_route_state(
+            source_meta,
+            target=target,
+            route_resolution=route_resolution,
+        )
+        route_mismatch = receipt_route_state == "route_mismatch"
         dispatch_state = "route_mismatch" if route_mismatch else "resolved"
         merge_note = ""
         anchor_key = _callback_anchor_key(
@@ -2319,6 +2788,8 @@ def _dispatch_terminal_callback_for_run(
                             route_mismatch_flag=route_mismatch,
                             event="route_mismatch" if route_mismatch else "success",
                             route_resolution_in=route_resolution,
+                            receipt_route_state="merged_anchor",
+                            dispatch_status="merged_anchor",
                         )
                         anchor_meta = store.load_meta(anchor_run_id) or {}
                         _project_receipt_to_host_run(
@@ -2366,6 +2837,7 @@ def _dispatch_terminal_callback_for_run(
                         route_mismatch_flag=False,
                         event="unverified",
                         route_resolution_in=route_resolution,
+                        dispatch_status="suppressed_window",
                     )
                     return ""
                 merge_note = str(suppress_note or "").strip()
@@ -2427,6 +2899,8 @@ def _dispatch_terminal_callback_for_run(
                 route_mismatch=route_mismatch,
                 route_resolution=route_resolution,
                 build_callback_communication_view=_build_callback_communication_view,
+                receipt_route_state=receipt_route_state,
+                dispatch_status="sent",
             )
             store.save_meta(callback_run_id, callback_meta)
             _append_source_callback_dispatch(

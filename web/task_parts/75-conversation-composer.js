@@ -43,6 +43,14 @@
       return "global";
     }
 
+    const CONV_MENTION_SUGGEST_RENDER_LIMIT = 48;
+    const CONV_MENTION_GLOBAL_EMPTY_QUERY_LIMIT = 24;
+    const CONV_MENTION_GLOBAL_REFRESH_DEBOUNCE_MS = 90;
+    var CONVERSATION_SELECTED_FAST_POLL_MS = 3500;
+    const CONVERSATION_RESUME_REFRESH_DEBOUNCE_MS = 1200;
+    const CONVERSATION_RUN_ACTION_REFRESH_RETRY_MS = 1200;
+    const CONVERSATION_RUN_ACTION_CONFLICT_REFRESH_RETRY_MS = 1000;
+
     function emptyConvMentionSuggestState() {
       return {
         open: false,
@@ -53,6 +61,9 @@
         anchorEnd: -1,
         candidates: [],
         groups: [],
+        totalCount: 0,
+        loading: false,
+        emptyText: "",
         draftKey: "",
       };
     }
@@ -213,8 +224,31 @@
       return out;
     }
 
-    function conversationGlobalMentionDirectory(projectId) {
+    function conversationGlobalMentionDirectorySignature(projectId) {
       const currentPid = String(projectId || STATE.project || "").trim();
+      const projects = Array.isArray(DATA.projects) ? DATA.projects : [];
+      const parts = [currentPid, String(projects.length)];
+      projects.forEach((project) => {
+        const pid = String((project && project.id) || "").trim();
+        if (!pid) return;
+        const local = PCONV.sessionDirectoryByProject && PCONV.sessionDirectoryByProject[pid];
+        const meta = PCONV.sessionDirectoryMetaByProject && PCONV.sessionDirectoryMetaByProject[pid];
+        parts.push([
+          pid,
+          Array.isArray(local) ? local.length : -1,
+          meta && meta.liveLoaded ? 1 : 0,
+          String((meta && meta.loadedAt) || ""),
+          String((meta && meta.source) || ""),
+          String((meta && meta.error) || ""),
+        ].join(":"));
+      });
+      return parts.join("|");
+    }
+
+    function buildConversationGlobalMentionDirectory(projectId, opts = {}) {
+      const currentPid = String(projectId || STATE.project || "").trim();
+      const limit = Math.max(0, Number((opts && opts.limit) || 0) || 0);
+      const query = String((opts && opts.query) || "").trim().toLowerCase();
       const projects = Array.isArray(DATA.projects) ? DATA.projects.slice() : [];
       const ordered = projects.slice().sort((a, b) => {
         const pidA = String((a && a.id) || "").trim();
@@ -225,20 +259,24 @@
       });
       const out = [];
       const seen = new Set();
-      ordered.forEach((project) => {
+      for (const project of ordered) {
+        if (limit > 0 && out.length >= limit) break;
         const pid = String((project && project.id) || "").trim();
-        if (!pid) return;
-        conversationMentionSessionsForProject(pid).forEach((session) => {
+        if (!pid) continue;
+        const sessions = conversationMentionSessionsForProject(pid);
+        for (const session of sessions) {
+          if (limit > 0 && out.length >= limit) break;
           const target = mentionTargetFromConversationSession(session, pid, {
             scopeMode: globalProjectMentionSuggestMode(),
           });
-          if (!target) return;
+          if (!target) continue;
+          if (query && !mentionSearchHaystack(target).includes(query)) continue;
           const key = mentionTargetKey(target);
-          if (!key || seen.has(key)) return;
+          if (!key || seen.has(key)) continue;
           seen.add(key);
           out.push(target);
-        });
-      });
+        }
+      }
       out.sort((a, b) => {
         const pidA = String(a && a.project_id || "").trim();
         const pidB = String(b && b.project_id || "").trim();
@@ -251,7 +289,59 @@
         if (byProject !== 0) return byProject;
         return String(a && a.display_name || "").localeCompare(String(b && b.display_name || ""), "zh-Hans-CN");
       });
-      return out;
+      return limit > 0 ? out.slice(0, limit) : out;
+    }
+
+    function conversationGlobalMentionDirectory(projectId, opts = {}) {
+      const currentPid = String(projectId || STATE.project || "").trim();
+      const limit = Math.max(0, Number((opts && opts.limit) || 0) || 0);
+      const query = String((opts && opts.query) || "").trim();
+      const forceFull = !!(opts && opts.full);
+      if (limit > 0 && !forceFull) {
+        const cache = PCONV.globalMentionDirectoryCache || null;
+        const signature = conversationGlobalMentionDirectorySignature(currentPid);
+        if (cache && cache.signature === signature && Array.isArray(cache.items)) {
+          const filtered = query
+            ? cache.items.filter((it) => mentionSearchHaystack(it).includes(query.toLowerCase()))
+            : cache.items;
+          return filtered.slice(0, limit);
+        }
+        return buildConversationGlobalMentionDirectory(currentPid, { limit, query });
+      }
+      const signature = conversationGlobalMentionDirectorySignature(currentPid);
+      const cache = PCONV.globalMentionDirectoryCache || null;
+      if (cache && cache.signature === signature && Array.isArray(cache.items)) {
+        return cache.items.slice();
+      }
+      const items = buildConversationGlobalMentionDirectory(currentPid);
+      PCONV.globalMentionDirectoryCache = {
+        projectId: currentPid,
+        signature,
+        items: items.slice(),
+        builtAt: Date.now(),
+      };
+      return items;
+    }
+
+    function isConversationGlobalMentionHydrating(projectId) {
+      const projects = Array.isArray(DATA.projects) ? DATA.projects : [];
+      return projects.some((project) => {
+        const pid = String((project && project.id) || "").trim();
+        if (!pid || pid === "overview") return false;
+        const meta = PCONV.sessionDirectoryMetaByProject && PCONV.sessionDirectoryMetaByProject[pid];
+        if (meta && meta.liveLoaded) return false;
+        return !!(PCONV.sessionDirectoryPromiseByProject && PCONV.sessionDirectoryPromiseByProject[pid]);
+      });
+    }
+
+    function scheduleConvMentionSuggestRefresh() {
+      if (PCONV.mentionSuggestRefreshTimer) clearTimeout(PCONV.mentionSuggestRefreshTimer);
+      PCONV.mentionSuggestRefreshTimer = setTimeout(() => {
+        PCONV.mentionSuggestRefreshTimer = 0;
+        const st = PCONV.mentionSuggest || {};
+        if (!st.open || String(st.mode || "") !== globalProjectMentionSuggestMode()) return;
+        updateConvMentionSuggestByInput();
+      }, CONV_MENTION_GLOBAL_REFRESH_DEBOUNCE_MS);
     }
 
     function hydrateConversationGlobalMentionDirectory(projectId) {
@@ -269,7 +359,7 @@
           if (!st.open) return;
           if (String(st.mode || "") !== globalProjectMentionSuggestMode()) return;
           if (String(STATE.project || "") !== currentPid) return;
-          updateConvMentionSuggestByInput();
+          scheduleConvMentionSuggestRefresh();
         }).catch(() => {});
       });
     }
@@ -820,7 +910,7 @@
         "- 至少重点学习：agent-init-training-playbook、collab-message-send（或当前项目等效的正式消息技能）、当前通道自己的专项 skill。",
         "",
         "4. 学会怎么发正式消息",
-        "- 跨 Agent / 跨通道协作只能走同源 /api/codex/announce（announce_to_channel），不能把内部草稿、内部 spawn、非正式 resume 当成“已通知通道”。",
+        "- 跨 Agent / 跨通道协作只能走 http://localhost:18770/api/codex/announce（announce_to_channel），不能把内部草稿、内部 spawn、非正式 resume 当成“已通知通道”。",
         "- 正式消息默认用你当前执行 Agent 自己的身份发送，不借用项目主会话、总控或其他通道 Agent 身份。",
         "- 没有 announce_run_id 时，不得写已发出 / 已送达 / 已通知通道。",
         "- 正式通知成功至少分三层判断：已生成待发送正文 / 已提交发送，待验证 / 已完成证据闭环。",
@@ -1160,7 +1250,9 @@
         });
       };
       conversationMentionDirectory(projectId).forEach(register);
-      conversationGlobalMentionDirectory(projectId).forEach(register);
+      if (labels.some((label) => String(label || "").indexOf("/") >= 0)) {
+        conversationGlobalMentionDirectory(projectId, { full: true }).forEach(register);
+      }
       aliases.sort((a, b) => b.length - a.length);
       const out = [];
       const seen = new Set();
@@ -1347,6 +1439,9 @@
       const item = el("button", {
         class: "convmention-item" + (idx === activeIndex ? " active" : ""),
         type: "button",
+        title: typeof agentDisplayTooltip === "function"
+          ? agentDisplayTooltip(it, "协同对象")
+          : agentDisplayTitle(it, "协同对象"),
       });
       const main = el("span", { class: "convmention-main" });
       main.appendChild(el("span", { class: "convmention-name", text: agentDisplayTitle(it, "协同对象") }));
@@ -1371,7 +1466,13 @@
       const st = PCONV.mentionSuggest || {};
       const { mentionSuggest } = convComposerUiElements();
       if (!mentionSuggest) return;
-      if (!st.open || !Array.isArray(st.candidates) || st.candidates.length === 0) {
+      if (!st.open) {
+        mentionSuggest.innerHTML = "";
+        mentionSuggest.style.display = "none";
+        return;
+      }
+      const candidates = Array.isArray(st.candidates) ? st.candidates : [];
+      if (!candidates.length && !st.loading && !String(st.emptyText || "").trim()) {
         mentionSuggest.innerHTML = "";
         mentionSuggest.style.display = "none";
         return;
@@ -1380,15 +1481,25 @@
       if (String(st.mode || "") === globalProjectMentionSuggestMode()) {
         const head = el("div", { class: "convmention-head" });
         head.appendChild(el("div", { class: "convmention-kicker", text: "@@ 全局 Agent" }));
-        const resultCount = Array.isArray(st.candidates) ? st.candidates.length : 0;
+        const resultCount = candidates.length;
+        const totalCount = Math.max(resultCount, Number(st.totalCount || 0) || 0);
+        const resultText = totalCount > resultCount
+          ? ("显示 " + resultCount + " / 共 " + totalCount + " 条候选")
+          : (resultCount + " 条候选");
         const summary = (Array.isArray(st.groups) && st.groups.length)
-          ? ("按项目分组 · " + st.groups.length + " 个项目 · " + resultCount + " 条候选")
-          : ("全局搜索 · " + resultCount + " 条候选");
+          ? ("按项目分组 · " + st.groups.length + " 个项目 · " + resultText)
+          : ("全局搜索 · " + resultText);
         head.appendChild(el("div", { class: "convmention-summary", text: summary }));
         mentionSuggest.appendChild(head);
       }
+      if (!candidates.length) {
+        const emptyText = String(st.emptyText || (st.loading ? "正在加载全局 Agent..." : "未找到匹配 Agent")).trim();
+        mentionSuggest.appendChild(el("div", { class: "convmention-empty", text: emptyText }));
+        mentionSuggest.style.display = "block";
+        return;
+      }
       const list = el("div", { class: "convmention-list" });
-      const activeIndex = Math.max(0, Math.min(Number(st.activeIndex || 0), st.candidates.length - 1));
+      const activeIndex = Math.max(0, Math.min(Number(st.activeIndex || 0), candidates.length - 1));
       if (String(st.mode || "") === globalProjectMentionSuggestMode() && Array.isArray(st.groups) && st.groups.length) {
         let renderIndex = 0;
         st.groups.forEach((group) => {
@@ -1404,7 +1515,7 @@
           list.appendChild(section);
         });
       } else {
-        st.candidates.forEach((it, idx) => {
+        candidates.forEach((it, idx) => {
           list.appendChild(buildConvMentionSuggestItem(it, st.mode, idx, activeIndex));
         });
       }
@@ -1438,17 +1549,44 @@
         ? globalProjectMentionSuggestMode()
         : currentProjectMentionSuggestMode();
       if (mode === globalProjectMentionSuggestMode()) hydrateConversationGlobalMentionDirectory(STATE.project);
+      const sourceOpts = mode === globalProjectMentionSuggestMode()
+        ? {
+            limit: query ? CONV_MENTION_SUGGEST_RENDER_LIMIT : CONV_MENTION_GLOBAL_EMPTY_QUERY_LIMIT,
+            query,
+          }
+        : {};
       const source = mode === globalProjectMentionSuggestMode()
-        ? conversationGlobalMentionDirectory(STATE.project)
+        ? conversationGlobalMentionDirectory(STATE.project, sourceOpts)
         : conversationMentionDirectory(STATE.project);
       const list = source.filter((it) => {
         if (!query) return true;
         return mentionSearchHaystack(it).includes(query);
       });
       if (!list.length) {
+        if (mode === globalProjectMentionSuggestMode()) {
+          const loading = isConversationGlobalMentionHydrating(STATE.project);
+          PCONV.mentionSuggest = {
+            open: true,
+            mode,
+            query: anchor.query,
+            activeIndex: 0,
+            anchorStart: anchor.start,
+            anchorEnd: anchor.end,
+            candidates: [],
+            groups: [],
+            totalCount: 0,
+            loading,
+            emptyText: loading ? "正在加载全局 Agent..." : "未找到匹配 Agent",
+            draftKey: key,
+          };
+          renderConvMentionSuggest();
+          return;
+        }
         hideConvMentionSuggest();
         return;
       }
+      const totalCount = list.length;
+      const visibleList = list.slice(0, CONV_MENTION_SUGGEST_RENDER_LIMIT);
       const prev = PCONV.mentionSuggest || {};
       let activeIndex = 0;
       if (prev.open && Array.isArray(prev.candidates) && prev.candidates.length) {
@@ -1456,10 +1594,13 @@
         const prevItem = prev.candidates[prevIdx];
         const prevKey = mentionTargetKey(prevItem);
         if (prevKey) {
-          const nextIdx = list.findIndex((it) => mentionTargetKey(it) === prevKey);
+          const nextIdx = visibleList.findIndex((it) => mentionTargetKey(it) === prevKey);
           if (nextIdx >= 0) activeIndex = nextIdx;
         }
       }
+      const loading = mode === globalProjectMentionSuggestMode()
+        ? isConversationGlobalMentionHydrating(STATE.project)
+        : false;
       PCONV.mentionSuggest = {
         open: true,
         mode,
@@ -1467,8 +1608,11 @@
         activeIndex,
         anchorStart: anchor.start,
         anchorEnd: anchor.end,
-        candidates: list,
-        groups: mode === globalProjectMentionSuggestMode() ? buildConvMentionGroups(list, STATE.project) : [],
+        candidates: visibleList,
+        groups: mode === globalProjectMentionSuggestMode() ? buildConvMentionGroups(visibleList, STATE.project) : [],
+        totalCount,
+        loading,
+        emptyText: "",
         draftKey: key,
       };
       renderConvMentionSuggest();
@@ -1616,6 +1760,1077 @@
       saveConvComposerUiToBoundDraft();
       PCONV.composerBoundDraftKey = nextKey;
       applyConvComposerDraftToUiByKey(nextKey, opts);
+    }
+
+    function conversationComposerCliType(ctx, session = null) {
+      const context = (ctx && typeof ctx === "object") ? ctx : null;
+      const row = (session && typeof session === "object") ? session : null;
+      return String(firstNonEmptyText([
+        context && context.cliType,
+        context && context.cli_type,
+        row && row.cli_type,
+        row && row.cliType,
+      ]) || "").trim().toLowerCase();
+    }
+
+    function conversationComposerSupportsModelSwitch(cliTypeRaw) {
+      const cliType = String(cliTypeRaw || "").trim();
+      return isCodeBuddyCliType(cliType) || (typeof isClaudeCliType === "function" && isClaudeCliType(cliType));
+    }
+
+    function conversationComposerDefaultModelForCli(cliTypeRaw) {
+      const cliType = String(cliTypeRaw || "").trim();
+      if (isCodeBuddyCliType(cliType)) return codeBuddyDefaultModel();
+      if (typeof isClaudeCliType === "function" && isClaudeCliType(cliType)) {
+        return typeof claudeDefaultModel === "function" ? claudeDefaultModel() : "claude-opus-4-8";
+      }
+      return "";
+    }
+
+    function conversationComposerModelSelectForCli(cliTypeRaw) {
+      const cliType = String(cliTypeRaw || "").trim();
+      if (isCodeBuddyCliType(cliType)) return document.getElementById("convCodeBuddyModelSelect");
+      if (typeof isClaudeCliType === "function" && isClaudeCliType(cliType)) return document.getElementById("convClaudeModelSelect");
+      return null;
+    }
+
+    function conversationComposerCachedModelForCli(sessionId, cliTypeRaw) {
+      const sid = String(sessionId || "").trim();
+      const cliType = String(cliTypeRaw || "").trim();
+      if (!sid) return "";
+      if (
+        isCodeBuddyCliType(cliType)
+        && PCONV.codeBuddyModelBySessionId
+        && typeof PCONV.codeBuddyModelBySessionId === "object"
+      ) {
+        return normalizeSessionModel(PCONV.codeBuddyModelBySessionId[sid]);
+      }
+      if (
+        typeof isClaudeCliType === "function"
+        && isClaudeCliType(cliType)
+        && PCONV.claudeModelBySessionId
+        && typeof PCONV.claudeModelBySessionId === "object"
+      ) {
+        return normalizeSessionModel(PCONV.claudeModelBySessionId[sid]);
+      }
+      return "";
+    }
+
+    function conversationComposerSessionDetailLoadedForModel(sessionId) {
+      const sid = String(sessionId || "").trim();
+      if (!sid) return false;
+      if (PCONV.sessionDetailLoadedAtById && typeof PCONV.sessionDetailLoadedAtById === "object") {
+        const loadedAt = Number(PCONV.sessionDetailLoadedAtById[sid] || 0);
+        if (loadedAt > 0) return true;
+      }
+      return false;
+    }
+
+    function conversationComposerModelReadiness(ctx, sessionModel = "") {
+      const context = (ctx && typeof ctx === "object") ? ctx : null;
+      const sid = String((context && context.sessionId) || STATE.selectedSessionId || "").trim();
+      const session = sid && typeof findConversationSessionById === "function"
+        ? findConversationSessionById(sid)
+        : null;
+      const cliType = conversationComposerCliType(context, session);
+      if (!context || !conversationComposerSupportsModelSwitch(cliType)) {
+        return { state: "ready", statusText: "", canUseDefault: false };
+      }
+      if (normalizeSessionModel(sessionModel)) {
+        return { state: "ready", statusText: "", canUseDefault: true };
+      }
+      if (!sid) {
+        return { state: "ready", statusText: "", canUseDefault: true };
+      }
+      if (conversationComposerSessionDetailLoadedForModel(sid)) {
+        return { state: "ready", statusText: "", canUseDefault: true };
+      }
+      if (typeof isConversationSessionDetailLoading === "function" && isConversationSessionDetailLoading(sid)) {
+        return { state: "loading", statusText: "读取中", canUseDefault: false };
+      }
+      const errorText = typeof getConversationSessionDetailError === "function"
+        ? getConversationSessionDetailError(sid)
+        : "";
+      if (errorText) {
+        return { state: "error", statusText: "读取失败", canUseDefault: false, errorText };
+      }
+      return { state: "missing", statusText: "读取中", canUseDefault: false };
+    }
+
+    function conversationComposerModelCanUseDefault(ctx, sessionModel = "") {
+      const readiness = conversationComposerModelReadiness(ctx, sessionModel);
+      return !!(readiness && readiness.canUseDefault);
+    }
+
+    function renderConversationComposerModelLoadingOption(select, text) {
+      if (!select) return;
+      select.innerHTML = "";
+      let option = null;
+      if (typeof el === "function") {
+        option = el("option", { value: "", text: String(text || "读取模型配置中...") });
+      } else if (typeof document !== "undefined" && document.createElement) {
+        option = document.createElement("option");
+        option.value = "";
+        option.textContent = String(text || "读取模型配置中...");
+      }
+      if (option) select.appendChild(option);
+      select.value = "";
+    }
+
+    function hydrateConversationComposerModelIfNeeded(ctx, sessionModel = "") {
+      const context = (ctx && typeof ctx === "object") ? ctx : null;
+      const sid = String((context && context.sessionId) || STATE.selectedSessionId || "").trim();
+      const readiness = conversationComposerModelReadiness(context, sessionModel);
+      if (!sid || !readiness || readiness.state !== "missing") return;
+      if (typeof ensureConversationSessionDetailLoaded !== "function") return;
+      ensureConversationSessionDetailLoaded(sid, { force: true, maxAgeMs: 60_000, reason: "composer-model" })
+        .then((merged) => {
+          if (merged && typeof conversationStoreUpsertSession === "function") {
+            conversationStoreUpsertSession(merged, {
+              projectId: String((context && context.projectId) || STATE.project || ""),
+              source: "session-detail",
+            });
+          }
+          const current = typeof currentConversationCtx === "function" ? currentConversationCtx() : null;
+          if (current && String(current.sessionId || "").trim() === sid) {
+            if (typeof renderConversationComposerCodeBuddyModel === "function") renderConversationComposerCodeBuddyModel(current);
+            if (typeof renderConversationComposerClaudeModel === "function") renderConversationComposerClaudeModel(current);
+          }
+        })
+        .catch(() => {
+          const current = typeof currentConversationCtx === "function" ? currentConversationCtx() : null;
+          if (current && String(current.sessionId || "").trim() === sid) {
+            if (typeof renderConversationComposerCodeBuddyModel === "function") renderConversationComposerCodeBuddyModel(current);
+            if (typeof renderConversationComposerClaudeModel === "function") renderConversationComposerClaudeModel(current);
+          }
+        });
+    }
+
+    function conversationComposerSessionModel(ctx) {
+      const context = (ctx && typeof ctx === "object") ? ctx : null;
+      const sid = String((context && context.sessionId) || STATE.selectedSessionId || "").trim();
+      const session = sid && typeof findConversationSessionById === "function"
+        ? findConversationSessionById(sid)
+        : null;
+      const cliType = conversationComposerCliType(context, session);
+      const cachedModel = conversationComposerCachedModelForCli(sid, cliType);
+      return normalizeSessionModel(firstNonEmptyText([
+        cachedModel,
+        session && session.model,
+        context && context.model,
+      ]));
+    }
+
+    function conversationComposerSelectedModel(ctx, sessionModel = "") {
+      const context = (ctx && typeof ctx === "object") ? ctx : null;
+      const sid = String((context && context.sessionId) || STATE.selectedSessionId || "").trim();
+      const cliType = conversationComposerCliType(context);
+      const select = conversationComposerModelSelectForCli(cliType);
+      if (!sid || !select || select.hidden) return "";
+      if (String(select.dataset.sessionId || "").trim() !== sid) return "";
+      if (select.dataset.saving === "1") return "";
+      const saved = normalizeSessionModel(select.dataset.model);
+      const selected = normalizeSessionModel(select.value);
+      const canonicalSessionModel = normalizeSessionModel(sessionModel);
+      if (!selected) return "";
+      if (canonicalSessionModel && saved && saved !== canonicalSessionModel) return "";
+      if (canonicalSessionModel && selected === canonicalSessionModel) return selected;
+      if (saved && selected === saved) return selected;
+      return "";
+    }
+
+    function resolveConversationComposerModel(ctx, opts = {}) {
+      const context = (ctx && typeof ctx === "object")
+        ? ctx
+        : (currentConversationCtx() || resolveConversationSendCtx());
+      const cliType = context ? conversationComposerCliType(context) : "";
+      if (!context || !conversationComposerSupportsModelSwitch(cliType)) return "";
+      const sessionModel = conversationComposerSessionModel(context);
+      const selectedModel = opts.preferSelected === false
+        ? ""
+        : conversationComposerSelectedModel(context, sessionModel);
+      const fallback = opts.includeDefault === false || !conversationComposerModelCanUseDefault(context, sessionModel)
+        ? ""
+        : conversationComposerDefaultModelForCli(cliType);
+      return selectedModel || sessionModel || fallback;
+    }
+
+    function resolveConversationComposerPayloadModel(ctx) {
+      const context = (ctx && typeof ctx === "object")
+        ? ctx
+        : (currentConversationCtx() || resolveConversationSendCtx());
+      const cliType = context ? conversationComposerCliType(context) : "";
+      if (!context || !conversationComposerSupportsModelSwitch(cliType)) return "";
+      const sessionModel = conversationComposerSessionModel(context);
+      const selectedModel = conversationComposerSelectedModel(context, sessionModel);
+      if (typeof isClaudeCliType === "function" && isClaudeCliType(cliType)) {
+        return selectedModel || sessionModel || (
+          conversationComposerModelCanUseDefault(context, sessionModel)
+            ? conversationComposerDefaultModelForCli(cliType)
+            : ""
+        );
+      }
+      return selectedModel || sessionModel || "";
+    }
+
+    function syncConversationComposerCodeBuddyModelToLocal(sessionId, model, projectId = "") {
+      const sid = String(sessionId || "").trim();
+      const normalized = normalizeSessionModel(model);
+      if (!sid || !normalized) return false;
+      const pid = String(projectId || STATE.project || "").trim();
+      if (!PCONV.codeBuddyModelBySessionId || typeof PCONV.codeBuddyModelBySessionId !== "object") {
+        PCONV.codeBuddyModelBySessionId = Object.create(null);
+      }
+      PCONV.codeBuddyModelBySessionId[sid] = normalized;
+      const patchRow = (row) => {
+        if (!row || typeof row !== "object") return row;
+        row.model = normalized;
+        row.model_source = "composer-model-switch";
+        row.modelSource = "composer-model-switch";
+        if (!row.cli_type) row.cli_type = "codebuddy";
+        return row;
+      };
+      const updateList = (list) => {
+        if (!Array.isArray(list)) return false;
+        let changed = false;
+        list.forEach((row) => {
+          if (String(getSessionId(row) || "").trim() !== sid) return;
+          patchRow(row);
+          changed = true;
+        });
+        return changed;
+      };
+      let changed = updateList(PCONV.sessions);
+      if (PCONV.sessionDirectoryByProject && typeof PCONV.sessionDirectoryByProject === "object") {
+        const projectIds = pid && PCONV.sessionDirectoryByProject[pid]
+          ? [pid]
+          : Object.keys(PCONV.sessionDirectoryByProject);
+        projectIds.forEach((itemProjectId) => {
+          if (updateList(PCONV.sessionDirectoryByProject[itemProjectId])) changed = true;
+        });
+      }
+      if (typeof mergeConversationSessionDetailIntoStore === "function") {
+        mergeConversationSessionDetailIntoStore({
+          id: sid,
+          sessionId: sid,
+          project_id: pid,
+          cli_type: "codebuddy",
+          model: normalized,
+          source: "composer-model-switch",
+          model_source: "composer-model-switch",
+        }, sid);
+      }
+      if (typeof conversationStoreUpsertSession === "function") {
+        conversationStoreUpsertSession({
+          id: sid,
+          sessionId: sid,
+          project_id: pid,
+          cli_type: "codebuddy",
+          model: normalized,
+          source: "composer-model-switch",
+          model_source: "composer-model-switch",
+        }, { projectId: pid, source: "composer-model-switch" });
+      }
+      if (
+        typeof SESSION_INFO_UI === "object"
+        && SESSION_INFO_UI
+        && SESSION_INFO_UI.open
+        && String(SESSION_INFO_UI.sessionId || "").trim() === sid
+      ) {
+        SESSION_INFO_UI.base = { ...(SESSION_INFO_UI.base || {}), model: normalized };
+        SESSION_INFO_UI.form = { ...(SESSION_INFO_UI.form || {}), model: normalized };
+        if (typeof renderConversationSessionInfoModal === "function") renderConversationSessionInfoModal();
+      }
+      return changed;
+    }
+
+    function hideConversationComposerCodeBuddyModel() {
+      const control = document.getElementById("convCodeBuddyModelControl");
+      const select = document.getElementById("convCodeBuddyModelSelect");
+      const status = document.getElementById("convCodeBuddyModelStatus");
+      if (control) control.hidden = true;
+      if (select) {
+        select.value = "";
+        select.disabled = false;
+        select.dataset.sessionId = "";
+        select.dataset.projectId = "";
+        select.dataset.model = "";
+        select.dataset.modelSource = "";
+      }
+      if (status) status.textContent = "";
+    }
+
+    async function handleConversationComposerCodeBuddyModelChange() {
+      const select = document.getElementById("convCodeBuddyModelSelect");
+      const status = document.getElementById("convCodeBuddyModelStatus");
+      if (!select || select.dataset.saving === "1") return;
+      const sid = String(select.dataset.sessionId || "").trim();
+      const pid = String(select.dataset.projectId || STATE.project || "").trim();
+      const previous = normalizeSessionModel(select.dataset.model) || codeBuddyDefaultModel();
+      const next = normalizeSessionModel(select.value) || codeBuddyDefaultModel();
+      if (!sid || next === previous) {
+        select.value = next;
+        return;
+      }
+      select.dataset.saving = "1";
+      select.disabled = true;
+      if (status) status.textContent = "保存中...";
+      const ok = typeof tryUpdateSessionModel === "function"
+        ? await tryUpdateSessionModel(sid, next)
+        : false;
+      if (!ok) {
+        select.value = previous;
+        select.dataset.saving = "";
+        select.disabled = false;
+        if (status) status.textContent = "保存失败，已保留原值";
+        setHintText("conv", "CodeBuddy 模型切换失败，已保留原值。");
+        return;
+      }
+      syncConversationComposerCodeBuddyModelToLocal(sid, next, pid);
+      select.dataset.model = next;
+      select.dataset.saving = "";
+      select.disabled = false;
+      if (status) status.textContent = "下一次发送将使用";
+      const displayName = typeof codeBuddyModelDisplayName === "function" ? codeBuddyModelDisplayName(next) : next;
+      setHintText("conv", "CodeBuddy 模型已切换为 " + displayName + "，下一次发送将使用。");
+      renderConversationComposerCodeBuddyModel(currentConversationCtx());
+    }
+
+    function renderConversationComposerCodeBuddyModel(ctx) {
+      const control = document.getElementById("convCodeBuddyModelControl");
+      const select = document.getElementById("convCodeBuddyModelSelect");
+      const status = document.getElementById("convCodeBuddyModelStatus");
+      if (!control || !select) return;
+      const context = (ctx && typeof ctx === "object") ? ctx : null;
+      if (!context || !isCodeBuddyCliType(context.cliType)) {
+        hideConversationComposerCodeBuddyModel();
+        return;
+      }
+      const sessionModel = conversationComposerSessionModel(context);
+      const readiness = conversationComposerModelReadiness(context, sessionModel);
+      if (readiness && readiness.state !== "ready") {
+        hydrateConversationComposerModelIfNeeded(context, sessionModel);
+        control.hidden = false;
+        control.title = readiness.state === "error"
+          ? "暂未读取到当前 session.model，避免误显示默认模型。"
+          : "正在读取当前 session.model，读取完成前不显示默认模型。";
+        renderConversationComposerModelLoadingOption(
+          select,
+          readiness.state === "error" ? "模型配置读取失败" : "读取模型配置中..."
+        );
+        select.dataset.sessionId = String(context.sessionId || "").trim();
+        select.dataset.projectId = String(context.projectId || STATE.project || "").trim();
+        select.dataset.model = "";
+        select.dataset.modelSource = readiness.state;
+        select.disabled = true;
+        if (status && select.dataset.saving !== "1") status.textContent = readiness.statusText || "";
+        return;
+      }
+      const selected = resolveConversationComposerModel(context, { preferSelected: false });
+      control.hidden = false;
+      control.title = "界面展示可读名，实际保存值为模型 ID；默认值仅为创建预设，可改选。";
+      populateCodeBuddyModelSelect(select, selected);
+      select.dataset.sessionId = String(context.sessionId || "").trim();
+      select.dataset.projectId = String(context.projectId || STATE.project || "").trim();
+      select.dataset.model = String(sessionModel || "");
+      select.dataset.modelSource = sessionModel ? "session" : "default";
+      select.disabled = !!PCONV.sending || select.dataset.saving === "1";
+      if (status && select.dataset.saving !== "1") status.textContent = "";
+      if (!select.__codeBuddyComposerBound) {
+        select.__codeBuddyComposerBound = true;
+        select.addEventListener("change", handleConversationComposerCodeBuddyModelChange);
+      }
+    }
+
+    function syncConversationComposerClaudeModelToLocal(sessionId, model, projectId = "") {
+      const sid = String(sessionId || "").trim();
+      const normalized = normalizeSessionModel(model);
+      if (!sid || !normalized) return false;
+      const pid = String(projectId || STATE.project || "").trim();
+      if (!PCONV.claudeModelBySessionId || typeof PCONV.claudeModelBySessionId !== "object") {
+        PCONV.claudeModelBySessionId = Object.create(null);
+      }
+      PCONV.claudeModelBySessionId[sid] = normalized;
+      const patchRow = (row) => {
+        if (!row || typeof row !== "object") return row;
+        row.model = normalized;
+        row.model_source = "composer-model-switch";
+        row.modelSource = "composer-model-switch";
+        if (!row.cli_type) row.cli_type = "claude";
+        return row;
+      };
+      const updateList = (list) => {
+        if (!Array.isArray(list)) return false;
+        let changed = false;
+        list.forEach((row) => {
+          if (String(getSessionId(row) || "").trim() !== sid) return;
+          patchRow(row);
+          changed = true;
+        });
+        return changed;
+      };
+      let changed = updateList(PCONV.sessions);
+      if (PCONV.sessionDirectoryByProject && typeof PCONV.sessionDirectoryByProject === "object") {
+        const projectIds = pid && PCONV.sessionDirectoryByProject[pid]
+          ? [pid]
+          : Object.keys(PCONV.sessionDirectoryByProject);
+        projectIds.forEach((itemProjectId) => {
+          if (updateList(PCONV.sessionDirectoryByProject[itemProjectId])) changed = true;
+        });
+      }
+      if (typeof mergeConversationSessionDetailIntoStore === "function") {
+        mergeConversationSessionDetailIntoStore({
+          id: sid,
+          sessionId: sid,
+          project_id: pid,
+          cli_type: "claude",
+          model: normalized,
+          source: "composer-model-switch",
+          model_source: "composer-model-switch",
+        }, sid);
+      }
+      if (typeof conversationStoreUpsertSession === "function") {
+        conversationStoreUpsertSession({
+          id: sid,
+          sessionId: sid,
+          project_id: pid,
+          cli_type: "claude",
+          model: normalized,
+          source: "composer-model-switch",
+          model_source: "composer-model-switch",
+        }, { projectId: pid, source: "composer-model-switch" });
+      }
+      if (
+        typeof SESSION_INFO_UI === "object"
+        && SESSION_INFO_UI
+        && SESSION_INFO_UI.open
+        && String(SESSION_INFO_UI.sessionId || "").trim() === sid
+      ) {
+        SESSION_INFO_UI.base = { ...(SESSION_INFO_UI.base || {}), model: normalized };
+        SESSION_INFO_UI.form = { ...(SESSION_INFO_UI.form || {}), model: normalized };
+        if (typeof renderConversationSessionInfoModal === "function") renderConversationSessionInfoModal();
+      }
+      return changed;
+    }
+
+    function hideConversationComposerClaudeModel() {
+      const control = document.getElementById("convClaudeModelControl");
+      const select = document.getElementById("convClaudeModelSelect");
+      const status = document.getElementById("convClaudeModelStatus");
+      if (control) control.hidden = true;
+      if (select) {
+        select.value = "";
+        select.disabled = false;
+        select.dataset.sessionId = "";
+        select.dataset.projectId = "";
+        select.dataset.model = "";
+        select.dataset.modelSource = "";
+        select.dataset.saving = "";
+      }
+      if (status) status.textContent = "";
+    }
+
+    async function handleConversationComposerClaudeModelChange() {
+      const select = document.getElementById("convClaudeModelSelect");
+      const status = document.getElementById("convClaudeModelStatus");
+      if (!select || select.dataset.saving === "1") return;
+      const sid = String(select.dataset.sessionId || "").trim();
+      const pid = String(select.dataset.projectId || STATE.project || "").trim();
+      const previous = normalizeSessionModel(select.dataset.model) || conversationComposerDefaultModelForCli("claude");
+      const next = normalizeSessionModel(select.value) || conversationComposerDefaultModelForCli("claude");
+      if (!sid || next === previous) {
+        select.value = next;
+        return;
+      }
+      select.dataset.saving = "1";
+      select.disabled = true;
+      if (status) status.textContent = "保存中...";
+      const ok = typeof tryUpdateSessionModel === "function"
+        ? await tryUpdateSessionModel(sid, next)
+        : false;
+      if (!ok) {
+        select.value = previous;
+        select.dataset.saving = "";
+        select.disabled = false;
+        if (status) status.textContent = "保存失败，已保留原值";
+        setHintText("conv", "ClaudeCode 模型切换失败，已保留原值。");
+        return;
+      }
+      syncConversationComposerClaudeModelToLocal(sid, next, pid);
+      select.dataset.model = next;
+      select.dataset.saving = "";
+      select.disabled = false;
+      if (status) status.textContent = "下一次发送将使用";
+      const displayName = typeof claudeModelDisplayName === "function" ? claudeModelDisplayName(next) : next;
+      setHintText("conv", "ClaudeCode 模型已切换为 " + displayName + "，下一次发送将使用。");
+      renderConversationComposerClaudeModel(currentConversationCtx());
+    }
+
+    function renderConversationComposerClaudeModel(ctx) {
+      const control = document.getElementById("convClaudeModelControl");
+      const select = document.getElementById("convClaudeModelSelect");
+      const status = document.getElementById("convClaudeModelStatus");
+      if (!control || !select) return;
+      const context = (ctx && typeof ctx === "object") ? ctx : null;
+      if (!context || !(typeof isClaudeCliType === "function" && isClaudeCliType(context.cliType))) {
+        hideConversationComposerClaudeModel();
+        return;
+      }
+      const sessionModel = conversationComposerSessionModel(context);
+      const readiness = conversationComposerModelReadiness(context, sessionModel);
+      if (readiness && readiness.state !== "ready") {
+        hydrateConversationComposerModelIfNeeded(context, sessionModel);
+        control.hidden = false;
+        control.title = readiness.state === "error"
+          ? "暂未读取到当前 session.model，避免误显示默认 ClaudeCode 模型。"
+          : "正在读取当前 session.model，读取完成前不显示默认 ClaudeCode 模型。";
+        renderConversationComposerModelLoadingOption(
+          select,
+          readiness.state === "error" ? "模型配置读取失败" : "读取模型配置中..."
+        );
+        select.dataset.sessionId = String(context.sessionId || "").trim();
+        select.dataset.projectId = String(context.projectId || STATE.project || "").trim();
+        select.dataset.model = "";
+        select.dataset.modelSource = readiness.state;
+        select.disabled = true;
+        if (status && select.dataset.saving !== "1") status.textContent = readiness.statusText || "";
+        return;
+      }
+      const selected = resolveConversationComposerModel(context, { preferSelected: false });
+      control.hidden = false;
+      control.title = "ClaudeCode 模型会保存到当前 session.model，下一次发送透传给 runner --model。";
+      if (typeof populateClaudeModelSelect === "function") {
+        populateClaudeModelSelect(select, selected);
+      } else {
+        select.value = selected || conversationComposerDefaultModelForCli("claude");
+      }
+      select.dataset.sessionId = String(context.sessionId || "").trim();
+      select.dataset.projectId = String(context.projectId || STATE.project || "").trim();
+      select.dataset.model = String(sessionModel || "");
+      select.dataset.modelSource = sessionModel ? "session" : "default";
+      select.disabled = !!PCONV.sending || select.dataset.saving === "1";
+      if (status && select.dataset.saving !== "1") status.textContent = "";
+      if (!select.__claudeComposerBound) {
+        select.__claudeComposerBound = true;
+        select.addEventListener("change", handleConversationComposerClaudeModelChange);
+      }
+    }
+
+    function conversationComposerSessionPermissionMode(ctx) {
+      const context = (ctx && typeof ctx === "object") ? ctx : null;
+      const sid = String((context && context.sessionId) || STATE.selectedSessionId || "").trim();
+      const session = sid && typeof findConversationSessionById === "function"
+        ? findConversationSessionById(sid)
+        : null;
+      const cliType = firstNonEmptyText([
+        context && context.cliType,
+        context && context.cli_type,
+        session && session.cli_type,
+        session && session.cliType,
+      ]);
+      const hasCachedMode = sid
+        && isCodeBuddyCliType(cliType)
+        && PCONV.codeBuddyPermissionModeBySessionId
+        && typeof PCONV.codeBuddyPermissionModeBySessionId === "object"
+        && Object.prototype.hasOwnProperty.call(PCONV.codeBuddyPermissionModeBySessionId, sid);
+      const cachedMode = hasCachedMode
+        ? normalizeCodeBuddyPermissionMode(PCONV.codeBuddyPermissionModeBySessionId[sid])
+        : "";
+      const raw = firstNonEmptyText([
+        cachedMode,
+        session && session.codebuddy_permission_mode,
+        session && session.codebuddyPermissionMode,
+        context && context.codebuddy_permission_mode,
+        context && context.codebuddyPermissionMode,
+      ]);
+      return typeof normalizeCodeBuddyPermissionMode === "function"
+        ? normalizeCodeBuddyPermissionMode(raw)
+        : String(raw || "default").trim();
+    }
+
+    function conversationComposerSelectedPermissionMode(ctx, sessionMode = "") {
+      const context = (ctx && typeof ctx === "object") ? ctx : null;
+      const sid = String((context && context.sessionId) || STATE.selectedSessionId || "").trim();
+      const select = document.getElementById("convCodeBuddyPermissionSelect");
+      if (!sid || !select || select.hidden) return "";
+      if (String(select.dataset.sessionId || "").trim() !== sid) return "";
+      if (select.dataset.saving === "1") return "";
+      const saved = normalizeCodeBuddyPermissionMode(select.dataset.mode);
+      const selected = normalizeCodeBuddyPermissionMode(select.value);
+      const canonicalSessionMode = normalizeCodeBuddyPermissionMode(sessionMode);
+      if (!selected) return "";
+      if (canonicalSessionMode && saved && saved !== canonicalSessionMode) return "";
+      if (canonicalSessionMode && selected === canonicalSessionMode) return selected;
+      if (saved && selected === saved) return selected;
+      return "";
+    }
+
+    function resolveConversationComposerCodeBuddyPermissionMode(ctx) {
+      const context = (ctx && typeof ctx === "object")
+        ? ctx
+        : (currentConversationCtx() || resolveConversationSendCtx());
+      if (!context || !isCodeBuddyCliType(context.cliType)) return "";
+      const sessionMode = conversationComposerSessionPermissionMode(context);
+      const selectedMode = conversationComposerSelectedPermissionMode(context, sessionMode);
+      return selectedMode || sessionMode || (
+        typeof codeBuddyDefaultPermissionMode === "function" ? codeBuddyDefaultPermissionMode() : "default"
+      );
+    }
+
+    function syncConversationComposerCodeBuddyPermissionModeToLocal(sessionId, mode, projectId = "") {
+      const sid = String(sessionId || "").trim();
+      const normalized = typeof normalizeCodeBuddyPermissionMode === "function"
+        ? normalizeCodeBuddyPermissionMode(mode)
+        : String(mode || "default").trim();
+      if (!sid || !normalized) return false;
+      const pid = String(projectId || STATE.project || "").trim();
+      if (!PCONV.codeBuddyPermissionModeBySessionId || typeof PCONV.codeBuddyPermissionModeBySessionId !== "object") {
+        PCONV.codeBuddyPermissionModeBySessionId = Object.create(null);
+      }
+      PCONV.codeBuddyPermissionModeBySessionId[sid] = normalized;
+      const patchRow = (row) => {
+        if (!row || typeof row !== "object") return row;
+        row.codebuddy_permission_mode = normalized;
+        row.codebuddyPermissionMode = normalized;
+        row.codebuddy_permission_mode_source = "composer-permission-switch";
+        row.codebuddyPermissionModeSource = "composer-permission-switch";
+        row._codebuddy_permission_mode_present = true;
+        if (!row.cli_type) row.cli_type = "codebuddy";
+        return row;
+      };
+      const updateList = (list) => {
+        if (!Array.isArray(list)) return false;
+        let changed = false;
+        list.forEach((row) => {
+          if (String(getSessionId(row) || "").trim() !== sid) return;
+          patchRow(row);
+          changed = true;
+        });
+        return changed;
+      };
+      let changed = updateList(PCONV.sessions);
+      if (PCONV.sessionDirectoryByProject && typeof PCONV.sessionDirectoryByProject === "object") {
+        const projectIds = pid && PCONV.sessionDirectoryByProject[pid]
+          ? [pid]
+          : Object.keys(PCONV.sessionDirectoryByProject);
+        projectIds.forEach((itemProjectId) => {
+          if (updateList(PCONV.sessionDirectoryByProject[itemProjectId])) changed = true;
+        });
+      }
+      if (typeof mergeConversationSessionDetailIntoStore === "function") {
+        mergeConversationSessionDetailIntoStore({
+          id: sid,
+          sessionId: sid,
+          project_id: pid,
+          cli_type: "codebuddy",
+          codebuddy_permission_mode: normalized,
+          codebuddyPermissionMode: normalized,
+          codebuddy_permission_mode_source: "composer-permission-switch",
+          codebuddyPermissionModeSource: "composer-permission-switch",
+          _codebuddy_permission_mode_present: true,
+          source: "composer-permission-switch",
+        }, sid);
+      }
+      if (typeof conversationStoreUpsertSession === "function") {
+        conversationStoreUpsertSession({
+          id: sid,
+          sessionId: sid,
+          project_id: pid,
+          cli_type: "codebuddy",
+          codebuddy_permission_mode: normalized,
+          codebuddyPermissionMode: normalized,
+          codebuddy_permission_mode_source: "composer-permission-switch",
+          codebuddyPermissionModeSource: "composer-permission-switch",
+          _codebuddy_permission_mode_present: true,
+          source: "composer-permission-switch",
+        }, { projectId: pid, source: "composer-permission-switch" });
+      }
+      if (
+        typeof SESSION_INFO_UI === "object"
+        && SESSION_INFO_UI
+        && SESSION_INFO_UI.open
+        && String(SESSION_INFO_UI.sessionId || "").trim() === sid
+      ) {
+        SESSION_INFO_UI.base = { ...(SESSION_INFO_UI.base || {}), codebuddy_permission_mode: normalized };
+        SESSION_INFO_UI.form = { ...(SESSION_INFO_UI.form || {}), codebuddy_permission_mode: normalized };
+        if (typeof renderConversationSessionInfoModal === "function") renderConversationSessionInfoModal();
+      }
+      return changed;
+    }
+
+    function hideConversationComposerCodeBuddyPermissionMode() {
+      const control = document.getElementById("convCodeBuddyPermissionControl");
+      const select = document.getElementById("convCodeBuddyPermissionSelect");
+      const status = document.getElementById("convCodeBuddyPermissionStatus");
+      if (control) {
+        control.hidden = true;
+        control.classList.remove("is-danger");
+      }
+      if (select) {
+        select.value = "";
+        select.disabled = false;
+        select.dataset.sessionId = "";
+        select.dataset.projectId = "";
+        select.dataset.mode = "";
+        select.dataset.saving = "";
+      }
+      if (status) status.textContent = "";
+    }
+
+    async function handleConversationComposerCodeBuddyPermissionModeChange() {
+      const control = document.getElementById("convCodeBuddyPermissionControl");
+      const select = document.getElementById("convCodeBuddyPermissionSelect");
+      const status = document.getElementById("convCodeBuddyPermissionStatus");
+      if (!select || select.dataset.saving === "1") return;
+      const sid = String(select.dataset.sessionId || "").trim();
+      const pid = String(select.dataset.projectId || STATE.project || "").trim();
+      const previous = typeof normalizeCodeBuddyPermissionMode === "function"
+        ? normalizeCodeBuddyPermissionMode(select.dataset.mode)
+        : String(select.dataset.mode || "default").trim();
+      const next = typeof normalizeCodeBuddyPermissionMode === "function"
+        ? normalizeCodeBuddyPermissionMode(select.value)
+        : String(select.value || "default").trim();
+      if (!sid || next === previous) {
+        select.value = next;
+        if (control) control.classList.toggle("is-danger", next === "bypassPermissions");
+        if (status) status.textContent = next === "bypassPermissions" ? "高风险" : "";
+        return;
+      }
+      select.dataset.saving = "1";
+      select.disabled = true;
+      if (status) status.textContent = "保存中...";
+      const ok = typeof tryUpdateSessionCodeBuddyPermissionMode === "function"
+        ? await tryUpdateSessionCodeBuddyPermissionMode(sid, next)
+        : false;
+      if (!ok) {
+        select.value = previous;
+        select.dataset.saving = "";
+        select.disabled = false;
+        if (control) control.classList.toggle("is-danger", previous === "bypassPermissions");
+        if (status) status.textContent = "保存失败，已保留原值";
+        setHintText("conv", "CodeBuddy 授权模式切换失败，已保留原值。");
+        return;
+      }
+      syncConversationComposerCodeBuddyPermissionModeToLocal(sid, next, pid);
+      select.dataset.mode = next;
+      select.dataset.saving = "";
+      select.disabled = false;
+      if (control) control.classList.toggle("is-danger", next === "bypassPermissions");
+      if (status) status.textContent = next === "bypassPermissions" ? "高风险" : "";
+      const displayName = typeof codeBuddyPermissionModeDisplayName === "function"
+        ? codeBuddyPermissionModeDisplayName(next)
+        : next;
+      const riskText = next === "bypassPermissions"
+        ? "全部授权会绕过 CodeBuddy 权限确认，可能执行文件修改和命令。"
+        : "默认授权已启用。";
+      setHintText("conv", "CodeBuddy 授权模式已切换为 " + displayName + "。" + riskText);
+      renderConversationComposerCodeBuddyPermissionMode(currentConversationCtx());
+    }
+
+    function renderConversationComposerCodeBuddyPermissionMode(ctx) {
+      const control = document.getElementById("convCodeBuddyPermissionControl");
+      const select = document.getElementById("convCodeBuddyPermissionSelect");
+      const status = document.getElementById("convCodeBuddyPermissionStatus");
+      if (!control || !select) return;
+      const context = (ctx && typeof ctx === "object") ? ctx : null;
+      if (!context || !isCodeBuddyCliType(context.cliType)) {
+        hideConversationComposerCodeBuddyPermissionMode();
+        return;
+      }
+      const selected = resolveConversationComposerCodeBuddyPermissionMode(context);
+      control.hidden = false;
+      control.title = selected === "bypassPermissions"
+        ? "全部授权会绕过 CodeBuddy 权限确认，可能执行文件修改和命令。"
+        : "默认授权：保留 CodeBuddy 权限确认。";
+      if (typeof populateCodeBuddyPermissionModeSelect === "function") {
+        populateCodeBuddyPermissionModeSelect(select, selected);
+      } else {
+        select.value = selected || "default";
+      }
+      control.classList.toggle("is-danger", select.value === "bypassPermissions");
+      select.dataset.sessionId = String(context.sessionId || "").trim();
+      select.dataset.projectId = String(context.projectId || STATE.project || "").trim();
+      select.dataset.mode = String(select.value || selected || "default");
+      select.disabled = !!PCONV.sending || select.dataset.saving === "1";
+      if (status && select.dataset.saving !== "1") {
+        status.textContent = select.value === "bypassPermissions" ? "高风险" : "";
+      }
+      if (!select.__codeBuddyPermissionComposerBound) {
+        select.__codeBuddyPermissionComposerBound = true;
+        select.addEventListener("change", handleConversationComposerCodeBuddyPermissionModeChange);
+      }
+    }
+
+    function conversationComposerSessionClaudePermissionMode(ctx) {
+      const context = (ctx && typeof ctx === "object") ? ctx : null;
+      const sid = String((context && context.sessionId) || STATE.selectedSessionId || "").trim();
+      const session = sid && typeof findConversationSessionById === "function"
+        ? findConversationSessionById(sid)
+        : null;
+      const cliType = conversationComposerCliType(context, session);
+      const hasCachedMode = sid
+        && typeof isClaudeCliType === "function"
+        && isClaudeCliType(cliType)
+        && PCONV.claudePermissionModeBySessionId
+        && typeof PCONV.claudePermissionModeBySessionId === "object"
+        && Object.prototype.hasOwnProperty.call(PCONV.claudePermissionModeBySessionId, sid);
+      const cachedMode = hasCachedMode
+        ? normalizeClaudePermissionMode(PCONV.claudePermissionModeBySessionId[sid])
+        : "";
+      const raw = firstNonEmptyText([
+        cachedMode,
+        session && session.claude_permission_mode,
+        session && session.claudePermissionMode,
+        session && session.permission_mode,
+        session && session.permissionMode,
+        context && context.claude_permission_mode,
+        context && context.claudePermissionMode,
+        context && context.permission_mode,
+        context && context.permissionMode,
+      ]);
+      return typeof normalizeClaudePermissionMode === "function"
+        ? normalizeClaudePermissionMode(raw)
+        : String(raw || "bypassPermissions").trim();
+    }
+
+    function conversationComposerSelectedClaudePermissionMode(ctx, sessionMode = "") {
+      const context = (ctx && typeof ctx === "object") ? ctx : null;
+      const sid = String((context && context.sessionId) || STATE.selectedSessionId || "").trim();
+      const select = document.getElementById("convClaudePermissionSelect");
+      if (!sid || !select || select.hidden) return "";
+      if (String(select.dataset.sessionId || "").trim() !== sid) return "";
+      if (select.dataset.saving === "1") return "";
+      const saved = normalizeClaudePermissionMode(select.dataset.mode);
+      const selected = normalizeClaudePermissionMode(select.value);
+      const canonicalSessionMode = normalizeClaudePermissionMode(sessionMode);
+      if (!selected) return "";
+      if (canonicalSessionMode && saved && saved !== canonicalSessionMode) return "";
+      if (canonicalSessionMode && selected === canonicalSessionMode) return selected;
+      if (saved && selected === saved) return selected;
+      return "";
+    }
+
+    function resolveConversationComposerClaudePermissionMode(ctx) {
+      const context = (ctx && typeof ctx === "object")
+        ? ctx
+        : (currentConversationCtx() || resolveConversationSendCtx());
+      if (!context || !(typeof isClaudeCliType === "function" && isClaudeCliType(context.cliType))) return "";
+      const sessionMode = conversationComposerSessionClaudePermissionMode(context);
+      const selectedMode = conversationComposerSelectedClaudePermissionMode(context, sessionMode);
+      return selectedMode || sessionMode || (
+        typeof claudeDefaultPermissionMode === "function" ? claudeDefaultPermissionMode() : "bypassPermissions"
+      );
+    }
+
+    function resolveConversationComposerPermissionPayload(ctx) {
+      const context = (ctx && typeof ctx === "object")
+        ? ctx
+        : (currentConversationCtx() || resolveConversationSendCtx());
+      if (!context) return {};
+      if (isCodeBuddyCliType(context.cliType)) {
+        const mode = resolveConversationComposerCodeBuddyPermissionMode(context);
+        return mode ? {
+          codebuddy_permission_mode: mode,
+          codebuddyPermissionMode: mode,
+        } : {};
+      }
+      if (typeof isClaudeCliType === "function" && isClaudeCliType(context.cliType)) {
+        const mode = resolveConversationComposerClaudePermissionMode(context);
+        return mode ? {
+          permission_mode: mode,
+          permissionMode: mode,
+          claude_permission_mode: mode,
+          claudePermissionMode: mode,
+        } : {};
+      }
+      return {};
+    }
+
+    function syncConversationComposerClaudePermissionModeToLocal(sessionId, mode, projectId = "") {
+      const sid = String(sessionId || "").trim();
+      const normalized = typeof normalizeClaudePermissionMode === "function"
+        ? normalizeClaudePermissionMode(mode)
+        : String(mode || "bypassPermissions").trim();
+      if (!sid || !normalized) return false;
+      const pid = String(projectId || STATE.project || "").trim();
+      if (!PCONV.claudePermissionModeBySessionId || typeof PCONV.claudePermissionModeBySessionId !== "object") {
+        PCONV.claudePermissionModeBySessionId = Object.create(null);
+      }
+      PCONV.claudePermissionModeBySessionId[sid] = normalized;
+      const patchRow = (row) => {
+        if (!row || typeof row !== "object") return row;
+        row.claude_permission_mode = normalized;
+        row.claudePermissionMode = normalized;
+        row.permission_mode = normalized;
+        row.permissionMode = normalized;
+        row.claude_permission_mode_source = "composer-permission-switch";
+        row.claudePermissionModeSource = "composer-permission-switch";
+        if (!row.cli_type) row.cli_type = "claude";
+        return row;
+      };
+      const updateList = (list) => {
+        if (!Array.isArray(list)) return false;
+        let changed = false;
+        list.forEach((row) => {
+          if (String(getSessionId(row) || "").trim() !== sid) return;
+          patchRow(row);
+          changed = true;
+        });
+        return changed;
+      };
+      let changed = updateList(PCONV.sessions);
+      if (PCONV.sessionDirectoryByProject && typeof PCONV.sessionDirectoryByProject === "object") {
+        const projectIds = pid && PCONV.sessionDirectoryByProject[pid]
+          ? [pid]
+          : Object.keys(PCONV.sessionDirectoryByProject);
+        projectIds.forEach((itemProjectId) => {
+          if (updateList(PCONV.sessionDirectoryByProject[itemProjectId])) changed = true;
+        });
+      }
+      if (typeof mergeConversationSessionDetailIntoStore === "function") {
+        mergeConversationSessionDetailIntoStore({
+          id: sid,
+          sessionId: sid,
+          project_id: pid,
+          cli_type: "claude",
+          claude_permission_mode: normalized,
+          claudePermissionMode: normalized,
+          permission_mode: normalized,
+          permissionMode: normalized,
+          claude_permission_mode_source: "composer-permission-switch",
+          claudePermissionModeSource: "composer-permission-switch",
+          source: "composer-permission-switch",
+        }, sid);
+      }
+      if (typeof conversationStoreUpsertSession === "function") {
+        conversationStoreUpsertSession({
+          id: sid,
+          sessionId: sid,
+          project_id: pid,
+          cli_type: "claude",
+          claude_permission_mode: normalized,
+          claudePermissionMode: normalized,
+          permission_mode: normalized,
+          permissionMode: normalized,
+          claude_permission_mode_source: "composer-permission-switch",
+          claudePermissionModeSource: "composer-permission-switch",
+          source: "composer-permission-switch",
+        }, { projectId: pid, source: "composer-permission-switch" });
+      }
+      if (
+        typeof SESSION_INFO_UI === "object"
+        && SESSION_INFO_UI
+        && SESSION_INFO_UI.open
+        && String(SESSION_INFO_UI.sessionId || "").trim() === sid
+      ) {
+        SESSION_INFO_UI.base = { ...(SESSION_INFO_UI.base || {}), claude_permission_mode: normalized };
+        SESSION_INFO_UI.form = { ...(SESSION_INFO_UI.form || {}), claude_permission_mode: normalized };
+        if (typeof renderConversationSessionInfoModal === "function") renderConversationSessionInfoModal();
+      }
+      return changed;
+    }
+
+    function hideConversationComposerClaudePermissionMode() {
+      const control = document.getElementById("convClaudePermissionControl");
+      const select = document.getElementById("convClaudePermissionSelect");
+      const status = document.getElementById("convClaudePermissionStatus");
+      if (control) {
+        control.hidden = true;
+        control.classList.remove("is-danger");
+      }
+      if (select) {
+        select.value = "";
+        select.disabled = false;
+        select.dataset.sessionId = "";
+        select.dataset.projectId = "";
+        select.dataset.mode = "";
+        select.dataset.saving = "";
+      }
+      if (status) status.textContent = "";
+    }
+
+    async function handleConversationComposerClaudePermissionModeChange() {
+      const control = document.getElementById("convClaudePermissionControl");
+      const select = document.getElementById("convClaudePermissionSelect");
+      const status = document.getElementById("convClaudePermissionStatus");
+      if (!select || select.dataset.saving === "1") return;
+      const sid = String(select.dataset.sessionId || "").trim();
+      const pid = String(select.dataset.projectId || STATE.project || "").trim();
+      const previous = typeof normalizeClaudePermissionMode === "function"
+        ? normalizeClaudePermissionMode(select.dataset.mode)
+        : String(select.dataset.mode || "bypassPermissions").trim();
+      const next = typeof normalizeClaudePermissionMode === "function"
+        ? normalizeClaudePermissionMode(select.value)
+        : String(select.value || "bypassPermissions").trim();
+      if (!sid || next === previous) {
+        select.value = next;
+        if (control) control.classList.toggle("is-danger", next === "bypassPermissions");
+        if (status) status.textContent = next === "bypassPermissions" ? "高风险" : "";
+        return;
+      }
+      select.dataset.saving = "1";
+      select.disabled = true;
+      if (status) status.textContent = "保存中...";
+      const ok = typeof tryUpdateSessionClaudePermissionMode === "function"
+        ? await tryUpdateSessionClaudePermissionMode(sid, next)
+        : false;
+      if (!ok) {
+        select.value = previous;
+        select.dataset.saving = "";
+        select.disabled = false;
+        if (control) control.classList.toggle("is-danger", previous === "bypassPermissions");
+        if (status) status.textContent = "保存失败，已保留原值";
+        setHintText("conv", "ClaudeCode 授权模式切换失败，已保留原值；可能需要后端先支持 Claude 授权字段回显。");
+        return;
+      }
+      syncConversationComposerClaudePermissionModeToLocal(sid, next, pid);
+      select.dataset.mode = next;
+      select.dataset.saving = "";
+      select.disabled = false;
+      if (control) control.classList.toggle("is-danger", next === "bypassPermissions");
+      if (status) status.textContent = next === "bypassPermissions" ? "高风险" : "";
+      const displayName = typeof claudePermissionModeDisplayName === "function"
+        ? claudePermissionModeDisplayName(next)
+        : next;
+      const riskText = next === "bypassPermissions"
+        ? "最大授权会追加 --dangerously-skip-permissions，不会收紧当前默认体验。"
+        : "已切换为更严格授权模式。";
+      setHintText("conv", "ClaudeCode 授权模式已切换为 " + displayName + "。" + riskText);
+      renderConversationComposerClaudePermissionMode(currentConversationCtx());
+    }
+
+    function renderConversationComposerClaudePermissionMode(ctx) {
+      const control = document.getElementById("convClaudePermissionControl");
+      const select = document.getElementById("convClaudePermissionSelect");
+      const status = document.getElementById("convClaudePermissionStatus");
+      if (!control || !select) return;
+      const context = (ctx && typeof ctx === "object") ? ctx : null;
+      if (!context || !(typeof isClaudeCliType === "function" && isClaudeCliType(context.cliType))) {
+        hideConversationComposerClaudePermissionMode();
+        return;
+      }
+      const selected = resolveConversationComposerClaudePermissionMode(context);
+      control.hidden = false;
+      control.title = selected === "bypassPermissions"
+        ? "最大授权：发送时对应 --dangerously-skip-permissions。"
+        : "更严格授权：default / acceptEdits / plan 会收紧 ClaudeCode 权限。";
+      if (typeof populateClaudePermissionModeSelect === "function") {
+        populateClaudePermissionModeSelect(select, selected);
+      } else {
+        select.value = selected || "bypassPermissions";
+      }
+      control.classList.toggle("is-danger", select.value === "bypassPermissions");
+      select.dataset.sessionId = String(context.sessionId || "").trim();
+      select.dataset.projectId = String(context.projectId || STATE.project || "").trim();
+      select.dataset.mode = String(select.value || selected || "bypassPermissions");
+      select.disabled = !!PCONV.sending || select.dataset.saving === "1";
+      if (status && select.dataset.saving !== "1") {
+        status.textContent = select.value === "bypassPermissions" ? "高风险" : "";
+      }
+      if (!select.__claudePermissionComposerBound) {
+        select.__claudePermissionComposerBound = true;
+        select.addEventListener("change", handleConversationComposerClaudePermissionModeChange);
+      }
     }
 
     function setConvComposerTextForCurrentSession(text) {
@@ -3072,6 +4287,25 @@
         input.placeholder = "该会话缺少通道路由，请先为该 session 绑定通道";
         return false;
       }
+      const currentSessionForSend = typeof findConversationSessionById === "function"
+        ? findConversationSessionById(String(ctx.sessionId || ""))
+        : null;
+      const sessionBindingBlockMeta = typeof conversationSessionBindingBlockMeta === "function"
+        ? conversationSessionBindingBlockMeta(currentSessionForSend)
+        : null;
+      if (sessionBindingBlockMeta) {
+        input.placeholder = "会话绑定失败，暂不能发送；请重试状态或等待后端完成绑定修复";
+        input.disabled = true;
+        sendBtn.disabled = true;
+        sendBtn.title = typeof conversationSessionBindingBlockMessage === "function"
+          ? conversationSessionBindingBlockMessage(currentSessionForSend)
+          : "配置阻塞：会话绑定失败";
+        setHintText("conv", "会话绑定失败，未发送；请重试状态或等待后端完成绑定修复。");
+        renderConversationDetail(false);
+        return false;
+      }
+      const conversationModel = resolveConversationComposerPayloadModel(ctx);
+      const conversationPermissionPayload = resolveConversationComposerPermissionPayload(ctx);
       const message = String(composeDraft.text || "").trim();
       if (!message && composeAttachments.length === 0) return false;
       const outboundMessage = appendMentionCompatToMessage(message, mentionTargets);
@@ -3114,6 +4348,8 @@
             channelName: ctx.channelName,
             sessionId: ctx.sessionId,
             cliType: ctx.cliType || "codex",
+            ...(conversationModel ? { model: conversationModel } : {}),
+            ...conversationPermissionPayload,
             message: outboundMessage,
             ...buildUiUserSenderFields(),
             attachments: composeAttachments.map((a) => ({
@@ -3531,7 +4767,6 @@
 
     function ccbPollDelay(hasWorking) {
       if (!hasWorking) return 0;
-      if (typeof document !== "undefined" && document.hidden) return 60000;
       return 10000;
     }
 
@@ -3609,10 +4844,8 @@
         return baseDelay;
       }
       if (hasWorking) {
-        if (typeof document !== "undefined" && document.hidden) return 45000;
         return 10000;
       }
-      if (typeof document !== "undefined" && document.hidden) return 90000;
       return 12000;
     }
 
@@ -3633,7 +4866,7 @@
       }
       ensureConversationResumeRefreshStateMaps();
       const now = Date.now();
-      const debounceMs = 1200;
+      const debounceMs = CONVERSATION_RESUME_REFRESH_DEBOUNCE_MS;
       const lastResumeAt = Number(PCONV.resumeRefreshAtByProject[projectId] || 0);
       if (lastResumeAt > 0 && (now - lastResumeAt) < debounceMs) return;
       PCONV.resumeRefreshAtByProject[projectId] = now;
@@ -3775,7 +5008,7 @@
         renderConversationDetail(false);
         setHintText("conv", "已撤回到输入框，可编辑后重新发送。");
         Promise.resolve(refreshConversationPanel()).catch(() => {
-          scheduleConversationPoll(1200);
+          scheduleConversationPoll(CONVERSATION_RUN_ACTION_REFRESH_RETRY_MS);
         });
       } catch (e) {
         const msg = String((e && e.message) || e || "未知错误");
@@ -3794,7 +5027,7 @@
           try {
             await refreshConversationPanel();
           } catch (_) {}
-          scheduleConversationPoll(1000);
+          scheduleConversationPoll(CONVERSATION_RUN_ACTION_CONFLICT_REFRESH_RETRY_MS);
         } else if (networkLike) {
           setHintText("conv", "撤回请求未确认送达（连接中断或服务重启），已自动刷新最新状态。");
           try {
@@ -3802,7 +5035,7 @@
           } catch (_) {
             renderConversationDetail();
           }
-          scheduleConversationPoll(1200);
+          scheduleConversationPoll(CONVERSATION_RUN_ACTION_REFRESH_RETRY_MS);
         } else {
           if (lower.includes("409")) {
             setHintText("conv", "撤回失败：状态发生变化，已自动刷新最新状态。");
@@ -3814,7 +5047,7 @@
           } catch (_) {
             renderConversationDetail();
           }
-          scheduleConversationPoll(1200);
+          scheduleConversationPoll(CONVERSATION_RUN_ACTION_REFRESH_RETRY_MS);
         }
       } finally {
         delete PCONV.runActionBusy[rid];
@@ -3852,7 +5085,7 @@
         await callRunAction(rid, "interrupt");
         setHintText("conv", "已发送打断" + actionName + "请求，等待状态回写。");
         await refreshConversationPanel();
-        scheduleConversationPoll(1200);
+        scheduleConversationPoll(CONVERSATION_RUN_ACTION_REFRESH_RETRY_MS);
       } catch (e) {
         setHintText("conv", "打断失败：" + String((e && e.message) || e || "未知错误"));
         renderConversationDetail();

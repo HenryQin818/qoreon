@@ -15,7 +15,7 @@ and exposes a small API surface on the same origin:
 
 All run artifacts are stored under: task-dashboard/.runs/
 
-Supports multiple CLI tools: codex, claude, opencode, gemini, trae.
+Supports multiple CLI tools: codex, claude, opencode, gemini, trae, codebuddy.
 """
 
 from __future__ import annotations
@@ -59,6 +59,7 @@ from task_dashboard.config import (
 )
 from task_dashboard.communication_audit import audit_communication_patterns
 from task_dashboard.conversation_memo_store import ConversationMemoStore
+from task_dashboard.claude_models import normalize_claude_model
 from task_dashboard.domain import bucket_key_for_status
 from task_dashboard.global_resource_graph import build_global_resource_graph
 from task_dashboard.local_cli_bins import (
@@ -131,9 +132,17 @@ from task_dashboard.runtime.run_routes import (
     list_runs_response as runtime_list_runs_response,
     perform_run_action_response as runtime_perform_run_action_response,
 )
+from task_dashboard.runtime.runstore_health import (
+    archive_terminal_runs as runtime_archive_terminal_runs,
+)
 from task_dashboard.runtime.run_detail_fields import (
     extract_terminal_message_from_file as runtime_extract_terminal_message_from_file,
     reconcile_generated_media_for_run as runtime_reconcile_generated_media_for_run,
+    safe_terminal_visible_text as runtime_safe_terminal_visible_text,
+)
+from task_dashboard.runtime.provider_failure import (
+    apply_run_failure_classification as runtime_apply_run_failure_classification,
+    classify_provider_error_text as runtime_classify_provider_error_text,
 )
 from task_dashboard.sender_contract import normalize_sender_fields
 
@@ -166,6 +175,7 @@ from task_dashboard.runtime.project_scheduler_registry import *  # noqa: F401,F4
 from task_dashboard.runtime.task_push_registry import *  # noqa: F401,F403
 from task_dashboard.runtime.task_plan_registry import *  # noqa: F401,F403
 from task_dashboard.runtime.heartbeat_registry import *  # noqa: F401,F403
+from task_dashboard.runtime.heartbeat_registry import _build_session_summary_from_meta  # noqa: F401
 from task_dashboard.runtime.heartbeat_helpers import (  # noqa: F401
     _load_project_heartbeat_config,
     _normalize_heartbeat_task,
@@ -199,6 +209,11 @@ from task_dashboard.runtime.share_space import (
     LEGACY_PROJECT_CHAT_PAGE_PATH as RUNTIME_LEGACY_PROJECT_CHAT_PAGE_PATH,
     LEGACY_SHARE_SPACE_PAGE_PATH as RUNTIME_LEGACY_SHARE_SPACE_PAGE_PATH,
     SHARE_MODE_PAGE_PATH as RUNTIME_SHARE_MODE_PAGE_PATH,
+)
+from task_dashboard.runtime.run_reconcile_progress import (
+    RUN_PROGRESS_FRESHNESS_S,
+    count_process_projection_events as runtime_count_process_projection_events,
+    has_recent_running_progress as runtime_has_recent_running_progress,
 )
 from task_dashboard.runtime.platform_lan_access import (
     is_trusted_lan_client_address as runtime_is_trusted_lan_client_address,
@@ -786,6 +801,8 @@ def _run_busy_cmd_matches(cmd: str, run_id: str, cli_type: str) -> bool:
         patterns = [rf"(?:^|\s)-o\s+[^\s\"']*{escaped_rid}\.last\.txt(?:\s|$)"]
     elif cli_t == "trae":
         patterns = [rf"(?:^|\s)--trajectory-file\s+[^\s\"']*{escaped_rid}\.last\.txt(?:\s|$)"]
+    elif cli_t == "codebuddy":
+        patterns = [rf"(?:^|\s)--output-path\s+[^\s\"']*{escaped_rid}\.last\.txt(?:\s|$)"]
     if not patterns:
         return False
     return any(re.search(p, text) is not None for p in patterns)
@@ -802,6 +819,8 @@ def _run_busy_cmd_fallback_matches(cmd: str, run_id: str, cli_type: str) -> bool
         return (re.search(r"(?:^|\s)-o(?:\s|=)", text) is not None) and (f"{rid}.last.txt" in text)
     if cli_t == "trae":
         return (re.search(r"(?:^|\s)--trajectory-file(?:\s|=)", text) is not None) and (f"{rid}.last.txt" in text)
+    if cli_t == "codebuddy":
+        return (re.search(r"(?:^|\s)--output-path(?:\s|=)", text) is not None) and (f"{rid}.last.txt" in text)
     return False
 
 
@@ -817,6 +836,9 @@ def _extract_run_id_from_busy_cmd(cmd: str, cli_type: str) -> str:
             return ""
     elif cli_t == "trae":
         if re.search(r"(?:^|\s)--trajectory-file(?:\s|=)", text) is None:
+            return ""
+    elif cli_t == "codebuddy":
+        if re.search(r"(?:^|\s)--output-path(?:\s|=)", text) is None:
             return ""
     else:
         return ""
@@ -864,7 +886,7 @@ def _session_busy_cmd_matches(cmd: str, session_id: str, cli_type: str) -> bool:
     patterns: list[str]
     if cli_t == "codex":
         patterns = [rf"(?:^|\s)resume\s+{escaped_sid}(?:\s|$)"]
-    elif cli_t in {"claude", "gemini"}:
+    elif cli_t in {"claude", "gemini", "codebuddy"}:
         patterns = [rf"(?:^|\s)--resume\s+{escaped_sid}(?:\s|$)"]
     elif cli_t == "opencode":
         patterns = [rf"(?:^|\s)--session\s+{escaped_sid}(?:\s|$)"]
@@ -1541,7 +1563,7 @@ def _clean_business_path(raw: Any) -> str:
         return ""
     p = p[: m.end()]
     low = p.lower()
-    if low.endswith("/skill.md") or "/.codex/" in low:
+    if low.endswith("/skill.md") or ("/.codex/" + "skills/") in low:
         return ""
     if not any(seg in p for seg in _BUSINESS_PATH_SEGMENTS):
         return ""
@@ -1743,6 +1765,12 @@ def _error_hint(err: str) -> str:
         return "进程中断：常见于服务重启或运行进程退出。可重试或回收结果。"
     if _is_transient_network_error(e):
         return "网络波动：系统已做自动重试但仍失败。建议稍后重试，或先用“回收结果”收口已完成内容。"
+    provider_error = runtime_classify_provider_error_text(e)
+    if bool(provider_error.get("retryable")):
+        kind = str(provider_error.get("kind") or "").strip()
+        if kind == "high_demand":
+            return "模型服务高负载：这不是业务处理失败。请稍后重试，若可能已有动作完成则先做补链恢复。"
+        return "模型服务临时不可用：这不是业务处理失败。请稍后重试，若可能已有动作完成则先做补链恢复。"
     return ""
 
 
@@ -1800,7 +1828,7 @@ def _detect_terminal_text_cli_incomplete_error(
     log_text: str = "",
 ) -> str:
     cli = str(cli_type or "").strip().lower()
-    if cli not in {"claude", "opencode"}:
+    if cli not in {"claude", "opencode", "gemini", "codebuddy"}:
         return ""
     text = _normalize_cli_runtime_text(log_text)
     if not text and log_path:
@@ -1832,6 +1860,28 @@ def _detect_terminal_text_cli_incomplete_error(
     return ""
 
 
+def _has_claude_terminal_final_text(
+    *,
+    log_path: Path | str | None = None,
+    last_text: Any = "",
+    last_preview: Any = "",
+) -> bool:
+    candidates = [last_text, last_preview]
+    if log_path:
+        try:
+            candidates.append(runtime_extract_terminal_message_from_file(Path(log_path), cli_type="claude"))
+        except Exception:
+            pass
+    for candidate in candidates:
+        try:
+            visible = runtime_safe_terminal_visible_text(candidate, cli_type="claude")
+        except Exception:
+            visible = str(candidate or "")
+        if str(visible or "").strip():
+            return True
+    return False
+
+
 def _default_run_timeout_s() -> Optional[int]:
     raw = str(os.environ.get("CCB_TIMEOUT_S") or "").strip()
     if raw:
@@ -1857,8 +1907,8 @@ def _default_run_no_progress_timeout_s(cli_type: str = "codex") -> Optional[int]
             pass
     if str(cli_type or "codex").strip().lower() == "claude":
         return None
-    # 默认 30 分钟：运行中若长期无任何日志/输出进展，按卡住处理并回收状态。
-    return 30 * 60
+    # 默认约 66 分钟：长任务可能长时间无日志输出，仍保留卡死回收边界。
+    return 4000
 
 
 def _default_network_retry_max() -> int:
@@ -2003,12 +2053,13 @@ def _server_token() -> str:
 def _dashboard_build_paths() -> dict[str, Path]:
     """Resolve static dashboard build script and output paths."""
     repo_root = _repo_root()
-    script = repo_root / "build_project_task_dashboard.py"
-    out_task = repo_root / "dist" / "project-task-dashboard.html"
-    out_overview = repo_root / "dist" / "project-overview-dashboard.html"
-    out_communication = repo_root / "dist" / "project-communication-audit.html"
-    out_message_risk_dashboard = repo_root / "dist" / "project-message-risk-dashboard.html"
-    out_status_report = repo_root / "dist" / "project-status-report.html"
+    task_dir = repo_root
+    script = task_dir / "build_project_task_dashboard.py"
+    out_task = task_dir / "dist" / "project-task-dashboard.html"
+    out_overview = task_dir / "dist" / "project-overview-dashboard.html"
+    out_communication = task_dir / "dist" / "project-communication-audit.html"
+    out_message_risk_dashboard = task_dir / "dist" / "project-message-risk-dashboard.html"
+    out_status_report = task_dir / "dist" / "project-status-report.html"
     return {
         "repo_root": repo_root,
         "script": script,
@@ -2654,6 +2705,24 @@ def _resolve_project_workdir(project_id: str) -> Path:
     return repo_root
 
 
+def _resolve_channel_workdir(project_id: str, channel_name: str) -> Path:
+    repo_root = _repo_root()
+    p = _find_project_cfg(project_id)
+    name = str(channel_name or "").strip()
+    if p and name:
+        task_root_rel = str(p.get("task_root_rel") or "").strip()
+        task_root = _resolve_dir(task_root_rel, repo_root)
+        if task_root:
+            try:
+                channel_root = (task_root / name).resolve()
+                channel_root.relative_to(task_root.resolve())
+                if channel_root.exists() and channel_root.is_dir():
+                    return channel_root
+            except Exception:
+                pass
+    return _resolve_project_workdir(project_id)
+
+
 def _normalize_execution_profile(value: Any, *, default: str = "sandboxed", allow_empty: bool = False) -> str:
     return runtime_normalize_execution_profile(value, default=default, allow_empty=allow_empty)
 
@@ -3049,8 +3118,7 @@ def _repair_project_prefixed_path(path: Path) -> Path:
     for idx in range(1, len(parts)):
         parent_name = parts[idx - 1]
         name = parts[idx]
-        managed_workspace_name = "项目管理" + "-小秘书"
-        if parent_name != managed_workspace_name:
+        if parent_name != "qoreon-projects":
             continue
         if not name or name.startswith("【项目】"):
             continue
@@ -3363,6 +3431,22 @@ class RunScheduler:
                     return True
         return False
 
+    def protected_run_ids(self) -> set[str]:
+        """Return scheduler-owned run ids that must not be archived."""
+        out: set[str] = set()
+        with self._lock:
+            out.update(str(rid or "").strip() for rid in self._running.values())
+            for q in self._q.values():
+                for item in q:
+                    rid = str(item[0] if isinstance(item, tuple) else item).strip()
+                    if rid:
+                        out.add(rid)
+            for item in self._retry_waiting.values():
+                rid = str(item[0] if isinstance(item, tuple) else item).strip()
+                if rid:
+                    out.add(rid)
+        return {rid for rid in out if rid}
+
     def _activate_retry_waiting(self, session_id: str, run_id: str, cli_type: str) -> None:
         sid = str(session_id or "").strip()
         rid = str(run_id or "").strip()
@@ -3644,6 +3728,10 @@ class RunProcessRegistry:
         with self._lock:
             return rid in self._procs
 
+    def tracked_run_ids(self) -> set[str]:
+        with self._lock:
+            return {rid for rid in self._procs.keys() if rid}
+
     def request_interrupt(self, run_id: str, cli_type: str = "codex") -> bool:
         rid = str(run_id or "").strip()
         if not rid:
@@ -3695,7 +3783,6 @@ def _find_new_session_id(
     start_ts: float,
     cli_type: str = "codex",
     exclude_session_ids: Optional[set[str]] = None,
-    adapter_cls: Optional[type] = None,
 ) -> tuple[str, str]:
     """
     Find the most recently created session after start_ts for the given CLI type.
@@ -3709,8 +3796,8 @@ def _find_new_session_id(
     Returns:
         Tuple of (session_id, session_path) or ("", "") if not found.
     """
-    resolved_adapter_cls = adapter_cls or get_adapter(cli_type) or CodexAdapter
-    sessions = resolved_adapter_cls.scan_sessions(after_ts=start_ts)
+    adapter_cls = get_adapter(cli_type) or CodexAdapter
+    sessions = adapter_cls.scan_sessions(after_ts=start_ts)
     if not sessions:
         return "", ""
     blocked = {
@@ -3746,6 +3833,7 @@ def create_cli_session(
     model: str = "",
     reasoning_effort: str = "",
     execution_profile: str = "",
+    permission_mode: str = "",
 ) -> dict[str, Any]:
     """
     Create a new CLI session by running a minimal command
@@ -3758,6 +3846,7 @@ def create_cli_session(
         model: Optional model identifier, used when CLI adapter supports it.
         reasoning_effort: Optional reasoning effort for supported CLI.
         execution_profile: Optional dashboard execution profile used for spawn behavior.
+        permission_mode: Optional permission mode for supported runner-backed CLIs.
 
     Returns:
         Dict with ok, sessionId, sessionPath, and optional error info.
@@ -3787,6 +3876,7 @@ def create_cli_session(
         model=(str(model or "").strip() if adapter_cls.supports_model() else ""),
         reasoning_effort=(_normalize_reasoning_effort(reasoning_effort) if cli_type == "codex" else ""),
         sandbox_mode=(codex_sandbox_mode if cli_type == "codex" else ""),
+        **({"permission_mode": str(permission_mode or "").strip()} if str(cli_type or "").strip().lower() in {"claude", "codebuddy"} else {}),
     )
 
     run_cwd = workdir if (workdir and workdir.exists() and workdir.is_dir()) else Path(__file__).resolve().parent
@@ -3814,31 +3904,21 @@ def create_cli_session(
             start_ts,
             cli_type,
             exclude_session_ids=existing_session_ids,
-            adapter_cls=adapter_cls,
-        )
-        combined_output = "\n".join(
-            str(part or "")
-            for part in [getattr(e, "stdout", "") or "", getattr(e, "stderr", "") or ""]
-            if part
         )
         if not sid:
+            combined_output = "\n".join(
+                part for part in [getattr(e, "stdout", "") or "", getattr(e, "stderr", "") or ""] if part
+            )
             try:
                 extractor = getattr(adapter_cls, "extract_session_id_from_output", None)
                 if callable(extractor):
-                    extracted_sid = str(extractor(combined_output) or "").strip()
-                    if extracted_sid and extracted_sid.lower() not in existing_session_ids:
-                        sid = extracted_sid
+                    sid = str(extractor(combined_output) or "").strip().lower()
+                    if sid in existing_session_ids:
+                        sid = ""
             except Exception:
                 sid = ""
-        if sid and not spath:
-            try:
-                for info in adapter_cls.scan_sessions(after_ts=start_ts):
-                    candidate_sid = str(getattr(info, "session_id", "") or "").strip()
-                    if candidate_sid and candidate_sid.lower() == sid.lower():
-                        spath = str(getattr(info, "path", "") or "")
-                        break
-            except Exception:
-                spath = ""
+            if sid and not spath:
+                spath = str(getattr(adapter_cls, "session_path", "") or "")
         return {
             "ok": False,
             "error": "timeout",
@@ -3864,9 +3944,8 @@ def create_cli_session(
         start_ts,
         cli_type,
         exclude_session_ids=existing_session_ids,
-        adapter_cls=adapter_cls,
     )
-    if not sid and proc.returncode == 0:
+    if not sid:
         combined_output = "\n".join(part for part in [proc.stdout, proc.stderr] if part)
         try:
             extractor = getattr(adapter_cls, "extract_session_id_from_output", None)
@@ -3876,6 +3955,8 @@ def create_cli_session(
                     sid = ""
         except Exception:
             sid = ""
+        if sid and not spath:
+            spath = str(getattr(adapter_cls, "session_path", "") or "")
     if proc.returncode != 0:
         err = (proc.stderr or "").strip() or (proc.stdout or "").strip()
         return {
@@ -3920,6 +4001,7 @@ def _build_session_seed_prompt(
     channel_name: str = "",
     note: str = "",
     first_message: str = "",
+    cli_type: str = "",
 ) -> str:
     """
     Build the first prompt for new session creation.
@@ -3944,11 +4026,38 @@ def _build_session_seed_prompt(
     is_master_dialog = "主体-总控" in channel_for_accept
     dialog_type = "主对话" if is_master_dialog else "子级对话"
     dialog_short = "主" if is_master_dialog else "子级"
-    accept_line = (
-        f"【连通性验收】通道：{channel_for_accept}；对话类型：{dialog_type}。"
-        f"请仅回复：OK（{channel_for_accept}-{dialog_short}）"
-    )
-    return seed + "\n\n" + accept_line
+    cli_t = str(cli_type or "").strip().lower()
+    if cli_t == "gemini":
+        accept_line = (
+            f"【Gemini CLI 初始化验收】通道：{channel_for_accept}；对话类型：{dialog_type}。\n"
+            "请仅按以下结构回复：\n"
+            "已完成初始化\n"
+            "职责边界: <一句话>\n"
+            "当前主线: <一句话>\n"
+            "唯一阻塞: <无/一句话>\n"
+            "首个动作: <一句话>"
+        )
+        communication_line = (
+            "【Gemini 通信与工具规则】你是 `cli_type=gemini` Agent；只能使用当前实际可见工具，"
+            "例如 `read_file`、`grep_search`、`cli_help`。不要调用不存在的 `run_shell_command`、"
+            "`list_directory` 或 Codex/Claude 专属工具。初始化阶段不强制发送通讯录验证消息；"
+            "能读取项目真源则按固定结构完成初始化，不能读取则回唯一阻塞和所需协同。"
+            "正式消息仍只认 `POST /api/codex/announce` / `message_cli send|receipt` 证据链；"
+            "没有 `announce_run_id + target_session_id一致 + visible_in_channel_chat=true`，不得写已送达。"
+        )
+    else:
+        accept_line = (
+            f"【连通性验收】通道：{channel_for_accept}；对话类型：{dialog_type}。"
+            f"请仅回复：OK（{channel_for_accept}-{dialog_short}）"
+        )
+        communication_line = (
+            "【通信规则】正式跨 Agent 消息优先使用 "
+            "`python3 -m task_dashboard.message_cli send|receipt --to-agent <目标Agent> --wait-verify --json`；"
+            "CLI 只是 `POST /api/codex/announce` 封装。`--wait-verify` 只等送达证据，"
+            "不等业务回执；目标阻塞时按 `blocking_error.next_action` 转会话治理，"
+            "不要翻源码、旧 registry 或 `.sessions` 旁路发送。"
+        )
+    return seed + "\n\n" + communication_line + "\n\n" + accept_line
 
 
 def _is_profile_not_found(err: str) -> bool:
@@ -4249,6 +4358,8 @@ class RunStore:
                     saved_attachments.append(saved_item)
 
         resolved_model = str(model or "").strip() or _project_channel_model(project_id, channel_name)
+        if str(cli_type or "").strip().lower() == "claude":
+            resolved_model = normalize_claude_model(resolved_model)
         resolved_reasoning = _normalize_reasoning_effort(reasoning_effort) or _project_channel_reasoning_effort(project_id, channel_name)
         meta: dict[str, Any] = {
             "id": run_id,
@@ -4415,16 +4526,41 @@ class RunStore:
                     changed_local = True
             return changed_local
 
+        def _clear_probe_fields() -> bool:
+            changed_local = False
+            for key in ("probeMisses", "probeProcessEventCount"):
+                if key in meta:
+                    try:
+                        meta.pop(key, None)
+                    except Exception:
+                        pass
+                    changed_local = True
+            return changed_local
+
         st = str(meta.get("status") or "")
         run_id = str(meta.get("id") or "").strip()
         if st in {"done", "error"}:
             changed = False
             cli_type = str(meta.get("cliType") or "codex").strip() or "codex"
             if run_id and st == "done":
-                terminal_error = _detect_terminal_text_cli_incomplete_error(
-                    cli_type,
-                    log_path=self._paths(run_id)["log"],
-                )
+                log_path = self._paths(run_id)["log"]
+                terminal_error = ""
+                if str(cli_type or "").strip().lower() == "claude":
+                    has_final_text = _has_claude_terminal_final_text(
+                        log_path=log_path,
+                        last_text=self.read_last(run_id, limit_chars=8000),
+                        last_preview=meta.get("lastPreview"),
+                    )
+                    if not has_final_text:
+                        terminal_error = _detect_terminal_text_cli_incomplete_error(
+                            cli_type,
+                            log_path=log_path,
+                        )
+                else:
+                    terminal_error = _detect_terminal_text_cli_incomplete_error(
+                        cli_type,
+                        log_path=log_path,
+                    )
                 if terminal_error:
                     meta["status"] = "error"
                     if str(meta.get("error") or "").strip() != terminal_error:
@@ -4450,6 +4586,17 @@ class RunStore:
                     if current_error != terminal_error:
                         meta["error"] = terminal_error
                         changed = True
+            if run_id and st == "error":
+                try:
+                    log_text = _tail_text(self._paths(run_id)["log"], max_chars=24_000)
+                except Exception:
+                    log_text = ""
+                try:
+                    last_text = self.read_last(run_id, limit_chars=8_000)
+                except Exception:
+                    last_text = ""
+                if runtime_apply_run_failure_classification(meta, log_text=log_text, last_text=last_text):
+                    changed = True
             changed = _sync_observability_fields() or changed
             return meta, changed
         # queue-related states can legitimately wait.
@@ -4498,11 +4645,7 @@ class RunStore:
         # If this run is still tracked by the in-process executor, keep status=running.
         # This avoids UI flicker caused by transient probe misses during long/retrying runs.
         if RUN_PROCESS_REGISTRY.is_tracked(run_id):
-            if "probeMisses" in meta:
-                try:
-                    meta.pop("probeMisses", None)
-                except Exception:
-                    pass
+            if _clear_probe_fields():
                 return meta, True
             return meta, False
 
@@ -4517,19 +4660,31 @@ class RunStore:
 
         alive = _run_process_alive(run_id, cli_type=cli_type)
         if alive:
-            if "probeMisses" in meta:
-                try:
-                    meta.pop("probeMisses", None)
-                except Exception:
-                    pass
+            if _clear_probe_fields():
                 return meta, True
             return meta, False
 
         # Avoid false "interrupted" flaps:
         # only mark as interrupted after several consecutive misses.
-        miss = int(meta.get("probeMisses") or 0) + 1
+        try:
+            previous_process_event_count = int(meta.get("probeProcessEventCount"))
+        except Exception:
+            previous_process_event_count = None
+        current_process_event_count = runtime_count_process_projection_events(meta)
+        if meta.get("probeProcessEventCount") != current_process_event_count:
+            meta["probeProcessEventCount"] = current_process_event_count
+        miss = min(int(meta.get("probeMisses") or 0) + 1, 3)
         meta["probeMisses"] = miss
         if miss < 3:
+            return meta, True
+
+        if runtime_has_recent_running_progress(
+            meta,
+            now_ts=time.time(),
+            parse_iso_ts=_parse_iso_ts,
+            freshness_s=RUN_PROGRESS_FRESHNESS_S,
+            previous_process_event_count=previous_process_event_count,
+        ):
             return meta, True
 
         changed = False
@@ -4561,11 +4716,7 @@ class RunStore:
             or log_has_turn_completed
             or (agent_msgs and not log_has_turn_failed)
         ):
-            if "probeMisses" in meta:
-                try:
-                    meta.pop("probeMisses", None)
-                except Exception:
-                    pass
+            if _clear_probe_fields():
                 changed = True
             if st != "done":
                 meta["status"] = "done"
@@ -4583,6 +4734,7 @@ class RunStore:
                 or str(meta.get("generated_media_summary") or "").strip()
                 or (agent_msgs[-1] if agent_msgs else "")
             )
+            preview_src = runtime_safe_terminal_visible_text(preview_src, cli_type=cli_type)
             preview = _safe_text(preview_src.replace("\r\n", "\n"), 300)
             if preview != str(meta.get("lastPreview") or ""):
                 meta["lastPreview"] = preview
@@ -4592,11 +4744,7 @@ class RunStore:
             return meta, changed
 
         # Consecutive probe misses reached threshold; clear counter and mark interrupted.
-        if "probeMisses" in meta:
-            try:
-                meta.pop("probeMisses", None)
-            except Exception:
-                pass
+        if _clear_probe_fields():
             changed = True
 
         if st != "error":
@@ -4607,6 +4755,8 @@ class RunStore:
             changed = True
         if not str(meta.get("error") or "").strip():
             meta["error"] = "run interrupted (server restarted or process exited)"
+            changed = True
+        if runtime_apply_run_failure_classification(meta):
             changed = True
         if _sync_observability_fields():
             changed = True
@@ -4651,28 +4801,34 @@ class RunStore:
         before_txt = str(before_created_at or "").strip()
         after_ts = _parse_rfc3339_ts(after_txt) if after_txt else 0.0
         before_ts = _parse_rfc3339_ts(before_txt) if before_txt else 0.0
+
+        def _matches_raw_meta_filters(meta: dict[str, Any]) -> bool:
+            if channel_id and str(meta.get("channelId") or "") != channel_id:
+                return False
+            if project_id and str(meta.get("projectId") or "") != project_id:
+                return False
+            if session_id and str(meta.get("sessionId") or "") != session_id:
+                return False
+            if cli_type and str(meta.get("cliType") or "codex") != cli_type:
+                return False
+            if after_ts > 0 or before_ts > 0:
+                created_ts = _parse_rfc3339_ts(meta.get("createdAt"))
+                if after_ts > 0 and not (created_ts > after_ts):
+                    return False
+                if before_ts > 0 and not (created_ts < before_ts):
+                    return False
+            return True
+
         for meta in self._snapshot_live_run_index():
             if bool(meta.get("hidden")):
+                continue
+            if not _matches_raw_meta_filters(meta):
                 continue
             run_id = str(meta.get("id") or "").strip()
             if run_id:
                 meta, changed = self.reconcile_meta(meta)
                 if changed:
                     self.save_meta(run_id, meta)
-            if channel_id and str(meta.get("channelId") or "") != channel_id:
-                continue
-            if project_id and str(meta.get("projectId") or "") != project_id:
-                continue
-            if session_id and str(meta.get("sessionId") or "") != session_id:
-                continue
-            if cli_type and str(meta.get("cliType") or "codex") != cli_type:
-                continue
-            if after_ts > 0 or before_ts > 0:
-                created_ts = _parse_rfc3339_ts(meta.get("createdAt"))
-                if after_ts > 0 and not (created_ts > after_ts):
-                    continue
-                if before_ts > 0 and not (created_ts < before_ts):
-                    continue
 
             if include_payload:
                 # Get CLI type for this run
@@ -4687,7 +4843,13 @@ class RunStore:
                 if hydrate_light and (hydrate_full or not str(meta.get("lastPreview") or "").strip()):
                     last = self.read_last(run_id, limit_chars=2000)
                     if last:
+                        last = runtime_safe_terminal_visible_text(last, cli_type=run_cli_type)
                         meta["lastPreview"] = _safe_text(last.replace("\r\n", "\n").strip(), 300)
+                if str(meta.get("lastPreview") or "").strip():
+                    meta["lastPreview"] = _safe_text(
+                        runtime_safe_terminal_visible_text(meta.get("lastPreview"), cli_type=run_cli_type),
+                        300,
+                    )
                 log = ""
                 am: list[str] = []
                 if hydrate_full:
@@ -4770,68 +4932,34 @@ class RunStore:
         older_than_s: float,
         limit: int = 500,
         dry_run: bool = False,
+        project_id: str = "",
+        protected_run_ids: set[str] | None = None,
+        actor: str = "runstore",
+        reason: str = "",
     ) -> list[dict[str, Any]]:
-        results: list[dict[str, Any]] = []
-        terminal_statuses = {"done", "error", "interrupted"}
-        now_ts = time.time()
-        if older_than_s <= 0:
-            older_than_s = 86400.0
-        candidates: list[tuple[float, Path, dict[str, Any]]] = []
-        for meta_path in self._iter_live_meta_paths():
-            if meta_path.parent == self.hot_dir:
+        payload = runtime_archive_terminal_runs(
+            self,
+            older_than_s=older_than_s,
+            limit=limit,
+            dry_run=dry_run,
+            project_id=project_id,
+            protected_run_ids=protected_run_ids,
+            actor=actor,
+            reason=reason,
+        )
+        for row in payload.get("runs") or []:
+            if str(row.get("outcome") or "") != "moved":
                 continue
             try:
-                meta = json.loads(meta_path.read_text(encoding="utf-8"))
-            except Exception:
-                continue
-            if not isinstance(meta, dict):
-                continue
-            if bool(meta.get("hidden")):
-                continue
-            status = str(meta.get("status") or "").strip().lower()
-            if status not in terminal_statuses:
-                continue
-            anchor_ts = (
-                _parse_iso_ts(meta.get("finishedAt"))
-                or _parse_iso_ts(meta.get("createdAt"))
-                or _parse_iso_ts(meta.get("startedAt"))
-            )
-            if anchor_ts <= 0 or (now_ts - anchor_ts) < older_than_s:
-                continue
-            candidates.append((anchor_ts, meta_path, meta))
-
-        candidates.sort(key=lambda item: item[0])
-        for _, meta_path, meta in candidates[: max(1, int(limit or 1))]:
-            run_id = str(meta.get("id") or "").strip()
-            if not run_id:
-                continue
-            bucket = self._archive_bucket_for_meta(meta)
-            src = self._paths(run_id)
-            dst = self._archive_paths(run_id, bucket)
-            results.append({
-                "run_id": run_id,
-                "bucket": bucket,
-                "status": str(meta.get("status") or "").strip(),
-                "src_meta": str(src["meta"]),
-                "dst_meta": str(dst["meta"]),
-            })
-            if dry_run:
-                continue
-            dst["meta"].parent.mkdir(parents=True, exist_ok=True)
-            for key in ("meta", "msg", "last", "log"):
-                if not src[key].exists():
-                    continue
-                src[key].replace(dst[key])
-            self._remove_live_run_index_entry(run_id)
-            try:
+                meta = self.load_meta(str(row.get("run_id") or "")) or {}
                 runtime_invalidate_runs_list_cache(
-                    str(meta.get("projectId") or "").strip(),
-                    session_id=str(meta.get("sessionId") or "").strip(),
+                    str(meta.get("projectId") or row.get("project_id") or "").strip(),
+                    session_id=str(meta.get("sessionId") or row.get("session_id") or "").strip(),
                     channel_id=str(meta.get("channelId") or "").strip(),
                 )
             except Exception:
                 pass
-        return results
+        return list(payload.get("runs") or [])
 
 _RUN_ACTION_AUDIT_LOCK = threading.Lock()
 
@@ -5213,6 +5341,7 @@ class Handler(BaseHTTPRequestHandler):
             dispatch_terminal_callback_for_run=_dispatch_terminal_callback_for_run,
             create_cli_session=create_cli_session,
             resolve_project_workdir=_resolve_project_workdir,
+            resolve_channel_workdir=_resolve_channel_workdir,
             detect_git_branch=runtime_detect_git_branch,
             build_session_seed_prompt=_build_session_seed_prompt,
             decorate_session_display_fields=_decorate_session_display_fields,

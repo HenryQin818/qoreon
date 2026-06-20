@@ -13,6 +13,7 @@ from urllib.parse import parse_qs
 import json
 
 from task_dashboard.runtime.agent_display_name import apply_agent_display_fields, build_agent_identity_audit
+from task_dashboard.runtime.session_display_state import build_communication_status_summary
 from task_dashboard.runtime.session_views import apply_session_heartbeat_summary_rows
 
 _SESSIONS_PAYLOAD_CACHE_LOCK = threading.Lock()
@@ -132,6 +133,43 @@ def _load_sessions_payload_cache(
     if build_started_at < invalidated_at:
         return None
     return copy.deepcopy(payload)
+
+
+def _load_sessions_payload_cache_allow_stale(
+    cache_key: str,
+    *,
+    project_id: str,
+    now_mono: Optional[float] = None,
+) -> tuple[Optional[dict[str, Any]], bool, bool, str, int]:
+    checked_now = time.monotonic() if now_mono is None else float(now_mono)
+    pid = str(project_id or "").strip()
+    with _SESSIONS_PAYLOAD_CACHE_LOCK:
+        cached = _SESSIONS_PAYLOAD_CACHE.get(cache_key)
+        inflight = _SESSIONS_PAYLOAD_CACHE_INFLIGHT.get(cache_key)
+        inflight_event = (inflight or {}).get("event") if isinstance(inflight, dict) else None
+        inflight_running = isinstance(inflight_event, threading.Event) and not inflight_event.is_set()
+        if not isinstance(cached, dict):
+            reason = "inflight_no_cache" if inflight_running else "cache_miss_no_runtime"
+            return None, False, False, reason, 0
+        payload = cached.get("payload")
+        if not isinstance(payload, dict):
+            reason = "inflight_no_cache" if inflight_running else "cache_miss_no_runtime"
+            return None, False, False, reason, 0
+        checked = float(cached.get("checked_at_mono") or 0.0)
+        age_ms = int(max(0.0, checked_now - checked) * 1000)
+        ttl_s = _sessions_payload_cache_ttl_s()
+        invalidated_at = float(_SESSIONS_PAYLOAD_CACHE_INVALIDATED_AT.get(pid) or 0.0)
+        build_started_at = float(cached.get("build_started_at_mono") or checked)
+        fresh = ttl_s > 0 and (checked_now - checked) <= ttl_s and build_started_at >= invalidated_at
+        if fresh:
+            return copy.deepcopy(payload), False, True, "", age_ms
+        if inflight_running:
+            reason = "stale_cache_inflight"
+        elif build_started_at < invalidated_at:
+            reason = "stale_cache_invalidated"
+        else:
+            reason = "stale_cache_expired"
+        return copy.deepcopy(payload), True, True, reason, age_ms
 
 
 def _store_sessions_payload_cache(
@@ -392,6 +430,7 @@ _SESSION_SUMMARY_FIELDS = (
     "channelName",
     "cli_type",
     "cliType",
+    "model",
     "role",
     "alias",
     "display_name",
@@ -402,24 +441,14 @@ _SESSION_SUMMARY_FIELDS = (
     "agent_display_issue",
     "codex_title",
     "environment",
-    "worktree_root",
-    "workdir",
-    "branch",
-    "project_execution_context",
-    "team_expansion_hint_state",
-    "team_expansion_hint_summary",
-    "team_expansion_hint_blocked_summary",
-    "team_expansion_hint_prompt",
-    "team_expansion_hint",
     "runtime_state",
     "session_health_state",
     "session_display_state",
     "session_display_reason",
     "latest_run_summary",
     "latest_effective_run_summary",
+    "communication_status_summary",
     "heartbeat_summary",
-    "memo_summary",
-    "conversation_list_metrics",
     "status",
     "created_at",
     "last_used_at",
@@ -428,6 +457,21 @@ _SESSION_SUMMARY_FIELDS = (
     "deleted_at",
     "deleted_reason",
     "source",
+)
+
+_SESSION_SUMMARY_DEFERRED_FIELDS = (
+    "project_execution_context",
+    "task_tracking",
+    "heartbeat",
+    "memo_summary",
+    "conversation_list_metrics",
+    "team_expansion_hint",
+    "team_expansion_hint_prompt",
+    "agents_md",
+    "static_instruction_files",
+    "codebuddy_permission_mode",
+    "claude_permission_mode",
+    "run_history",
 )
 
 
@@ -447,6 +491,51 @@ def _normalize_sessions_payload_mode(qs: dict[str, list[str]]) -> str:
     return "full"
 
 
+def _has_explicit_sessions_payload_mode(qs: dict[str, list[str]]) -> bool:
+    return any(key in qs for key in ("payloadMode", "payload_mode", "queryMode", "query_mode"))
+
+
+def _allow_stale_sessions_payload(qs: dict[str, list[str]]) -> bool:
+    return _coerce_bool((qs.get("allow_stale") or qs.get("allowStale") or [""])[0], False)
+
+
+def _now_local_iso() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime())
+
+
+def _sessions_status_freshness(
+    *,
+    payload_mode: str,
+    stale: bool = False,
+    from_cache: bool = False,
+    degraded_reason: str = "",
+) -> str:
+    reason = str(degraded_reason or "").strip()
+    if reason:
+        return "degraded"
+    if stale:
+        return "stale"
+    if from_cache:
+        return "cached"
+    if payload_mode in {"summary", "light"}:
+        return "partial"
+    return "live"
+
+
+def _sessions_loading_hints(*, payload_mode: str) -> dict[str, Any]:
+    if payload_mode not in {"summary", "light"}:
+        return {}
+    return {
+        "detailEndpoint": "/api/sessions/{session_id}",
+        "deferredFields": list(_SESSION_SUMMARY_DEFERRED_FIELDS),
+        "backgroundRefreshRecommended": True,
+        "statusRefresh": {
+            "endpoint": "/api/sessions?payloadMode=summary&allow_stale=1",
+            "strategy": "stale-while-revalidate",
+        },
+    }
+
+
 def _session_summary_row(row: dict[str, Any]) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for key in _SESSION_SUMMARY_FIELDS:
@@ -456,7 +545,104 @@ def _session_summary_row(row: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _degraded_runtime_state(degraded_reason: str) -> dict[str, Any]:
+    return {
+        "internal_state": "idle",
+        "external_busy": False,
+        "display_state": "idle",
+        "active_run_id": "",
+        "queued_run_id": "",
+        "queue_depth": 0,
+        "updated_at": "",
+        "busy_source": "degraded_unknown",
+        "display_secondary_state": "degraded_unknown",
+        "external_busy_reason": "",
+        "active_run_message_kind": "",
+        "active_run_sender_type": "",
+        "active_run_trigger_type": "",
+        "active_run_visibility": "unknown",
+        "active_run_projection_reason": "degraded_runtime_index",
+        "degraded": True,
+        "degraded_reason": str(degraded_reason or "runtime_state_unavailable").strip(),
+    }
+
+
+def _summary_row_agg_for_communication(row: dict[str, Any]) -> dict[str, Any]:
+    latest = row.get("latest_run_summary") if isinstance(row.get("latest_run_summary"), dict) else {}
+    effective = (
+        row.get("latest_effective_run_summary")
+        if isinstance(row.get("latest_effective_run_summary"), dict)
+        else {}
+    )
+    agg: dict[str, Any] = {}
+    if latest:
+        agg.update(
+            {
+                "latest_run_id": latest.get("run_id"),
+                "latest_status": latest.get("status"),
+                "updated_at": latest.get("updated_at"),
+                "last_preview": latest.get("preview"),
+                "last_error": latest.get("error"),
+                "failure_class": latest.get("failure_class"),
+                "provider_error": latest.get("provider_error"),
+                "side_effect_risk": latest.get("side_effect_risk"),
+                "recovery_mode": latest.get("recovery_mode"),
+                "recovery_required": latest.get("recovery_required"),
+                "retry_exhausted": latest.get("retry_exhausted"),
+            }
+        )
+    if effective:
+        agg["latest_effective_run_summary"] = effective
+    return agg
+
+
+def _ensure_sessions_summary_status_fields(payload: dict[str, Any], *, degraded_reason: str = "") -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        return payload
+    reason = str(degraded_reason or "").strip()
+    sessions = payload.get("sessions")
+    if not isinstance(sessions, list):
+        return payload
+    for row in sessions:
+        if not isinstance(row, dict):
+            continue
+        if not isinstance(row.get("latest_run_summary"), dict):
+            row["latest_run_summary"] = {}
+        if not isinstance(row.get("latest_effective_run_summary"), dict):
+            row["latest_effective_run_summary"] = {}
+        runtime_state = row.get("runtime_state") if isinstance(row.get("runtime_state"), dict) else {}
+        if reason and not runtime_state:
+            runtime_state = _degraded_runtime_state(reason)
+            row["runtime_state"] = runtime_state
+        elif reason and runtime_state:
+            runtime_state["degraded"] = True
+            runtime_state["degraded_reason"] = reason
+        if not isinstance(row.get("communication_status_summary"), dict):
+            row["communication_status_summary"] = build_communication_status_summary(
+                _summary_row_agg_for_communication(row),
+                runtime_state,
+                degraded=bool(reason),
+                degraded_reason=reason,
+            )
+        elif reason:
+            summary = row["communication_status_summary"]
+            summary["degraded"] = True
+            summary["degraded_reason"] = reason
+            if not isinstance(summary.get("projection_summary"), dict):
+                rebuilt = build_communication_status_summary(
+                    _summary_row_agg_for_communication(row),
+                    runtime_state,
+                    degraded=True,
+                    degraded_reason=reason,
+                )
+                projection = rebuilt.get("projection_summary")
+                if isinstance(projection, dict):
+                    summary["projection_summary"] = projection
+    return payload
+
+
 def _sessions_read_model_meta(*, payload_mode: str) -> dict[str, Any]:
+    partial = payload_mode in {"summary", "light"}
     return {
         "version": "p0a.v1",
         "scope": "sessions",
@@ -466,7 +652,57 @@ def _sessions_read_model_meta(*, payload_mode: str) -> dict[str, Any]:
         "cache_ttl_ms": int(_sessions_payload_cache_ttl_s() * 1000),
         "inflight_wait_ms": int(_sessions_payload_cache_inflight_wait_s() * 1000),
         "summary_fields": list(_SESSION_SUMMARY_FIELDS) if payload_mode in {"summary", "light"} else [],
+        "allow_stale": False,
+        "stale": False,
+        "from_cache": False,
+        "degraded": False,
+        "degraded_reason": "",
+        "statusFreshness": "partial" if partial else "live",
+        "lastUpdatedAt": _now_local_iso(),
+        "isPartial": partial,
+        "loadingHints": _sessions_loading_hints(payload_mode=payload_mode),
+        "deferred_fields": list(_SESSION_SUMMARY_DEFERRED_FIELDS) if partial else [],
     }
+
+
+def _apply_sessions_read_model_meta(
+    payload: dict[str, Any],
+    *,
+    payload_mode: str,
+    allow_stale: bool = False,
+    stale: bool = False,
+    from_cache: bool = False,
+    degraded_reason: str = "",
+    cache_age_ms: Optional[int] = None,
+) -> dict[str, Any]:
+    payload["payloadMode"] = payload_mode
+    meta = _sessions_read_model_meta(payload_mode=payload_mode)
+    meta.update(
+        {
+            "allow_stale": bool(allow_stale),
+            "stale": bool(stale),
+            "from_cache": bool(from_cache),
+            "degraded": bool(degraded_reason),
+            "degraded_reason": str(degraded_reason or ""),
+            "statusFreshness": _sessions_status_freshness(
+                payload_mode=payload_mode,
+                stale=stale,
+                from_cache=from_cache,
+                degraded_reason=degraded_reason,
+            ),
+            "lastUpdatedAt": _now_local_iso(),
+            "isPartial": payload_mode in {"summary", "light"},
+            "loadingHints": _sessions_loading_hints(payload_mode=payload_mode),
+        }
+    )
+    if cache_age_ms is not None:
+        meta["cache_age_ms"] = max(0, int(cache_age_ms))
+    payload["sessions_read_model"] = meta
+    payload["statusFreshness"] = meta.get("statusFreshness")
+    payload["lastUpdatedAt"] = meta.get("lastUpdatedAt")
+    payload["isPartial"] = bool(meta.get("isPartial"))
+    payload["loadingHints"] = meta.get("loadingHints") if isinstance(meta.get("loadingHints"), dict) else {}
+    return payload
 
 
 def build_sessions_summary_payload(
@@ -483,6 +719,10 @@ def build_sessions_summary_payload(
     apply_session_context_rows: Callable[..., list[dict[str, Any]]],
     apply_session_work_context: Callable[..., dict[str, Any]],
     attach_runtime_state_to_sessions: Callable[[Any, list[dict[str, Any]]], list[dict[str, Any]]],
+    payload_mode: str = "summary",
+    attach_work_context: bool = True,
+    attach_runtime_state: bool = True,
+    attach_runtime_state_kwargs: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     sessions = session_store.list_sessions(
         project_id,
@@ -491,25 +731,32 @@ def build_sessions_summary_payload(
     )
     sessions = apply_effective_primary_flags(session_store, project_id, sessions)
     sessions = decorate_sessions_display_fields(sessions)
-    sessions = apply_session_context_rows(
-        sessions,
-        project_id=project_id,
-        environment_name=environment_name,
-        worktree_root=worktree_root,
-        apply_session_work_context=apply_session_work_context,
-    )
-    sessions = attach_runtime_state_to_sessions(store, sessions, project_id=project_id)
+    if attach_work_context:
+        sessions = apply_session_context_rows(
+            sessions,
+            project_id=project_id,
+            environment_name=environment_name,
+            worktree_root=worktree_root,
+            apply_session_work_context=apply_session_work_context,
+        )
+    if attach_runtime_state:
+        runtime_kwargs = dict(attach_runtime_state_kwargs or {})
+        sessions = attach_runtime_state_to_sessions(store, sessions, project_id=project_id, **runtime_kwargs)
     sessions = apply_agent_display_fields(sessions)
     summary_rows = [_session_summary_row(row if isinstance(row, dict) else {}) for row in sessions]
-    return {
+    payload = {
         "project_id": project_id,
         "channel_name": channel_name,
         "count": len(summary_rows),
-        "payloadMode": "summary",
+        "payloadMode": payload_mode,
         "sessions": summary_rows,
         "agent_identity_audit": build_agent_identity_audit(summary_rows, project_id=project_id),
-        "sessions_read_model": _sessions_read_model_meta(payload_mode="summary"),
+        "sessions_read_model": _sessions_read_model_meta(payload_mode=payload_mode),
     }
+    return _ensure_sessions_summary_status_fields(
+        payload,
+        degraded_reason="" if attach_runtime_state else "runtime_not_attached",
+    )
 
 
 def list_sessions_response(
@@ -534,6 +781,9 @@ def list_sessions_response(
     channel_name = (qs.get("channel_name") or [""])[0]
     include_deleted = _coerce_bool((qs.get("include_deleted") or qs.get("includeDeleted") or [""])[0], False)
     payload_mode = _normalize_sessions_payload_mode(qs)
+    allow_stale = _allow_stale_sessions_payload(qs)
+    if allow_stale and payload_mode == "full" and not _has_explicit_sessions_payload_mode(qs):
+        payload_mode = "summary"
 
     if not project_id:
         return 400, {"error": "missing project_id"}
@@ -548,6 +798,77 @@ def list_sessions_response(
         payload_mode=payload_mode,
     )
     if payload_mode in {"summary", "light"}:
+        if allow_stale:
+            cached_payload, stale, from_cache, degraded_reason, cache_age_ms = _load_sessions_payload_cache_allow_stale(
+                cache_key,
+                project_id=project_id,
+            )
+            if cached_payload is not None:
+                payload = cached_payload
+                sessions = payload.get("sessions") if isinstance(payload, dict) else []
+                runtime_count = sum(
+                    1 for row in (sessions or [])
+                    if isinstance(row, dict) and isinstance(row.get("runtime_state"), dict)
+                )
+                runtime_degraded_count = sum(
+                    1 for row in (sessions or [])
+                    if (
+                        isinstance(row, dict)
+                        and isinstance(row.get("runtime_state"), dict)
+                        and bool((row.get("runtime_state") or {}).get("degraded"))
+                    )
+                )
+                effective_degraded_reason = degraded_reason
+                if runtime_count <= 0:
+                    effective_degraded_reason = effective_degraded_reason or "cache_hit_no_runtime"
+                elif runtime_degraded_count > 0:
+                    effective_degraded_reason = effective_degraded_reason or "cache_hit_degraded_runtime"
+                _apply_sessions_read_model_meta(
+                    payload,
+                    payload_mode=payload_mode,
+                    allow_stale=True,
+                    stale=stale or runtime_count <= 0,
+                    from_cache=from_cache,
+                    degraded_reason=effective_degraded_reason,
+                    cache_age_ms=cache_age_ms,
+                )
+                _ensure_sessions_summary_status_fields(payload, degraded_reason=effective_degraded_reason)
+                return 200, payload
+            build_started_at_mono = time.monotonic()
+            payload = build_sessions_summary_payload(
+                session_store=session_store,
+                store=store,
+                project_id=project_id,
+                channel_name=channel_name,
+                include_deleted=include_deleted,
+                environment_name=environment_name,
+                worktree_root=worktree_root,
+                apply_effective_primary_flags=apply_effective_primary_flags,
+                decorate_sessions_display_fields=decorate_sessions_display_fields,
+                apply_session_context_rows=apply_session_context_rows,
+                apply_session_work_context=apply_session_work_context,
+                attach_runtime_state_to_sessions=attach_runtime_state_to_sessions,
+                payload_mode=payload_mode,
+                attach_work_context=False,
+                attach_runtime_state=False,
+            )
+            effective_degraded_reason = degraded_reason or "cache_miss_no_runtime"
+            _apply_sessions_read_model_meta(
+                payload,
+                payload_mode=payload_mode,
+                allow_stale=True,
+                stale=True,
+                from_cache=False,
+                degraded_reason=effective_degraded_reason,
+            )
+            _ensure_sessions_summary_status_fields(payload, degraded_reason=effective_degraded_reason)
+            _store_sessions_payload_cache(
+                cache_key,
+                payload,
+                project_id=project_id,
+                build_started_at_mono=build_started_at_mono,
+            )
+            return 200, payload
         payload = _build_or_load_sessions_payload(
             cache_key=cache_key,
             project_id=project_id,
@@ -564,10 +885,28 @@ def list_sessions_response(
                 apply_session_context_rows=apply_session_context_rows,
                 apply_session_work_context=apply_session_work_context,
                 attach_runtime_state_to_sessions=attach_runtime_state_to_sessions,
+                payload_mode=payload_mode,
+                attach_work_context=False,
+                attach_runtime_state=payload_mode == "summary",
+                attach_runtime_state_kwargs={
+                    "runtime_index_allow_stale": True,
+                    "runtime_index_wait_for_inflight": False,
+                    "probe_external_when_idle": False,
+                } if payload_mode == "summary" else None,
             ),
         )
-        payload["payloadMode"] = payload_mode
-        payload["sessions_read_model"] = _sessions_read_model_meta(payload_mode=payload_mode)
+        sessions = payload.get("sessions") if isinstance(payload, dict) else []
+        runtime_count = sum(
+            1 for row in (sessions or [])
+            if isinstance(row, dict) and isinstance(row.get("runtime_state"), dict)
+        )
+        degraded_reason = ""
+        if payload_mode == "light":
+            degraded_reason = "runtime_not_attached"
+        elif runtime_count <= 0:
+            degraded_reason = "runtime_state_lazy"
+        _apply_sessions_read_model_meta(payload, payload_mode=payload_mode, degraded_reason=degraded_reason)
+        _ensure_sessions_summary_status_fields(payload, degraded_reason=degraded_reason)
         return 200, payload
 
     payload = _build_or_load_sessions_payload(
@@ -591,8 +930,7 @@ def list_sessions_response(
             heartbeat_summary_payload=heartbeat_summary_payload,
         ),
     )
-    payload["payloadMode"] = "full"
-    payload["sessions_read_model"] = _sessions_read_model_meta(payload_mode="full")
+    _apply_sessions_read_model_meta(payload, payload_mode="full")
     return 200, payload
 
 

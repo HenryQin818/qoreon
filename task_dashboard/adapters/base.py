@@ -4,7 +4,7 @@
 """
 CLI Adapter base classes and interfaces for multi-CLI support.
 
-Each CLI tool (codex, claude, opencode, gemini, trae) implements CLIAdapter to provide
+Each CLI tool (codex, claude, opencode, gemini, trae, codebuddy) implements CLIAdapter to provide
 consistent interfaces for session management and command execution.
 """
 
@@ -26,7 +26,7 @@ from task_dashboard.local_cli_bins import get_local_cli_bin_override
 class CLIInfo:
     """Static information about a CLI tool."""
 
-    id: str  # e.g., "codex", "claude", "opencode", "gemini", "trae"
+    id: str  # e.g., "codex", "claude", "opencode", "gemini", "trae", "codebuddy"
     name: str  # Human-readable name, e.g., "Codex CLI"
     description: str = ""
     enabled: bool = True
@@ -55,9 +55,9 @@ def _normalize_explicit_cli_bin(value: str) -> str:
 @lru_cache(maxsize=32)
 def resolve_cli_executable_details(command: str) -> dict[str, Any]:
     """
-    Resolve CLI executable path with minimal service environment fallbacks.
+    Resolve CLI executable path with service manager-safe fallbacks.
 
-    Some service runners use a minimal PATH (/usr/bin:/bin:/usr/sbin:/sbin),
+    service manager often runs with a minimal PATH (/usr/bin:/bin:/usr/sbin:/sbin),
     so tools installed in /usr/local/bin or ~/.local/bin may be invisible.
     """
     cmd = str(command or "").strip()
@@ -210,6 +210,7 @@ class CLIAdapter(ABC):
         profile_label: str = "",
         model: str = "",
         reasoning_effort: str = "",
+        attachments: list[dict[str, Any]] | None = None,
     ) -> list[str]:
         """
         Build the command to resume a session with a new message.
@@ -221,6 +222,7 @@ class CLIAdapter(ABC):
             profile_label: Optional profile/configuration label.
             model: Optional model identifier (e.g., codex-spark).
             reasoning_effort: Optional reasoning effort (e.g., low|medium|high|extra_high).
+            attachments: Optional verified runtime attachments for adapters that support structured input.
 
         Returns:
             Command as a list of strings suitable for subprocess.
@@ -236,6 +238,7 @@ class CLIAdapter(ABC):
         model: str = "",
         reasoning_effort: str = "",
         sandbox_mode: str = "read-only",
+        permission_mode: str = "",
     ) -> list[str]:
         """
         Build the command to create a new session with a seed prompt.
@@ -246,6 +249,7 @@ class CLIAdapter(ABC):
             model: Optional model identifier used when creating the session.
             reasoning_effort: Optional reasoning effort.
             sandbox_mode: Optional sandbox mode for CLIs that support it.
+            permission_mode: Optional permission mode for runner-backed CLIs.
 
         Returns:
             Command as a list of strings suitable for subprocess.

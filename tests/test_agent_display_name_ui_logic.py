@@ -120,6 +120,8 @@ class AgentDisplayNameUiLogicTests(unittest.TestCase):
               "isSessionDerivedAgentDisplayName",
               "hasAgentDisplayContractFields",
               "readAgentDisplayContract",
+              "agentIdentityExplanationMeta",
+              "agentDisplayTooltip",
               "fallbackAgentIdentityName",
               "resolveAgentDisplayName",
             ]) {
@@ -163,6 +165,20 @@ class AgentDisplayNameUiLogicTests(unittest.TestCase):
             };
             assert.equal(conversationAgentName(legacy), "身份未解析");
             assert.equal(agentDisplayTitle(legacy, "-"), "身份未解析");
+            const identityMeta = agentIdentityExplanationMeta({
+              ...legacy,
+              agent_name_state: "identity_unresolved",
+              agent_display_issue: "missing_identity_source",
+            });
+            assert.equal(identityMeta.heading, "Agent 可读身份缺失或不可用");
+            assert.match(identityMeta.body, /发生什么/);
+            assert.deepEqual(identityMeta.missingItems, ["alias / purpose / Agent 可读身份"]);
+            assert.match(identityMeta.suggestions[0], /补 alias\/purpose/);
+            assert.match(agentDisplayTooltip({
+              ...legacy,
+              agent_name_state: "identity_unresolved",
+              agent_display_issue: "missing_identity_source",
+            }), /修复建议: 补 alias\/purpose/);
 
             const registryOnly = {
               sessionId: sid,
@@ -187,6 +203,13 @@ class AgentDisplayNameUiLogicTests(unittest.TestCase):
 
             const explicitWithChannel = buildExplicitConversationSessionStub("task_dashboard", "子级04-前端体验（task-overview 页面交互）", sid);
             assert.equal(conversationAgentName(explicitWithChannel), "身份解析中");
+
+            const taskJs = fs.readFileSync(path.join(repoRoot, "web/task.js"), "utf8");
+            assert.equal(taskJs.includes("agentDisplayTooltip(session, displayName)"), true);
+            const conversationJs = fs.readFileSync(path.join(repoRoot, "web/task_parts/60-conversation.js"), "utf8");
+            assert.equal(conversationJs.includes("agentIdentityExplanationMeta(currentSession)"), true);
+            const composerJs = fs.readFileSync(path.join(repoRoot, "web/task_parts/75-conversation-composer.js"), "utf8");
+            assert.equal(composerJs.includes("agentDisplayTooltip(it, \"协同对象\")"), true);
             """
         )
         proc = subprocess.run(

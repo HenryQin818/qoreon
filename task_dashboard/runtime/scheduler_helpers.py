@@ -36,6 +36,9 @@ from task_dashboard.helpers import (
     coerce_bool as _coerce_bool,
     coerce_int as _coerce_int,
 )
+from task_dashboard.claude_models import normalize_claude_model
+from task_dashboard.claude_permissions import normalize_claude_permission_mode
+from task_dashboard.codebuddy_permissions import normalize_codebuddy_permission_mode
 from task_dashboard.runtime.request_parsing import (
     _normalize_reasoning_effort_local as _normalize_reasoning_effort,
 )
@@ -3215,16 +3218,11 @@ def _build_project_scheduler_status(
         project_id,
     )
     pid = str(project_id or "").strip()
+    if not cfg.get("project_exists"):
+        return {}
+
     runtime_disk = _load_project_scheduler_runtime_snapshot(store, pid)
     runtime = runtime_flags if isinstance(runtime_flags, dict) else {}
-    if not cfg.get("project_exists"):
-        if not runtime and not runtime_disk:
-            return {}
-        cfg = {
-            "project_exists": True,
-            "scheduler": {"enabled": False, "errors": []},
-            "reminder": {"enabled": False, "errors": []},
-        }
     scheduler_cfg = cfg.get("scheduler") if isinstance(cfg.get("scheduler"), dict) else {}
     reminder_cfg = cfg.get("reminder") if isinstance(cfg.get("reminder"), dict) else {}
     auto_dispatch_cfg = _call_server_override(
@@ -3265,19 +3263,9 @@ def _build_project_scheduler_status(
         "auto_dispatch_enabled": auto_dispatch_enabled,
         "auto_inspection_enabled": auto_inspection_enabled,
     }
-    auto_inspection_ready_raw = auto_inspection_cfg.get("ready")
-    auto_inspection_ready = (
-        bool(auto_inspection_ready_raw)
-        if isinstance(auto_inspection_ready_raw, bool)
-        else bool(
-            auto_inspection_enabled
-            and str(auto_inspection_cfg.get("channel_name") or "").strip()
-            and str(auto_inspection_cfg.get("session_id") or "").strip()
-        )
-    )
     auto_inspection_state = "disabled"
     if auto_inspection_enabled:
-        auto_inspection_state = "idle" if auto_inspection_ready else "invalid_config"
+        auto_inspection_state = "idle" if bool(auto_inspection_cfg.get("ready")) else "invalid_config"
     runtime_auto_inspection_state = str(
         runtime.get("auto_inspection_state") or runtime_disk.get("auto_inspection_state") or ""
     ).strip()
@@ -3328,7 +3316,7 @@ def _build_project_scheduler_status(
         status["auto_inspection_interval_minutes"] = int(auto_inspection_cfg.get("interval_minutes") or 0)
     if auto_inspection_cfg.get("prompt_template"):
         status["auto_inspection_prompt_template"] = str(auto_inspection_cfg.get("prompt_template") or "")
-    status["auto_inspection_ready"] = auto_inspection_ready
+    status["auto_inspection_ready"] = bool(auto_inspection_cfg.get("ready"))
     for k in (
         "auto_inspection_last_tick_at",
         "auto_inspection_last_run_id",
@@ -3720,6 +3708,9 @@ def _normalize_agent_ref(value: Any, *, include_channel: bool) -> Optional[dict[
     alias = _safe_text(value.get("alias"), 200).strip()
     if alias:
         out["alias"] = alias
+    role = _safe_text(value.get("role"), 80).strip()
+    if role:
+        out["role"] = role
     return out or None
 
 
@@ -3854,6 +3845,168 @@ def _compact_route_resolution_v1(route_resolution: Any) -> dict[str, Any]:
     return out
 
 
+def _sanitize_delivery_summary(value: Any) -> Optional[dict[str, Any]]:
+    if not isinstance(value, dict):
+        return None
+    state = _safe_text(value.get("delivery_state") if "delivery_state" in value else value.get("deliveryState"), 40).strip().lower()
+    if state not in {"pending", "delivered", "failed", "unknown"}:
+        state = "unknown"
+    out: dict[str, Any] = {
+        "version": _safe_text(value.get("version"), 20).strip() or "v1",
+        "delivery_state": state,
+        "delivery_verified": _coerce_bool(value.get("delivery_verified") if "delivery_verified" in value else value.get("deliveryVerified"), False),
+    }
+    for src_key, out_key, max_len in (
+        ("delivery_checked_at", "delivery_checked_at", 80),
+        ("deliveryCheckedAt", "delivery_checked_at", 80),
+        ("source_run_id", "source_run_id", 80),
+        ("sourceRunId", "source_run_id", 80),
+        ("dispatch_run_id", "dispatch_run_id", 120),
+        ("dispatchRunId", "dispatch_run_id", 120),
+        ("target_channel", "target_channel", 200),
+        ("targetChannel", "target_channel", 200),
+        ("target_session_id", "target_session_id", 80),
+        ("targetSessionId", "target_session_id", 80),
+        ("route_warning", "route_warning", 80),
+        ("routeWarning", "route_warning", 80),
+    ):
+        if out_key in out and out[out_key]:
+            continue
+        text = _safe_text(value.get(src_key), max_len).strip()
+        if text:
+            out[out_key] = text
+    return out
+
+
+def _sanitize_receipt_summary_v2(value: Any) -> Optional[dict[str, Any]]:
+    if not isinstance(value, dict):
+        return None
+    receipt_state = _safe_text(value.get("receipt_state") if "receipt_state" in value else value.get("receiptState"), 40).strip().lower()
+    if receipt_state not in {"not_required", "pending", "received", "missing", "failed", "unknown"}:
+        receipt_state = "unknown"
+    route_state = _safe_text(value.get("receipt_route_state") if "receipt_route_state" in value else value.get("receiptRouteState"), 60).strip().lower()
+    if route_state not in {
+        "not_required",
+        "pending",
+        "expected_callback_route",
+        "route_mismatch",
+        "missing_callback_to",
+        "self_suppressed",
+        "merged_anchor",
+        "callback_failed",
+        "unknown",
+    }:
+        route_state = "unknown"
+    out: dict[str, Any] = {
+        "version": _safe_text(value.get("version"), 20).strip() or "v1",
+        "receipt_required": _coerce_bool(value.get("receipt_required") if "receipt_required" in value else value.get("receiptRequired"), False),
+        "receipt_state": receipt_state,
+        "receipt_received": _coerce_bool(value.get("receipt_received") if "receipt_received" in value else value.get("receiptReceived"), False),
+        "receipt_route_state": route_state,
+        "receipt_summary_empty": _coerce_bool(value.get("receipt_summary_empty") if "receipt_summary_empty" in value else value.get("receiptSummaryEmpty"), False),
+    }
+    for src_key, out_key, max_len in (
+        ("source_run_id", "source_run_id", 80),
+        ("sourceRunId", "source_run_id", 80),
+        ("receipt_callback_run_id", "receipt_callback_run_id", 120),
+        ("receiptCallbackRunId", "receipt_callback_run_id", 120),
+        ("receipt_missing_reason", "receipt_missing_reason", 120),
+        ("receiptMissingReason", "receipt_missing_reason", 120),
+        ("updated_at", "updated_at", 80),
+        ("updatedAt", "updated_at", 80),
+        ("failure_class", "failure_class", 80),
+        ("failureClass", "failure_class", 80),
+        ("side_effect_risk", "side_effect_risk", 80),
+        ("sideEffectRisk", "side_effect_risk", 80),
+        ("recovery_mode", "recovery_mode", 80),
+        ("recoveryMode", "recovery_mode", 80),
+    ):
+        if out_key in out and out[out_key]:
+            continue
+        text = _safe_text(value.get(src_key), max_len).strip()
+        if text:
+            out[out_key] = text
+    provider_error = value.get("provider_error") if "provider_error" in value else value.get("providerError")
+    if isinstance(provider_error, dict):
+        pe: dict[str, Any] = {}
+        kind = _safe_text(provider_error.get("kind"), 80).strip()
+        if kind:
+            pe["kind"] = kind
+        if "retryable" in provider_error:
+            pe["retryable"] = _coerce_bool(provider_error.get("retryable"), False)
+        patterns = provider_error.get("matched_patterns") if "matched_patterns" in provider_error else provider_error.get("matchedPatterns")
+        if isinstance(patterns, list):
+            vals: list[str] = []
+            for x in patterns:
+                text = _safe_text(x, 120).strip()
+                if text:
+                    vals.append(text)
+            if vals:
+                pe["matched_patterns"] = vals[:20]
+        if pe:
+            out["provider_error"] = pe
+    else:
+        provider_error_text = _safe_text(provider_error, 240).strip()
+        if provider_error_text:
+            out["provider_error"] = provider_error_text
+    for src_key, out_key in (
+        ("recovery_required", "recovery_required"),
+        ("recoveryRequired", "recovery_required"),
+        ("retry_exhausted", "retry_exhausted"),
+        ("retryExhausted", "retry_exhausted"),
+    ):
+        if out_key in out:
+            continue
+        if src_key in value:
+            out[out_key] = _coerce_bool(value.get(src_key), False)
+    return out
+
+
+def _sanitize_callback_route_summary(value: Any) -> Optional[dict[str, Any]]:
+    if not isinstance(value, dict):
+        return None
+    route_state = _safe_text(value.get("receipt_route_state") if "receipt_route_state" in value else value.get("receiptRouteState"), 60).strip().lower()
+    if route_state not in {
+        "not_required",
+        "pending",
+        "expected_callback_route",
+        "route_mismatch",
+        "missing_callback_to",
+        "self_suppressed",
+        "merged_anchor",
+        "callback_failed",
+        "unknown",
+    }:
+        route_state = "unknown"
+    out: dict[str, Any] = {
+        "version": _safe_text(value.get("version"), 20).strip() or "v1",
+        "receipt_route_state": route_state,
+        "route_mismatch": _coerce_bool(value.get("route_mismatch") if "route_mismatch" in value else value.get("routeMismatch"), False),
+    }
+    for src_key, out_key, max_len in (
+        ("source_run_id", "source_run_id", 80),
+        ("sourceRunId", "source_run_id", 80),
+        ("expected_session_id", "expected_session_id", 80),
+        ("expectedSessionId", "expected_session_id", 80),
+        ("actual_session_id", "actual_session_id", 80),
+        ("actualSessionId", "actual_session_id", 80),
+        ("target_channel", "target_channel", 200),
+        ("targetChannel", "target_channel", 200),
+        ("updated_at", "updated_at", 80),
+        ("updatedAt", "updated_at", 80),
+    ):
+        if out_key in out and out[out_key]:
+            continue
+        text = _safe_text(value.get(src_key), max_len).strip()
+        if text:
+            out[out_key] = text
+    route_resolution = value.get("route_resolution") if "route_resolution" in value else value.get("routeResolution")
+    rr = _compact_route_resolution_v1(route_resolution)
+    if rr:
+        out["route_resolution"] = rr
+    return out
+
+
 def _sanitize_communication_view(value: Any) -> Optional[dict[str, Any]]:
     if not isinstance(value, dict):
         return None
@@ -3937,6 +4090,21 @@ def _sanitize_communication_view(value: Any) -> Optional[dict[str, Any]]:
     cv_route_resolution = _compact_route_resolution_v1(communication_view.get("route_resolution") if "route_resolution" in communication_view else communication_view.get("routeResolution"))
     if cv_route_resolution:
         cv["route_resolution"] = cv_route_resolution
+    delivery_summary = _sanitize_delivery_summary(
+        communication_view.get("delivery_summary") if "delivery_summary" in communication_view else communication_view.get("deliverySummary")
+    )
+    if delivery_summary:
+        cv["delivery_summary"] = delivery_summary
+    receipt_summary_v2 = _sanitize_receipt_summary_v2(
+        communication_view.get("receipt_summary_v2") if "receipt_summary_v2" in communication_view else communication_view.get("receiptSummaryV2")
+    )
+    if receipt_summary_v2:
+        cv["receipt_summary_v2"] = receipt_summary_v2
+    callback_route_summary = _sanitize_callback_route_summary(
+        communication_view.get("callback_route_summary") if "callback_route_summary" in communication_view else communication_view.get("callbackRouteSummary")
+    )
+    if callback_route_summary:
+        cv["callback_route_summary"] = callback_route_summary
     cv_version = _safe_text(communication_view.get("version"), 20).strip()
     if cv_version:
         cv["version"] = cv_version
@@ -4184,9 +4352,59 @@ def _extract_run_extra_fields(payload: dict[str, Any]) -> dict[str, Any]:
         else:
             out["blocking_status"] = blocking_status
 
-    model = _safe_text(obj.get("model"), 120).strip()
+    raw_cli_type = _safe_text(
+        _pick_payload_value(obj, extra_obj, "cli_type", "cliType"),
+        40,
+    ).strip().lower()
+    model = _safe_text(_pick_payload_value(obj, extra_obj, "model"), 120).strip()
     if model:
-        out["model"] = model
+        out["model"] = normalize_claude_model(model) if raw_cli_type == "claude" else model
+    if (
+        (
+            raw_cli_type != "claude"
+            and ("codebuddy_permission_mode" in obj or "codebuddyPermissionMode" in obj)
+        )
+        or (raw_cli_type != "claude" and ("permission_mode" in obj or "permissionMode" in obj))
+        or (
+            raw_cli_type != "claude"
+            and ("codebuddy_permission_mode" in extra_obj or "codebuddyPermissionMode" in extra_obj)
+        )
+        or (raw_cli_type != "claude" and ("permission_mode" in extra_obj or "permissionMode" in extra_obj))
+    ):
+        raw_permission_mode = None
+        codebuddy_keys = ["codebuddy_permission_mode", "codebuddyPermissionMode"]
+        if raw_cli_type != "claude":
+            codebuddy_keys.extend(["permission_mode", "permissionMode"])
+        for key in codebuddy_keys:
+            if key in obj:
+                raw_permission_mode = obj.get(key)
+                break
+        if raw_permission_mode in (None, ""):
+            for key in codebuddy_keys:
+                if key in extra_obj:
+                    raw_permission_mode = extra_obj.get(key)
+                    break
+        out["codebuddy_permission_mode"] = normalize_codebuddy_permission_mode(raw_permission_mode)
+
+    if (
+        "claude_permission_mode" in obj
+        or "claudePermissionMode" in obj
+        or (raw_cli_type == "claude" and ("permission_mode" in obj or "permissionMode" in obj))
+        or "claude_permission_mode" in extra_obj
+        or "claudePermissionMode" in extra_obj
+        or (raw_cli_type == "claude" and ("permission_mode" in extra_obj or "permissionMode" in extra_obj))
+    ):
+        raw_claude_permission_mode = None
+        for key in ("claude_permission_mode", "claudePermissionMode", "permission_mode", "permissionMode"):
+            if key in obj:
+                raw_claude_permission_mode = obj.get(key)
+                break
+        if raw_claude_permission_mode in (None, ""):
+            for key in ("claude_permission_mode", "claudePermissionMode", "permission_mode", "permissionMode"):
+                if key in extra_obj:
+                    raw_claude_permission_mode = extra_obj.get(key)
+                    break
+        out["claude_permission_mode"] = normalize_claude_permission_mode(raw_claude_permission_mode)
 
     message_kind = _safe_text(
         _pick_payload_value(obj, extra_obj, "message_kind", "messageKind"),
@@ -4201,6 +4419,13 @@ def _extract_run_extra_fields(payload: dict[str, Any]) -> dict[str, Any]:
     ).strip().lower()
     if interaction_mode in {"dialog_now", "task_with_receipt", "notify_only"}:
         out["interaction_mode"] = interaction_mode
+
+    client_message_id = _safe_text(
+        _pick_payload_value(obj, extra_obj, "client_message_id", "clientMessageId"),
+        160,
+    ).strip()
+    if client_message_id:
+        out["client_message_id"] = client_message_id
 
     receipt_summary = _sanitize_receipt_summary(
         _pick_payload_value(obj, extra_obj, "receipt_summary", "receiptSummary")
@@ -4326,9 +4551,51 @@ def _sanitize_run_extra_meta(extra_meta: Any) -> dict[str, Any]:
     if blocking_status:
         out["blocking_status"] = blocking_status
 
+    raw_cli_type = _safe_text(src.get("cli_type") if "cli_type" in src else src.get("cliType"), 40).strip().lower()
     model = _safe_text(src.get("model"), 120).strip()
     if model:
-        out["model"] = model
+        out["model"] = normalize_claude_model(model) if raw_cli_type == "claude" else model
+    if (
+        (
+            raw_cli_type != "claude"
+            and ("codebuddy_permission_mode" in src or "codebuddyPermissionMode" in src)
+        )
+        or (raw_cli_type != "claude" and ("permission_mode" in src or "permissionMode" in src))
+    ):
+        raw_permission_mode = (
+            src.get("codebuddy_permission_mode")
+            if "codebuddy_permission_mode" in src
+            else (
+                src.get("codebuddyPermissionMode")
+                if "codebuddyPermissionMode" in src
+                else (
+                    src.get("permission_mode")
+                    if raw_cli_type != "claude" and "permission_mode" in src
+                    else (src.get("permissionMode") if raw_cli_type != "claude" else None)
+                )
+            )
+        )
+        out["codebuddy_permission_mode"] = normalize_codebuddy_permission_mode(raw_permission_mode)
+
+    if (
+        "claude_permission_mode" in src
+        or "claudePermissionMode" in src
+        or (raw_cli_type == "claude" and ("permission_mode" in src or "permissionMode" in src))
+    ):
+        raw_claude_permission_mode = (
+            src.get("claude_permission_mode")
+            if "claude_permission_mode" in src
+            else (
+                src.get("claudePermissionMode")
+                if "claudePermissionMode" in src
+                else (
+                    src.get("permission_mode")
+                    if raw_cli_type == "claude" and "permission_mode" in src
+                    else (src.get("permissionMode") if raw_cli_type == "claude" else None)
+                )
+            )
+        )
+        out["claude_permission_mode"] = normalize_claude_permission_mode(raw_claude_permission_mode)
 
     message_kind = _safe_text(
         src.get("message_kind") if "message_kind" in src else src.get("messageKind"),
@@ -4343,6 +4610,13 @@ def _sanitize_run_extra_meta(extra_meta: Any) -> dict[str, Any]:
     ).strip().lower()
     if interaction_mode in {"dialog_now", "task_with_receipt", "notify_only"}:
         out["interaction_mode"] = interaction_mode
+
+    client_message_id = _safe_text(
+        src.get("client_message_id") if "client_message_id" in src else src.get("clientMessageId"),
+        160,
+    ).strip()
+    if client_message_id:
+        out["client_message_id"] = client_message_id
 
     visible_in_channel_chat = (
         src.get("visible_in_channel_chat")
@@ -4597,7 +4871,7 @@ def _apply_plan_first_to_message(message: Any, run_extra_meta: Any) -> tuple[str
                 f"{raw_message}\n\n"
                 f"{_TASK_WITH_RECEIPT_GUARD_MARKER}\n"
                 "- 本轮结论只允许基于当前回执任务与当前消息主线；历史错线 run 只能排除，不能当成本主线结果。\n"
-                "- 禁止轮询当前执行 run 自己的 runtime log files 来判断“是否已完成”。\n"
+                "- 禁止轮询当前执行 run 自己的 `运行历史记录/*.json/.last.txt/.log.txt` 来判断“是否已完成”。\n"
                 "- 若当前 run 仍在执行，禁止把“本 run 仍在 running / 等待本 run 完成 / 等待当前 run 落盘”写成最终回执。\n"
                 "- 若证据不足，请直接回单一阻塞，不要用自引用中间态补位。"
             )

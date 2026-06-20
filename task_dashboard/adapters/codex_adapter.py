@@ -216,6 +216,7 @@ class CodexAdapter(CLIAdapter):
         profile_label: str = "",
         model: str = "",
         reasoning_effort: str = "",
+        attachments: list[dict[str, Any]] | None = None,
     ) -> list[str]:
         """
         Build command to resume a Codex session.
@@ -232,6 +233,32 @@ class CodexAdapter(CLIAdapter):
         effort = cls._normalize_cli_reasoning_effort(reasoning_effort)
         if effort:
             cmd.extend(["-c", f'model_reasoning_effort="{effort}"'])
+        resume_image_args: list[str] = []
+        for attachment in attachments if isinstance(attachments, list) else []:
+            if not isinstance(attachment, dict):
+                continue
+            kind = str(attachment.get("kind") or attachment.get("attachment_kind") or "").strip().lower()
+            content_type = str(
+                attachment.get("content_type")
+                or attachment.get("contentType")
+                or attachment.get("mimeType")
+                or attachment.get("mime_type")
+                or ""
+            ).strip().lower()
+            if kind and kind != "image":
+                continue
+            if content_type and not content_type.startswith("image/"):
+                continue
+            image_path = str(
+                attachment.get("resolved_local_path")
+                or attachment.get("local_path")
+                or attachment.get("path")
+                or attachment.get("file_path")
+                or ""
+            ).strip()
+            if not image_path:
+                continue
+            resume_image_args.extend(["-i", image_path])
         cmd.extend(
             [
                 "--skip-git-repo-check",
@@ -239,7 +266,9 @@ class CodexAdapter(CLIAdapter):
                 "-o",
                 str(output_path),
                 "resume",
+                *resume_image_args,
                 session_id,
+                "--",
                 message,
             ]
         )

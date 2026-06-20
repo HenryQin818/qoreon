@@ -1,0 +1,44 @@
+    /* 通道标题行：操作按钮悬浮覆盖，不再常驻挤占通道名称宽度。 */
+    .conv-channel-group-head {
+      overflow: visible;
+      gap: 8px;
+    }
+    .conv-channel-group-side {
+      position: relative;
+      gap: 0;
+      margin-left: 8px;
+      flex: 0 0 auto;
+      min-width: max-content;
+      overflow: visible;
+    }
+    .conv-channel-group-actions {
+      position: absolute;
+      top: 50%;
+      right: calc(100% + 8px);
+      z-index: 6;
+      gap: 8px;
+      max-width: min(260px, calc(100vw - 180px));
+      padding: 3px 8px 3px 24px;
+      border-radius: 999px;
+      background: linear-gradient(90deg, rgba(246,247,249,0), rgba(246,247,249,0.96) 22px, rgba(246,247,249,0.98));
+      box-shadow: -8px 0 14px rgba(246,247,249,0.72);
+      transform: translate(6px, -50%);
+    }
+    .conv-channel-group-head:hover .conv-channel-group-actions,
+    .conv-channel-group-head:focus-within .conv-channel-group-actions,
+    .conv-channel-group.menu-open .conv-channel-group-actions {
+      opacity: 1;
+      pointer-events: auto;
+      transform: translate(0, -50%);
+    }
+    .conv-channel-group-count {
+      position: relative;
+      z-index: 7;
+    }
+
+    @media (hover: none), (pointer: coarse) {
+      .conv-channel-group-actions {
+        opacity: 1;
+        pointer-events: auto;
+      }
+    }

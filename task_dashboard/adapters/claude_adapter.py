@@ -12,12 +12,15 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import time
 from pathlib import Path
 from typing import Any, Optional
 
-from .base import CLIAdapter, CLIInfo, SessionInfo, resolve_cli_executable
+from .base import CLIAdapter, CLIInfo, SessionInfo
 from . import register_adapter
+from .claude_runner import normalize_permission_mode
+from task_dashboard.claude_models import normalize_claude_model
 
 
 @register_adapter
@@ -121,6 +124,50 @@ class ClaudeAdapter(CLIAdapter):
         return ""
 
     @classmethod
+    def resolve_session_cwd(cls, session_id: str) -> str:
+        """
+        Return the cwd where a Claude session was created.
+
+        Claude stores sessions under ~/.claude/projects/<cwd-scope>/<id>.jsonl
+        and resolves `claude --resume` within the current cwd scope. CCB can
+        resume from a different project cwd, so we locate the session file
+        globally and read the cwd recorded in its JSONL metadata.
+        """
+        sid = str(session_id or "").strip()
+        if not sid:
+            return ""
+        projects_root = cls.get_home_path() / "projects"
+        if not projects_root.exists():
+            return ""
+        try:
+            matches = sorted(
+                projects_root.glob(f"*/{sid}.jsonl"),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+        except Exception:
+            return ""
+        for path in matches:
+            try:
+                with path.open("r", encoding="utf-8", errors="ignore") as f:
+                    for _ in range(20):
+                        line = f.readline()
+                        if not line:
+                            break
+                        if '"cwd"' not in line:
+                            continue
+                        obj = json.loads(line.strip())
+                        cwd = str(obj.get("cwd") or "").strip()
+                        if not cwd:
+                            continue
+                        candidate = Path(cwd).expanduser()
+                        if candidate.exists() and candidate.is_dir():
+                            return str(candidate)
+            except Exception:
+                continue
+        return ""
+
+    @classmethod
     def build_resume_command(
         cls,
         session_id: str,
@@ -129,23 +176,38 @@ class ClaudeAdapter(CLIAdapter):
         profile_label: str = "",
         model: str = "",
         reasoning_effort: str = "",
+        permission_mode: str = "",
     ) -> list[str]:
         """
         Build command to resume a Claude session.
 
-        Command: claude --resume <session_id> --print "<message>"
-        The --print flag outputs to stdout which we can capture.
+        CCB executes a thin runner so Claude stream-json can be normalized into
+        process events while the public final result is written to output_path.
         """
+        _ = profile_label, reasoning_effort
         cmd = [
-            resolve_cli_executable("claude"),
-            "--dangerously-skip-permissions",
-            "--resume",
-            session_id,
-            "--print",
-            message,
+            sys.executable or "python3",
+            "-m",
+            "task_dashboard.adapters.claude_runner",
+            "--message",
+            str(message or "Please reply with: OK"),
+            "--output-path",
+            str(output_path),
         ]
-        # Note: Claude Code may not support profile labels the same way.
-        # The profile_label parameter is ignored for now but kept for interface consistency.
+        cmd.extend(["--model", normalize_claude_model(model)])
+        permission_mode_text = str(permission_mode or "").strip()
+        if permission_mode_text:
+            cmd.extend(["--permission-mode", normalize_permission_mode(permission_mode_text)])
+        cmd.extend(
+            [
+                "resume",
+                # Keep --resume in the wrapper command so execution_command can
+                # still relocate the subprocess cwd to the original Claude
+                # session directory before the runner starts.
+                "--resume",
+                str(session_id or "").strip(),
+            ]
+        )
         return cmd
 
     @classmethod
@@ -156,41 +218,52 @@ class ClaudeAdapter(CLIAdapter):
         model: str = "",
         reasoning_effort: str = "",
         sandbox_mode: str = "read-only",
+        permission_mode: str = "",
     ) -> list[str]:
         """
-        Build command to create a new Claude session.
-
-        Command: claude --print "<seed_prompt>"
-        This creates a new session and outputs the response.
+        Build command to create a new Claude session through the CCB runner.
         """
-        _ = sandbox_mode
-        return [
-            resolve_cli_executable("claude"),
-            "--dangerously-skip-permissions",
-            "--print",
+        _ = reasoning_effort, sandbox_mode
+        cmd = [
+            sys.executable or "python3",
+            "-m",
+            "task_dashboard.adapters.claude_runner",
+            "--message",
             str(seed_prompt or "Please reply with: OK"),
+            "--output-path",
+            str(output_path),
         ]
+        cmd.extend(["--model", normalize_claude_model(model)])
+        permission_mode_text = str(permission_mode or "").strip()
+        if permission_mode_text:
+            cmd.extend(["--permission-mode", normalize_permission_mode(permission_mode_text)])
+        cmd.append("create")
+        return cmd
 
     @classmethod
     def parse_output_line(cls, line: str) -> Optional[dict[str, Any]]:
         """
-        Parse a line of Claude output.
+        Parse a line of Claude runner output.
 
-        Claude Code default stdout is user-facing正文，不应逐行落入过程轨。
-        这里只保留结构化输出；普通文本由最终 last message 展示。
+        Runner stdout emits only CCB process event JSONL plus the final public
+        text line. Raw Claude stream-json/system/user records are ignored here.
         """
         stripped = str(line or "").strip()
-        if not stripped:
+        if not stripped or not stripped.startswith("{"):
             return None
-
-        # Try to parse as JSON for structured output
-        if stripped.startswith("{"):
-            try:
-                obj = json.loads(stripped)
-                return obj if isinstance(obj, dict) else None
-            except json.JSONDecodeError:
-                pass
-
+        try:
+            obj = json.loads(stripped)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(obj, dict):
+            return None
+        event_type = str(obj.get("type") or "").strip()
+        if event_type in {"tool_call.started", "tool_call.completed", "runtime_event.completed"}:
+            return obj
+        if event_type == "result":
+            text = str(obj.get("result") or "").strip()
+            if text:
+                return {"type": "message", "content": text}
         return None
 
     @classmethod
@@ -198,9 +271,14 @@ class ClaudeAdapter(CLIAdapter):
         """
         Get process signature for pgrep.
 
-        Claude processes can be found by looking for "claude" with the session_id.
+        CCB now launches Claude through the adapter runner.
         """
-        return "claude"
+        _ = session_id
+        return "task_dashboard.adapters.claude_runner"
+
+    @classmethod
+    def supports_model(cls) -> bool:
+        return True
 
     @classmethod
     def find_new_session_id(cls, start_ts: float) -> tuple[str, str]:

@@ -129,6 +129,13 @@
               </div>
               <span class="system-settings-badge">监控</span>
             </button>
+            <button class="system-settings-item" id="runstoreHealthBtn" type="button" title="打开 运行记录治理">
+              <div class="system-settings-item-main">
+                <span class="system-settings-item-title">运行记录治理</span>
+                <span class="system-settings-item-desc">hot 健康、风险提示、受控归档</span>
+              </div>
+              <span class="system-settings-badge">RunStore</span>
+            </button>
             <button class="system-settings-item project-root-reveal-btn" id="projectRootRevealBtn" type="button" title="打开项目文件夹">
               <div class="system-settings-item-main">
                 <span class="system-settings-item-title">打开项目文件夹</span>
@@ -384,6 +391,34 @@
             <div class="convcomposer">
               <div class="convsenderrow" id="convSenderRow">
                 <div class="convsendermeta">
+                  <label class="conv-model-switch" id="convCodeBuddyModelControl" hidden>
+                    <span class="conv-model-switch-label">模型</span>
+                    <select class="conv-model-switch-select" id="convCodeBuddyModelSelect" aria-label="CodeBuddy 模型"></select>
+                    <span class="conv-model-switch-status" id="convCodeBuddyModelStatus"></span>
+                  </label>
+                  <label class="conv-model-switch conv-permission-switch" id="convCodeBuddyPermissionControl" hidden>
+                    <span class="conv-model-switch-label">授权</span>
+                    <select class="conv-model-switch-select conv-permission-switch-select" id="convCodeBuddyPermissionSelect" aria-label="CodeBuddy 授权模式">
+                      <option value="default">默认授权</option>
+                      <option value="bypassPermissions">全部授权</option>
+                    </select>
+                    <span class="conv-model-switch-status" id="convCodeBuddyPermissionStatus"></span>
+                  </label>
+                  <label class="conv-model-switch" id="convClaudeModelControl" hidden>
+                    <span class="conv-model-switch-label">模型</span>
+                    <select class="conv-model-switch-select" id="convClaudeModelSelect" aria-label="ClaudeCode 模型"></select>
+                    <span class="conv-model-switch-status" id="convClaudeModelStatus"></span>
+                  </label>
+                  <label class="conv-model-switch conv-permission-switch" id="convClaudePermissionControl" hidden>
+                    <span class="conv-model-switch-label">授权</span>
+                    <select class="conv-model-switch-select conv-permission-switch-select" id="convClaudePermissionSelect" aria-label="ClaudeCode 授权模式">
+                      <option value="bypassPermissions">最大授权</option>
+                      <option value="default">默认授权</option>
+                      <option value="acceptEdits">自动接受编辑</option>
+                      <option value="plan">计划模式</option>
+                    </select>
+                    <span class="conv-model-switch-status" id="convClaudePermissionStatus"></span>
+                  </label>
                   <div class="convsenderhint" id="convSenderHint"></div>
                   <div class="convhint" id="convHint">在该会话下继续发送消息，系统会按 5 秒频率自动刷新处理状态。</div>
                 </div>
@@ -528,6 +563,9 @@
               <option value="codex">Codex CLI</option>
               <option value="claude">Claude Code</option>
               <option value="opencode">OpenCode</option>
+              <option value="gemini">Gemini CLI</option>
+              <option value="trae">Trae Agent CLI</option>
+              <option value="codebuddy">CodeBuddy Code</option>
             </select>
           </div>
           <div style="display:grid; gap:6px;">
@@ -566,6 +604,7 @@
           <div class="newconv-field">
             <label for="newConvChannel">通道</label>
             <select class="input" id="newConvChannel" style="cursor:pointer;"></select>
+            <div class="newconv-inherit-summary" id="newConvChannelTypeSummary">选择通道后显示继承自通道类型的标准角色、AGENTS.md 与 workdir 策略。</div>
           </div>
           <div class="newconv-field">
             <label for="newConvCliType">CLI 类型</label>
@@ -574,7 +613,11 @@
               <option value="claude">Claude Code</option>
               <option value="opencode">OpenCode</option>
               <option value="gemini">Gemini CLI</option>
+              <option value="trae">Trae Agent CLI</option>
+              <option value="codebuddy">CodeBuddy Code</option>
             </select>
+            <div class="hint" id="newConvCliHint" style="margin-top:0;">留空模型时使用所选 CLI 的默认模型。</div>
+            <div class="newconv-static-instruction-hint" id="newConvStaticInstructionHint" hidden></div>
           </div>
           <div class="newconv-field">
             <label for="newConvAlias">对话agent名称（alias，可选）</label>
@@ -604,7 +647,36 @@
             <div class="newconv-advanced-body" id="newConvAdvancedBody" hidden>
               <div class="newconv-field">
                 <label for="newConvModel">模型（可选）</label>
-                <input class="input" id="newConvModel" placeholder="留空使用该 CLI 默认模型" />
+                <input class="input" id="newConvModel" list="newConvModelSuggestions" placeholder="留空使用该 CLI 默认模型" />
+                <select class="input" id="newConvCodeBuddyModel" style="cursor:pointer;" hidden aria-label="CodeBuddy 模型"></select>
+                <datalist id="newConvModelSuggestions">
+                  <option value="codex-spark"></option>
+                  <option value="claude-opus-4-8"></option>
+                  <option value="claude-sonnet-4-6"></option>
+                  <option value="claude-haiku-4-5"></option>
+                  <option value="claude-fable-5"></option>
+                  <option value="default"></option>
+                  <option value="sonnet"></option>
+                  <option value="opus"></option>
+                  <option value="haiku"></option>
+                  <option value="best"></option>
+                  <option value="opusplan"></option>
+                  <option value="gemini-2.0-flash"></option>
+                  <option value="gpt-4.1"></option>
+                  <option value="deepseek-v4-pro"></option>
+                  <option value="deepseek-v4-flash"></option>
+                  <option value="deepseek-v3-2-volc"></option>
+                  <option value="glm-5.1"></option>
+                  <option value="glm-5.0"></option>
+                  <option value="glm-5.0-turbo"></option>
+                  <option value="glm-5v-turbo"></option>
+                  <option value="glm-4.7"></option>
+                  <option value="minimax-m3"></option>
+                  <option value="minimax-m2.7"></option>
+                  <option value="kimi-k2.6"></option>
+                  <option value="kimi-k2.5"></option>
+                  <option value="hy3-preview"></option>
+                </datalist>
               </div>
               <div class="newconv-field">
                 <label for="newConvPurpose">用途说明（可选）</label>
@@ -642,9 +714,9 @@
             <div class="hint" style="margin-top:0;">输入已有会话 ID，系统会直接绑定到当前项目通道。</div>
           </div>
           <div class="newconv-field" id="newConvInitRow" style="display:grid;">
-            <label for="newConvInitMessage">创建后自动发送消息（可编辑）</label>
-            <textarea class="input nctextarea" id="newConvInitMessage" placeholder="请输入创建后需要自动发送的首条消息"></textarea>
-            <div class="hint" style="margin-top:0;">仅在“新建对话”模式生效；“添加已有对话”模式不自动发送。</div>
+            <label for="newConvInitMessage">可选一次性启动消息（默认不发送）</label>
+            <textarea class="input nctextarea" id="newConvInitMessage" placeholder="通常无需填写；Agent 会读取通道目录 AGENTS.md"></textarea>
+            <div class="hint" style="margin-top:0;">仅人工填写时发送；留空创建时不会发送初始化/培训消息。“添加已有对话”模式不发送。</div>
           </div>
           <div class="berr" id="newConvErr" style="display:none;"></div>
         </div>
@@ -744,12 +816,21 @@
           </div>
           <div class="ncgrid ncgrid-2">
             <div class="ncfield">
-              <label for="newChannelKind">通道类型（推荐） <span style="color:var(--bad);">*</span></label>
+              <label for="newChannelKind">通道类型（2字） <span style="color:var(--bad);">*</span></label>
               <select class="input" id="newChannelKind" onchange="handleNewChannelFormFieldChange()">
-                <option value="业务">业务</option>
-                <option value="辅助">辅助</option>
-                <option value="主体">主体</option>
-                <option value="__custom__">其他（自定义）</option>
+                <option value="总控">总控</option>
+                <option value="助理">助理</option>
+                <option value="产品" selected>产品</option>
+                <option value="镜像">镜像</option>
+                <option value="前端">前端</option>
+                <option value="后端">后端</option>
+                <option value="测试">测试</option>
+                <option value="服务">服务</option>
+                <option value="通讯">通讯</option>
+                <option value="任务">任务</option>
+                <option value="技能">技能</option>
+                <option value="资料">资料</option>
+                <option value="视觉">视觉</option>
               </select>
             </div>
             <div class="ncfield">
@@ -771,6 +852,45 @@
           </div>
         </section>
 
+        <section class="new-channel-section">
+          <div class="new-channel-section-head">
+            <div>
+              <div class="new-channel-section-title">AGENTS.md 初始规则</div>
+              <div class="new-channel-section-desc">保存在通道目录下，后续新建 Agent 默认进入该目录并自动读取；已运行会话不会自动刷新。</div>
+            </div>
+          </div>
+          <div class="ncgrid ncgrid-2">
+            <input id="newChannelAgentRole" type="hidden" value="planner" />
+            <label class="ncfield new-channel-agents-toggle">
+              <span>创建 AGENTS.md</span>
+              <input id="newChannelCreateAgentsMd" type="checkbox" checked onchange="handleNewChannelFormFieldChange(event)" />
+            </label>
+          </div>
+          <div class="new-channel-type-card" aria-live="polite">
+            <div class="new-channel-type-card-title">继承自通道类型的标准配置</div>
+            <div class="new-channel-type-grid">
+              <div class="new-channel-type-kv">
+                <span class="k">标准角色</span>
+                <span class="v" id="newChannelTypeRole">-</span>
+              </div>
+              <div class="new-channel-type-kv">
+                <span class="k">推荐 skills</span>
+                <span class="v" id="newChannelTypeSkills">-</span>
+              </div>
+              <div class="new-channel-type-kv">
+                <span class="k">workdir</span>
+                <span class="v" id="newChannelTypeWorkdir">-</span>
+              </div>
+              <div class="new-channel-type-kv">
+                <span class="k">禁区/停线</span>
+                <span class="v" id="newChannelTypeGuardrails">-</span>
+              </div>
+            </div>
+          </div>
+          <textarea class="input nctextarea new-channel-agents-md" id="newChannelAgentsMdContent" placeholder="这里是写入通道目录 AGENTS.md 的长期协作规则，可在创建前直接调整。" oninput="handleNewChannelFormFieldChange(event)"></textarea>
+          <div class="hint">这里不能写 token、PID、端口、run_id、临时会话或一次性授权；创建/保存会写入通道目录 AGENTS.md，但已写入不等于已生效，已运行会话不会自动刷新上下文，只影响后续进入该通道目录的 Agent。</div>
+        </section>
+
         <section class="new-channel-panel active" id="newChannelDirectPanel" data-new-channel-mode="direct">
           <div class="new-channel-section new-channel-summary">
             <div class="new-channel-summary-head">
@@ -783,11 +903,11 @@
             </div>
             <div class="new-channel-kv">
               <span class="k">创建内容</span>
-              <div class="v" id="newChannelPreviewDirectItems">空通道框架 / README / 沟通-收件箱 / 基础目录</div>
+              <div class="v" id="newChannelPreviewDirectItems">空通道框架 / README / AGENTS.md / 基础目录</div>
             </div>
             <div class="new-channel-kv">
               <span class="k">不会创建</span>
-              <div class="v" id="newChannelPreviewDirectSkip">主任务 / 主对话 / Agent</div>
+              <div class="v" id="newChannelPreviewDirectSkip">主任务 / 主对话 / Agent / 真实初始化消息</div>
             </div>
           </div>
         </section>
@@ -846,6 +966,70 @@
           <button class="btn" id="newChannelReloadBtn" style="display:none;" type="button">刷新页面</button>
           <button class="btn primary" id="newChannelCreateBtn" type="button">开始创建</button>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 通道管理：编辑 AGENTS.md -->
+  <div class="bmask" id="channelAgentsMdMask" role="dialog" aria-modal="true" aria-label="编辑 AGENTS.md">
+    <div class="bmodal channel-manage-modal channel-agents-md-modal" role="document">
+      <div class="bmodalh">
+        <div class="t">编辑 AGENTS.md</div>
+        <div class="s" id="channelAgentsMdSub">-</div>
+      </div>
+      <div class="bmodalb channel-manage-body">
+        <section class="channel-manage-section channel-manage-summary">
+          <div class="channel-manage-section-title">通道长期规则</div>
+          <div class="channel-manage-kv">
+            <span class="k">通道名</span>
+            <code class="v" id="channelAgentsMdName">-</code>
+          </div>
+          <div class="channel-manage-kv">
+            <span class="k">文件路径</span>
+            <code class="v" id="channelAgentsMdPath">读取中...</code>
+          </div>
+          <div class="channel-manage-kv">
+            <span class="k">规则真源</span>
+            <div class="v">AGENTS.md 是唯一可编辑真源；CLI 专属文件只作为受管镜像。</div>
+          </div>
+        </section>
+        <section class="channel-manage-section channel-static-instruction-section" id="channelAgentsMdStaticFiles">
+          <div class="channel-manage-section-head">
+            <div>
+              <div class="channel-manage-section-title">CLI 镜像文件</div>
+              <div class="channel-manage-section-desc">保存 AGENTS.md 后会展示本次同步结果；未返回同步字段时不显示“已同步”。</div>
+            </div>
+            <button class="btn channel-static-instruction-repair-btn" id="channelAgentsMdRepairBtn" type="button" hidden>按 AGENTS.md 修复镜像</button>
+          </div>
+          <div class="channel-static-instruction-body" id="channelAgentsMdStaticFilesBody">
+            <div class="hint">正在读取 CLI 镜像文件状态...</div>
+          </div>
+        </section>
+        <section class="channel-manage-section">
+          <div class="channel-manage-section-head">
+            <div>
+              <div class="channel-manage-section-title">规则内容</div>
+              <div class="channel-manage-section-desc">保存后写入该通道目录的 AGENTS.md；已写入不等于已生效，已运行会话不会自动刷新上下文。</div>
+            </div>
+            <div class="channel-agents-md-actions">
+              <select class="input channel-agents-md-role" id="channelAgentsMdRole">
+                <option value="planner">业务/规划</option>
+                <option value="coordinator">总控</option>
+                <option value="developer">执行/研发</option>
+                <option value="tester">检查/测试</option>
+                <option value="general">通用协作</option>
+              </select>
+              <button class="btn" id="channelAgentsMdApplyTemplateBtn" type="button">套用模板</button>
+            </div>
+          </div>
+          <textarea class="input nctextarea channel-agents-md-textarea" id="channelAgentsMdContent" placeholder="正在读取 AGENTS.md..."></textarea>
+          <div class="hint">只允许保存通道目录下的 AGENTS.md；保存前后端会自动生成备份。套用模板只更新编辑框内容，不会批量覆盖既有通道，也不会发送初始化消息。</div>
+        </section>
+        <div class="berr" id="channelAgentsMdErr" style="display:none;"></div>
+      </div>
+      <div class="bmodalf channel-manage-footer">
+        <button class="btn" id="channelAgentsMdCancelBtn" type="button">取消</button>
+        <button class="btn primary" id="channelAgentsMdSaveBtn" type="button">保存 AGENTS.md</button>
       </div>
     </div>
   </div>
@@ -967,7 +1151,7 @@
           </div>
         </section>
         <div class="channel-delete-warning">
-          会删除该通道目录及配套文件夹，并清理相关会话绑定；不会删除运行历史记录。
+          会删除该通道目录及配套文件夹，并清理相关会话绑定；不会删除 <code>运行历史记录</code> 历史回溯记录。
         </div>
         <div class="ncfield">
           <label for="channelDeleteConfirmInput">请输入完整通道名确认删除</label>

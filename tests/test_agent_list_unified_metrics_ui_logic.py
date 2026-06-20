@@ -117,10 +117,14 @@ class AgentListUnifiedMetricsUiLogicTests(unittest.TestCase):
               updated_at: "",
             };
             global.getSessionStatus = (session) => String((session && session.__status) || "idle");
-            global.getSessionHealthState = () => "";
+            global.getSessionHealthState = (session) => String((session && session.session_health_state) || "");
             global.getSessionLatestRunSummary = () => ({});
             global.getSessionLatestEffectiveRunSummary = () => ({});
-            global.normalizeRunOutcomeState = () => "";
+            global.normalizeRunOutcomeState = (value, fallback = "") => {
+              const text = String(value || "").trim().toLowerCase();
+              if (["success", "interrupted_infra", "interrupted_user", "failed_config", "failed_business", "provider_transient_failed", "recovered_notice"].includes(text)) return text;
+              return String(fallback || "").trim().toLowerCase();
+            };
             global.normalizeDisplayState = (value, fallback = "idle") => String(value || fallback || "idle");
             global.sessionHasTimeoutState = () => false;
             global.statusLabel = (value) => ({
@@ -213,12 +217,78 @@ class AgentListUnifiedMetricsUiLogicTests(unittest.TestCase):
             };
             assert.equal(conversationStatusMeta(activeSession).text, "处理中");
 
+            const providerTransientSession = {
+              ...session,
+              __status: "error",
+              session_health_state: "attention",
+              latest_run_summary: {
+                run_id: "run-provider",
+                status: "error",
+                preview: "临时失败预览",
+                failure_class: "provider_transient",
+                provider_error: {
+                  kind: "high_demand",
+                  retryable: true,
+                  matched_patterns: ["high demand", "temporary errors"],
+                },
+                error: "turn.failed: We're currently experiencing high demand, which may cause temporary errors.",
+              },
+              latest_effective_run_summary: {
+                run_id: "run-provider",
+                outcome_state: "provider_transient_failed",
+                preview: "临时失败预览",
+              },
+            };
+            const providerMeta = conversationStatusMeta(providerTransientSession);
+            assert.equal(providerMeta.text, "临时失败");
+            assert.equal(providerMeta.source, "runtime_state");
+            assert.equal(providerMeta.tone, "warn");
+            assert.match(providerMeta.title, /模型服务高负载/);
+            assert.match(providerMeta.title, /补链恢复/);
+
+            const businessFailureSession = {
+              ...session,
+              __status: "error",
+              session_health_state: "attention",
+              latest_run_summary: {
+                run_id: "run-business",
+                status: "error",
+                error: "业务处理失败",
+              },
+              latest_effective_run_summary: {
+                run_id: "run-business",
+                outcome_state: "failed_business",
+              },
+              conversation_list_metrics: {
+                ...session.conversation_list_metrics,
+                status_badges: [
+                  { kind: "current_task", state: "in_progress", label: "进行中", severity: "info" },
+                ],
+              },
+            };
+            const businessMeta = conversationStatusMeta(businessFailureSession);
+            assert.equal(businessMeta.text, "业务失败");
+            assert.equal(businessMeta.source, "runtime_state");
+
+            const interruptedSession = {
+              ...session,
+              __status: "interrupted",
+              session_health_state: "attention",
+              latest_effective_run_summary: {
+                run_id: "run-interrupted",
+                outcome_state: "interrupted_infra",
+              },
+            };
+            const interruptedMeta = conversationStatusMeta(interruptedSession);
+            assert.equal(interruptedMeta.text, "环境中断");
+            assert.equal(interruptedMeta.source, "runtime_state");
+
             const taskSource = fs.readFileSync(path.join(repoRoot, "web/task.js"), "utf8");
             const bootstrapSource = fs.readFileSync(path.join(repoRoot, bootstrapFile), "utf8");
             assert.equal(taskSource.includes("getConversationListTaskCounts(s)"), true);
             assert.equal(taskSource.includes("conversationListMetricBadgeStatusMeta(s)"), true);
             assert.equal(taskSource.includes("appendConversationListMetricSubchips(metaRow, session)"), true);
-            assert.equal(bootstrapSource.includes("conversation_list_metrics: normalizeConversationListMetricsClient"), true);
+            assert.equal(bootstrapSource.includes("normalizeConversationListMetricsClient"), true);
             assert.equal(bootstrapSource.includes("conversation_list_metrics: mergeConversationListMetricsClient"), true);
             """
         )

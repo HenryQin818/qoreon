@@ -1,0 +1,4027 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>项目任务看板 · Qoreon</title>
+  <style>
+    :root {
+      /* Companion system theme: calm glass + strong hierarchy (read-only) */
+      --asideW: 320px;
+      --bg1: #f5f7fa;
+      --bg2: #c3cfe2;
+      --glass: rgba(255,255,255,0.56);
+      --glass2: rgba(255,255,255,0.74);
+      --line: rgba(0,0,0,0.10);
+      --text: rgba(0,0,0,0.86);
+      --muted: rgba(0,0,0,0.58);
+      --muted2: rgba(0,0,0,0.42);
+      --shadow: 0 18px 50px rgba(0,0,0,0.10);
+      --shadow2: 0 10px 26px rgba(0,0,0,0.08);
+      --radius: 18px;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      --serif: ui-serif, "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+      --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Arial, sans-serif;
+
+      --good: #1f8f5f;
+      --warn: #b36a00;
+      --bad: #c91d3b;
+      --accent: #2f6fed;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      color: var(--text);
+      font-family: var(--sans);
+      background: transparent;
+      overflow: hidden;
+    }
+    a { color: inherit; }
+    code, pre, kbd { font-family: var(--mono); }
+
+    /* Ambient Background (low-energy) */
+    .ambient-bg {
+      position: fixed;
+      inset: 0;
+      z-index: -1;
+      overflow: hidden;
+      background: linear-gradient(135deg, var(--bg1) 0%, var(--bg2) 100%);
+    }
+    .blob {
+      position: absolute;
+      border-radius: 50%;
+      opacity: 0.9;
+      will-change: transform, filter, opacity;
+      box-shadow:
+        inset -5vw 5vw 10vw rgba(255, 255, 255, 0.6),
+        inset  5vw -5vw 10vw rgba(0, 0, 0, 0.15),
+        0 10px 30px rgba(0, 0, 0, 0.05);
+      -webkit-mask-image: radial-gradient(circle, black 50%, transparent 80%);
+      mask-image: radial-gradient(circle, black 50%, transparent 80%);
+    }
+    .blob-1 { width: 40vw; height: 40vw; background: #ffdee9; }
+    .blob-2 { width: 40vw; height: 40vw; background: #e0c3fc; }
+    .blob-3 { width: 35vw; height: 35vw; background: #f6d365; }
+    .blob-4 { width: 30vw; height: 30vw; background: #a18cd1; }
+    .blob-5 { width: 25vw; height: 25vw; background: #8ec5fc; }
+    .blob-6 { width: 30vw; height: 30vw; background: #b5fffc; }
+    .blob-7 { width: 35vw; height: 35vw; background: #fad0c4; }
+    .blob-8 { width: 25vw; height: 25vw; background: #ff9a9e; }
+    @media (prefers-reduced-motion: reduce) {
+      .blob {
+        filter: blur(18px) !important;
+        opacity: 0.6 !important;
+      }
+    }
+
+    /* Layout: top project tabs + left channels + right stacked panels */
+    .shell {
+      height: 100vh;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+    }
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      display: grid;
+      grid-template-columns: var(--asideW) minmax(0, 1fr) minmax(0, 1fr);
+      align-items: center;
+      gap: 12px;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(255,255,255,0.42);
+      backdrop-filter: blur(12px);
+    }
+    .brand {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      padding: 10px 12px;
+      border-radius: var(--radius);
+      border: 1px solid var(--line);
+      background: linear-gradient(180deg, rgba(255,255,255,0.12), rgba(255,255,255,0.06));
+      box-shadow: var(--shadow2);
+      min-width: 0;
+    }
+    .kicker {
+      font-size: 11px;
+      font-family: var(--mono);
+      letter-spacing: 0.12em;
+      color: var(--muted);
+      text-transform: uppercase;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .btitle {
+      font-family: var(--serif);
+      font-weight: 900;
+      font-size: 18px;
+      line-height: 1.2;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .bsub {
+      font-size: 12px;
+      color: var(--muted2);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .tabs {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      overflow: auto;
+      padding: 6px 2px;
+      scrollbar-width: thin;
+    }
+    .tab {
+      flex: 0 0 auto;
+      display: grid;
+      grid-template-columns: 10px auto;
+      gap: 10px;
+      align-items: center;
+      padding: 10px 12px;
+      border-radius: 999px;
+      border: 1px solid rgba(0,0,0,0.08);
+      background: rgba(255,255,255,0.55);
+      cursor: pointer;
+      transition: 150ms ease;
+      user-select: none;
+    }
+    .tab:hover { transform: translateY(-1px); box-shadow: var(--shadow2); }
+    .tab.active {
+      border-color: rgba(47,111,237,0.28);
+      background: rgba(47,111,237,0.12);
+    }
+    .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      background: rgba(0,0,0,0.20);
+    }
+    .tab .name {
+      font-weight: 800;
+      font-size: 13px;
+      letter-spacing: 0.01em;
+    }
+
+    .hctrl {
+      display: grid;
+      grid-template-columns: 1fr 112px;
+      gap: 8px;
+      align-items: center;
+    }
+    .input, .select, .toggle {
+      width: 100%;
+      border-radius: 12px;
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,0.70);
+      color: var(--text);
+      padding: 10px 12px;
+      outline: none;
+    }
+    .input::placeholder { color: rgba(0,0,0,0.35); }
+    .toggle {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      cursor: pointer;
+      user-select: none;
+      padding: 9px 10px;
+    }
+    .toggle input { accent-color: var(--accent); }
+    .toggle span { color: var(--muted); font-size: 12px; }
+
+    .body {
+      display: grid;
+      /* 3 columns: aside fixed, main/detail split 50/50 */
+      grid-template-columns: var(--asideW) minmax(0, 1fr) minmax(0, 1fr);
+      grid-template-rows: minmax(0, 1fr);
+      grid-template-areas: "aside main detail";
+      min-height: 0;
+    }
+    aside {
+      grid-area: aside;
+      border-right: 1px solid var(--line);
+      background: rgba(255,255,255,0.34);
+      backdrop-filter: blur(10px);
+      min-height: 0;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr) auto;
+    }
+    .asideh {
+      padding: 14px 14px 10px;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      gap: 8px;
+      align-items: start;
+    }
+    .asideleft {
+      min-width: 0;
+      display: grid;
+      gap: 8px;
+      align-items: start;
+    }
+    .pmseg {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 3px;
+      background: rgba(255,255,255,0.56);
+      box-shadow: var(--shadow2);
+      width: fit-content;
+    }
+    .segbtn {
+      border: none;
+      background: transparent;
+      color: rgba(0,0,0,0.62);
+      font-family: var(--mono);
+      font-size: 12px;
+      letter-spacing: 0.06em;
+      border-radius: 999px;
+      padding: 6px 12px;
+      cursor: pointer;
+      transition: 140ms ease;
+      line-height: 1;
+      font-weight: 700;
+    }
+    .segbtn:hover { color: rgba(0,0,0,0.86); }
+    .segbtn.active {
+      background: rgba(47,111,237,0.90);
+      color: #fff;
+      box-shadow: 0 2px 10px rgba(47,111,237,0.35);
+    }
+    .asideh .at {
+      margin: 0;
+      font-family: var(--mono);
+      font-size: 12px;
+      letter-spacing: 0.10em;
+      text-transform: uppercase;
+      color: var(--muted);
+      white-space: nowrap;
+      flex: 0 0 auto;
+    }
+    .asideh .am {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--muted2);
+      min-width: 0;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      align-items: center;
+      justify-content: flex-start;
+    }
+    body.panel-conv .asideh .am { max-width: 100%; }
+    .metapill {
+      font-family: var(--mono);
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,0.66);
+      color: rgba(0,0,0,0.62);
+      white-space: nowrap;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .metapill::before {
+      content: "";
+      width: 6px;
+      height: 6px;
+      border-radius: 999px;
+      background: rgba(0,0,0,0.22);
+      flex: 0 0 auto;
+    }
+    .metapill.good::before { background: var(--good); }
+    .metapill.warn::before { background: var(--warn); }
+    .metapill.bad::before { background: var(--bad); }
+    .metapill.muted::before { background: rgba(0,0,0,0.22); }
+    .list {
+      overflow: auto;
+      padding: 10px 10px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .rowbtn {
+      text-align: left;
+      border: 1px solid rgba(0,0,0,0.08);
+      background: rgba(255,255,255,0.60);
+      border-radius: 16px;
+      padding: 10px 10px;
+      cursor: pointer;
+      transition: 140ms ease;
+      display: grid;
+      gap: 6px;
+    }
+    .rowbtn:hover { transform: translateY(-1px); box-shadow: var(--shadow2); }
+    .rowbtn.active {
+      border-color: rgba(47,111,237,0.28);
+      background: rgba(47,111,237,0.10);
+    }
+    .rowbtn .rt {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    .rowbtn .name {
+      font-weight: 900;
+      font-size: 13px;
+      line-height: 1.25;
+      white-space: normal;
+      overflow-wrap: anywhere;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+    .chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      justify-content: flex-end;
+    }
+    .list .rowbtn .chips {
+      justify-content: flex-start;
+      width: 100%;
+    }
+    .chip {
+      font-family: var(--mono);
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,0.55);
+      color: rgba(0,0,0,0.72);
+      white-space: nowrap;
+    }
+    .chip.good { border-color: rgba(31,143,95,0.25); background: rgba(31,143,95,0.10); }
+    .chip.warn { border-color: rgba(179,106,0,0.22); background: rgba(179,106,0,0.10); }
+    .chip.bad { border-color: rgba(201,29,59,0.22); background: rgba(201,29,59,0.10); }
+    .chip.muted { color: rgba(0,0,0,0.50); }
+    .chip.link {
+      cursor: pointer;
+      user-select: none;
+      border-color: rgba(47,111,237,0.22);
+      background: rgba(47,111,237,0.10);
+      color: rgba(0,0,0,0.78);
+      transition: 140ms ease;
+    }
+    .chip.link:hover { transform: translateY(-1px); box-shadow: var(--shadow2); }
+    .chip.link:active { transform: translateY(0); }
+    .rowbtn .sub {
+      color: var(--muted2);
+      font-size: 12px;
+      line-height: 1.35;
+      overflow-wrap: anywhere;
+    }
+    .rowbtn .mono {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: rgba(0,0,0,0.55);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .rowbtn .preview {
+      color: rgba(0,0,0,0.62);
+      font-size: 12px;
+      line-height: 1.35;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .stchip {
+      font-family: var(--mono);
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,0.72);
+      color: rgba(0,0,0,0.68);
+      white-space: nowrap;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .stchip::before {
+      content: "";
+      width: 6px;
+      height: 6px;
+      border-radius: 999px;
+      background: rgba(0,0,0,0.22);
+      flex: 0 0 auto;
+    }
+    .stchip.good::before { background: var(--good); }
+    .stchip.warn::before { background: var(--warn); }
+    .stchip.bad::before { background: var(--bad); }
+    .stchip.muted::before { background: rgba(0,0,0,0.22); }
+    .stchip.good {
+      border-color: rgba(31,143,95,0.30);
+      background: rgba(31,143,95,0.13);
+      color: rgba(18,87,58,0.95);
+    }
+    .stchip.warn {
+      border-color: rgba(179,106,0,0.28);
+      background: rgba(179,106,0,0.12);
+      color: rgba(102,61,0,0.95);
+    }
+    .stchip.bad {
+      border-color: rgba(201,29,59,0.28);
+      background: rgba(201,29,59,0.12);
+      color: rgba(120,16,34,0.95);
+    }
+    .stchip.muted {
+      border-color: rgba(0,0,0,0.10);
+      background: rgba(255,255,255,0.72);
+      color: rgba(0,0,0,0.58);
+    }
+
+    .sidefoot {
+      padding: 12px 12px 14px;
+      border-top: 1px solid var(--line);
+      color: var(--muted2);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .sidefoot code { color: rgba(0,0,0,0.70); }
+
+    main {
+      grid-area: main;
+      min-height: 0;
+      overflow: auto;
+      padding: 18px 18px 32px;
+    }
+
+    /* Detail panel (no modal) */
+    .detail {
+      grid-area: detail;
+      border-left: 1px solid var(--line);
+      background: rgba(255,255,255,0.34);
+      backdrop-filter: blur(10px);
+      min-height: 0;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      overflow: hidden;
+    }
+    .detailh {
+      padding: 14px 14px 10px;
+      border-bottom: 1px solid var(--line);
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      gap: 10px;
+      align-items: start;
+    }
+    .detailh .dk {
+      font-family: var(--mono);
+      font-size: 12px;
+      letter-spacing: 0.10em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+    .detailh .dt {
+      margin-top: 6px;
+      font-family: var(--serif);
+      font-weight: 900;
+      font-size: 18px;
+      line-height: 1.22;
+      overflow-wrap: anywhere;
+    }
+    .detailh .dsub {
+      margin-top: 6px;
+      font-family: var(--mono);
+      font-size: 11px;
+      color: rgba(0,0,0,0.52);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .dpathbar {
+      margin-top: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 8px 10px;
+      border: 1px solid rgba(0,0,0,0.08);
+      border-radius: 14px;
+      background: rgba(255,255,255,0.62);
+    }
+    .dpathbar .p {
+      flex: 1;
+      min-width: 0;
+      font-family: var(--mono);
+      font-size: 11px;
+      color: rgba(0,0,0,0.55);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      cursor: pointer;
+      user-select: text;
+    }
+    .iconbtn {
+      width: 34px;
+      height: 34px;
+      border-radius: 12px;
+      border: 1px solid rgba(0,0,0,0.10);
+      background: rgba(255,255,255,0.72);
+      cursor: pointer;
+      display: grid;
+      place-items: center;
+      transition: 140ms ease;
+    }
+    .iconbtn:hover { transform: translateY(-1px); box-shadow: var(--shadow2); }
+    .iconbtn:active { transform: translateY(0); }
+    .iconbtn svg { width: 18px; height: 18px; opacity: 0.72; }
+    .detailb {
+      padding: 12px 14px 18px;
+      overflow: auto;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .detailb > * {
+      flex: 0 0 auto;
+      min-height: 0;
+    }
+    .detailb .hint {
+      color: var(--muted2);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    #detailExcerpt {
+      background: rgba(0,0,0,0.03);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 12px;
+    }
+    /* Panel mode: project conversations */
+    body.panel-conv .body {
+      grid-template-columns: clamp(320px, 24vw, 420px) minmax(0, 1fr);
+      grid-template-areas: "aside detail";
+    }
+    body.panel-conv aside {
+      grid-template-rows: auto minmax(0, 1fr);
+    }
+    body.panel-conv main { display: none; }
+    body.panel-conv .detail {
+      border-left: 1px solid var(--line);
+      border-top: none;
+      overflow: hidden;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+    }
+    body.panel-conv .asideleft {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    body.panel-conv #asideTitle { display: none; }
+    body.panel-conv .asideh {
+      padding: 10px 12px 8px;
+      gap: 6px;
+    }
+    body.panel-conv .asideh .am {
+      flex-wrap: nowrap;
+      overflow-x: auto;
+      overflow-y: hidden;
+      white-space: nowrap;
+      gap: 6px;
+      scrollbar-width: thin;
+    }
+    body.panel-conv .asideh .am::-webkit-scrollbar { height: 4px; }
+    body.panel-conv .metapill { padding: 2px 7px; }
+    body.panel-conv .sidefoot { display: none; }
+    body.panel-conv .detailh {
+      padding: 10px 12px 8px;
+    }
+    body.panel-conv .detailh .dk { display: none; }
+    body.panel-conv .detailh > div {
+      display: flex;
+      align-items: baseline;
+      gap: 10px;
+      min-width: 0;
+      width: 100%;
+      overflow-x: auto;
+      overflow-y: hidden;
+      white-space: nowrap;
+      scrollbar-width: thin;
+    }
+    body.panel-conv .detailh > div::-webkit-scrollbar { height: 4px; }
+    body.panel-conv .detailh .dt {
+      margin: 0;
+      font-size: 18px;
+      line-height: 1.2;
+      white-space: nowrap;
+      overflow: visible;
+      text-overflow: clip;
+      min-width: max-content;
+      flex: 0 0 auto;
+    }
+    body.panel-conv .detailh .dsub {
+      margin: 0;
+      font-size: 11px;
+      max-width: 52%;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      flex: 0 1 auto;
+    }
+    body.panel-conv .detailh .dsub { display: none; }
+    body.panel-conv .detailh .dpathbar { display: none !important; }
+    body.panel-conv #detailMeta,
+    body.panel-conv #detailExcerpt,
+    body.panel-conv #detailMore,
+    body.panel-conv #ccbBox { display: none !important; }
+    body.panel-conv .detailb { overflow: hidden; }
+    body.panel-conv .detailb > .convwrap { flex: 1 1 auto; }
+
+    .convwrap {
+      display: none;
+      min-height: 0;
+      height: 100%;
+      padding: 10px 12px 12px;
+      grid-template-rows: minmax(0, 1fr) auto;
+      gap: 10px;
+    }
+    .convwrap.show { display: grid; }
+    .convtimeline {
+      min-height: 0;
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: rgba(255,255,255,0.42);
+      padding: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .msgrow {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      max-width: 92%;
+    }
+    .msgrow.user { align-self: flex-end; }
+    .msgrow.assistant { align-self: flex-start; }
+    .mbubble {
+      border-radius: 14px;
+      border: 1px solid rgba(0,0,0,0.10);
+      background: rgba(255,255,255,0.82);
+      padding: 9px 10px;
+      font-size: 12px;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      box-shadow: var(--shadow2);
+    }
+    .msgrow.user .mbubble {
+      border-color: rgba(47,111,237,0.28);
+      background: rgba(47,111,237,0.12);
+    }
+    .mbubble.collapsed {
+      max-height: 168px;
+      overflow: hidden;
+      position: relative;
+    }
+    .mbubble.collapsed::after {
+      content: "";
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      height: 44px;
+      pointer-events: none;
+      background: linear-gradient(to bottom, rgba(255,255,255,0), rgba(255,255,255,0.94));
+    }
+    .msgrow.user .mbubble.collapsed::after {
+      background: linear-gradient(to bottom, rgba(47,111,237,0), rgba(235,242,255,0.96));
+    }
+    .bubbleops {
+      display: flex;
+      margin-top: 2px;
+    }
+    .bubbleops.user { justify-content: flex-end; }
+    .bubbleops.assistant { justify-content: flex-start; }
+    .bubbleops .user-bubble-expand-toggle {
+      padding: 4px 10px;
+      border-radius: 999px;
+      border: 1px solid rgba(47,111,237,0.16);
+      background: rgba(255,255,255,0.78);
+      color: #2456b8;
+      font-weight: 600;
+    }
+    .bubbleops .user-bubble-expand-toggle:hover {
+      background: rgba(255,255,255,0.96);
+      color: #1d4ed8;
+      text-decoration: none;
+    }
+    .msgmeta {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      font-family: var(--mono);
+      font-size: 11px;
+      color: rgba(0,0,0,0.48);
+    }
+    .msgrow.user .msgmeta {
+      justify-content: flex-end;
+      align-self: flex-end;
+      text-align: right;
+    }
+    .merr {
+      font-size: 12px;
+      color: #8f1f1f;
+      background: rgba(201,29,59,0.10);
+      border: 1px solid rgba(201,29,59,0.20);
+      border-radius: 12px;
+      padding: 8px 9px;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+    .mdebug {
+      margin-top: 6px;
+      border: 1px solid rgba(0,0,0,0.10);
+      background: rgba(255,255,255,0.62);
+      border-radius: 12px;
+      padding: 8px;
+      max-height: 260px;
+      overflow: auto;
+      font-family: var(--mono);
+      font-size: 11px;
+      line-height: 1.45;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+    .convcomposer {
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: rgba(255,255,255,0.56);
+      box-shadow: var(--shadow2);
+      padding: 8px;
+      display: block;
+    }
+    .convhint {
+      font-size: 12px;
+      color: var(--muted2);
+      line-height: 1.4;
+    }
+    .convsend {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: center;
+    }
+    .convmsg {
+      width: 100%;
+      height: 44px;
+      border-radius: 12px;
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,0.82);
+      padding: 0 12px;
+      font-family: var(--sans);
+      font-size: 13px;
+      line-height: 44px;
+      outline: none;
+    }
+    .convmsg::placeholder { color: rgba(0,0,0,0.42); }
+    body.panel-conv .convhint { display: none; }
+
+    /* Modal: bind session_id (localStorage only) */
+    .bmask {
+      position: fixed;
+      inset: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0,0,0,0.30);
+      backdrop-filter: blur(7px);
+      padding: 18px;
+      z-index: 30;
+    }
+    .bmask.show { display: flex; }
+    .bmodal {
+      width: min(520px, 96vw);
+      border-radius: 18px;
+      border: 1px solid rgba(0,0,0,0.12);
+      background: rgba(255,255,255,0.86);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+    .bmodalh {
+      padding: 14px 14px 10px;
+      border-bottom: 1px solid rgba(0,0,0,0.10);
+      display: grid;
+      gap: 6px;
+    }
+    .bmodalh .t { font-weight: 950; font-size: 14px; }
+    .bmodalh .s {
+      font-size: 12px;
+      font-family: var(--mono);
+      color: rgba(0,0,0,0.55);
+      overflow-wrap: anywhere;
+    }
+    .bmodalb { padding: 12px 14px 14px; display: grid; gap: 10px; }
+    .bmodalb label { font-size: 12px; color: rgba(0,0,0,0.60); }
+    .berr { color: var(--bad); font-size: 12px; }
+    .bmodalf {
+      padding: 12px 14px 14px;
+      border-top: 1px solid rgba(0,0,0,0.10);
+      display: flex;
+      gap: 10px;
+      justify-content: flex-end;
+      background: rgba(255,255,255,0.70);
+    }
+    .btn.danger {
+      border-color: rgba(201,29,59,0.25);
+      background: rgba(201,29,59,0.10);
+    }
+    .dotspin {
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background: var(--warn);
+      display: inline-block;
+      animation: pulseDot 1.1s ease-in-out infinite;
+    }
+    @keyframes pulseDot {
+      0% { opacity: 0.32; transform: scale(0.72); }
+      50% { opacity: 1; transform: scale(1.0); }
+      100% { opacity: 0.32; transform: scale(0.72); }
+    }
+    .item.active {
+      border-color: rgba(47,111,237,0.28);
+      background: rgba(47,111,237,0.12);
+    }
+    .maintop {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+    .viewtabs {
+      display: flex;
+      align-items: flex-end;
+      gap: 10px;
+      flex-wrap: wrap;
+      min-width: 0;
+    }
+    .viewtab {
+      border: none;
+      background: transparent;
+      padding: 0;
+      margin: 0;
+      cursor: pointer;
+      user-select: none;
+      font-family: var(--serif);
+      font-weight: 950;
+      font-size: 26px;
+      line-height: 1.18;
+      letter-spacing: 0.01em;
+      color: rgba(0,0,0,0.34);
+      transition: 160ms ease;
+      white-space: nowrap;
+    }
+    .viewtab:hover { color: rgba(0,0,0,0.64); transform: translateY(-1px); }
+    .viewtab.active { color: rgba(0,0,0,0.92); }
+    .viewtab.sub {
+      font-size: 13px;
+      font-weight: 900;
+      font-family: var(--mono);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      padding: 6px 10px;
+      border-radius: 999px;
+      border: 1px solid rgba(0,0,0,0.10);
+      background: rgba(255,255,255,0.56);
+      color: rgba(0,0,0,0.55);
+    }
+    .viewtab.sub.active {
+      border-color: rgba(47,111,237,0.28);
+      background: rgba(47,111,237,0.12);
+      color: rgba(0,0,0,0.82);
+    }
+    .meta {
+      flex: 1;
+      min-width: 0;
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--muted2);
+      text-align: right;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .stack {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      min-height: 0;
+    }
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: rgba(255,255,255,0.46);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+    .ph {
+      padding: 12px 14px 10px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    .ph h2 {
+      margin: 0;
+      font-family: var(--mono);
+      font-size: 12px;
+      letter-spacing: 0.10em;
+      text-transform: uppercase;
+      color: rgba(0,0,0,0.70);
+    }
+    .pb { padding: 14px; }
+
+    .kpi {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+    .kpibox {
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: rgba(255,255,255,0.68);
+      padding: 12px;
+    }
+    .kpibox .n {
+      font-family: var(--serif);
+      font-weight: 900;
+      font-size: 24px;
+    }
+    .kpibox .t {
+      margin-top: 6px;
+      font-size: 12px;
+      color: var(--muted2);
+    }
+
+    .btn {
+      border-radius: 12px;
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,0.78);
+      padding: 8px 10px;
+      cursor: pointer;
+      font-size: 12px;
+      transition: 150ms ease;
+      user-select: none;
+    }
+    .btn:hover { transform: translateY(-1px); box-shadow: var(--shadow2); }
+    .btn.primary {
+      border-color: rgba(47,111,237,0.25);
+      background: rgba(47,111,237,0.12);
+    }
+    .btn:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+      transform: none !important;
+      box-shadow: none !important;
+    }
+    .btn.textbtn {
+      border: none;
+      background: transparent;
+      box-shadow: none;
+      padding: 2px 4px;
+      border-radius: 6px;
+      color: rgba(0,0,0,0.46);
+      font-size: 11px;
+      line-height: 1.2;
+    }
+    .btn.textbtn:hover {
+      transform: none;
+      box-shadow: none;
+      color: rgba(0,0,0,0.74);
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }
+
+    /* Filter bar (image-2 style): chips + list (no board grouping) */
+    .filterbar {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      display: grid;
+      gap: 10px;
+      padding: 12px;
+      margin-bottom: 12px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: rgba(255,255,255,0.42);
+      backdrop-filter: blur(10px);
+      box-shadow: var(--shadow2);
+    }
+    .filterrow {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+      justify-content: flex-start;
+    }
+    .chipbtn {
+      flex: 0 0 auto;
+      border-radius: 999px;
+      border: 1px solid rgba(0,0,0,0.10);
+      background: rgba(255,255,255,0.66);
+      cursor: pointer;
+      padding: 7px 10px;
+      font-size: 12px;
+      user-select: none;
+      transition: 140ms ease;
+    }
+    .chipbtn:hover { transform: translateY(-1px); box-shadow: var(--shadow2); }
+    .chipbtn.active {
+      border-color: rgba(47,111,237,0.28);
+      background: rgba(47,111,237,0.12);
+    }
+    .chipbtn kbd {
+      margin-left: 6px;
+      border-radius: 6px;
+      padding: 1px 6px;
+      border: 1px solid rgba(0,0,0,0.10);
+      background: rgba(255,255,255,0.80);
+      font-size: 11px;
+      color: rgba(0,0,0,0.55);
+    }
+
+    .filelist {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .frow {
+      text-align: left;
+      border: 1px solid rgba(0,0,0,0.10);
+      background: rgba(255,255,255,0.72);
+      border-radius: 18px;
+      padding: 12px 12px;
+      cursor: pointer;
+      transition: 140ms ease;
+      box-shadow: var(--shadow2);
+    }
+    .frow:hover { transform: translateY(-1px); box-shadow: var(--shadow); }
+    .frow.active {
+      border-color: rgba(47,111,237,0.28);
+      background: rgba(47,111,237,0.10);
+    }
+    .frow .t {
+      font-weight: 900;
+      font-size: 14px;
+      line-height: 1.35;
+      overflow-wrap: anywhere;
+    }
+    .frow .m {
+      margin-top: 8px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      align-items: center;
+    }
+    .frow .p {
+      margin-top: 8px;
+      font-family: var(--mono);
+      font-size: 11px;
+      color: rgba(0,0,0,0.50);
+      overflow-wrap: anywhere;
+    }
+
+    /* Layout overrides: force-right/force-bottom must work on ALL widths */
+    body.force-bottom .body {
+      grid-template-columns: var(--asideW) minmax(0, 1fr);
+      grid-template-rows: minmax(0, 1fr) 360px;
+      grid-template-areas: "aside main" "detail detail";
+    }
+    body.force-bottom .detail {
+      border-left: none;
+      border-top: 1px solid var(--line);
+    }
+    body.force-right .body {
+      grid-template-columns: var(--asideW) minmax(0, 1fr) minmax(0, 1fr);
+      grid-template-rows: minmax(0, 1fr);
+      grid-template-areas: "aside main detail";
+    }
+    body.force-right .detail {
+      border-top: none;
+      border-left: 1px solid var(--line);
+    }
+
+    /* Compact helpers (avoid bottom-right debug blocks taking over) */
+    .quickrow {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 8px 10px;
+      border: 1px solid rgba(0,0,0,0.08);
+      border-radius: 14px;
+      background: rgba(255,255,255,0.66);
+    }
+    .quickrow .k {
+      font-family: var(--mono);
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: rgba(0,0,0,0.55);
+      white-space: nowrap;
+    }
+    .quickrow .v {
+      flex: 1;
+      min-width: 0;
+      font-family: var(--mono);
+      font-size: 11px;
+      color: rgba(0,0,0,0.55);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    details.group {
+      border: 1px solid rgba(0,0,0,0.08);
+      border-radius: 16px;
+      background: rgba(255,255,255,0.64);
+      overflow: hidden;
+      margin-bottom: 10px;
+    }
+    details.group:last-child { margin-bottom: 0; }
+    details.group summary {
+      list-style: none;
+      cursor: pointer;
+      user-select: none;
+      padding: 10px 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      border-bottom: 1px solid rgba(0,0,0,0.06);
+      background: rgba(255,255,255,0.44);
+    }
+    details.group summary::-webkit-details-marker { display: none; }
+    .gname {
+      font-family: var(--mono);
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: rgba(0,0,0,0.70);
+    }
+    .gcnt {
+      font-family: var(--mono);
+      font-size: 12px;
+      color: rgba(0,0,0,0.50);
+    }
+
+    .items {
+      padding: 10px 10px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .item {
+      border: 1px solid rgba(0,0,0,0.08);
+      background: rgba(255,255,255,0.80);
+      border-radius: 14px;
+      padding: 10px;
+      cursor: pointer;
+      transition: 140ms ease;
+    }
+    .item:hover { transform: translateY(-1px); box-shadow: var(--shadow2); }
+    .item .tt {
+      font-weight: 900;
+      font-size: 13px;
+      line-height: 1.35;
+    }
+    .item .sub {
+      margin-top: 6px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    /* Modal: item preview */
+    .modal {
+      position: fixed;
+      inset: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0,0,0,0.32);
+      padding: 24px;
+      z-index: 10;
+    }
+    .modal.show { display: flex; }
+    .modalbox {
+      width: min(980px, 96vw);
+      max-height: 86vh;
+      overflow: hidden;
+      border-radius: 18px;
+      border: 1px solid rgba(255,255,255,0.35);
+      background: rgba(255,255,255,0.90);
+      box-shadow: 0 30px 90px rgba(0,0,0,0.25);
+    }
+    .modalh {
+      padding: 14px 14px 12px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    .mt {
+      margin: 0;
+      font-size: 15px;
+      font-weight: 900;
+      font-family: var(--serif);
+    }
+    .x {
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,0.75);
+      padding: 8px 10px;
+      border-radius: 12px;
+      cursor: pointer;
+      font-family: var(--mono);
+      font-size: 12px;
+    }
+    .modalb {
+      padding: 14px;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 320px;
+      gap: 12px;
+      max-height: calc(86vh - 56px);
+      overflow: auto;
+    }
+    pre {
+      margin: 0;
+      white-space: pre-wrap;
+      font-family: var(--mono);
+      font-size: 12px;
+      line-height: 1.5;
+      background: rgba(0,0,0,0.03);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 12px;
+    }
+    .mdview,
+    .md {
+      margin: 0;
+      font-size: 12px;
+      line-height: 1.58;
+      color: rgba(0,0,0,0.86);
+      white-space: normal;
+      overflow-wrap: anywhere;
+    }
+    .mdview > *:first-child,
+    .md > *:first-child { margin-top: 0; }
+    .mdview > *:last-child,
+    .md > *:last-child { margin-bottom: 0; }
+    .mdview p,
+    .md p { margin: 0 0 8px; }
+    .mdview h1, .mdview h2, .mdview h3, .mdview h4, .mdview h5, .mdview h6,
+    .md h1, .md h2, .md h3, .md h4, .md h5, .md h6 {
+      margin: 8px 0 6px;
+      line-height: 1.35;
+      font-weight: 900;
+    }
+    .mdview h1, .md h1 { font-size: 18px; }
+    .mdview h2, .md h2 { font-size: 16px; }
+    .mdview h3, .md h3 { font-size: 15px; }
+    .mdview ul, .mdview ol,
+    .md ul, .md ol { margin: 6px 0 8px 18px; padding: 0; }
+    .mdview li, .md li { margin: 3px 0; }
+    .mdview blockquote,
+    .md blockquote {
+      margin: 8px 0;
+      padding: 6px 10px;
+      border-left: 3px solid rgba(47,111,237,0.35);
+      background: rgba(47,111,237,0.06);
+      border-radius: 8px;
+      color: rgba(0,0,0,0.72);
+    }
+    .mdview code,
+    .md code {
+      font-family: var(--mono);
+      font-size: 11px;
+      background: rgba(0,0,0,0.06);
+      border: 1px solid rgba(0,0,0,0.10);
+      border-radius: 6px;
+      padding: 1px 5px;
+    }
+    .mdview pre.md-code,
+    .md pre.md-code {
+      margin: 8px 0;
+      padding: 10px;
+      border-radius: 10px;
+      background: rgba(0,0,0,0.04);
+      border: 1px solid rgba(0,0,0,0.10);
+      overflow: auto;
+    }
+    .mdview pre.md-code code,
+    .md pre.md-code code {
+      background: transparent;
+      border: none;
+      padding: 0;
+      font-size: 11px;
+      white-space: pre;
+    }
+    .mdview a,
+    .md a {
+      color: #2f6fed;
+      text-decoration: underline;
+      text-underline-offset: 2px;
+      word-break: break-all;
+    }
+
+    /* CCB (send msg + show reply) */
+    .ccb {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: rgba(255,255,255,0.46);
+      box-shadow: var(--shadow2);
+      overflow: hidden;
+    }
+    .ccbh {
+      padding: 10px 12px 9px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    .ccbh .t {
+      font-family: var(--mono);
+      font-size: 12px;
+      letter-spacing: 0.10em;
+      text-transform: uppercase;
+      color: rgba(0,0,0,0.70);
+      margin: 0;
+    }
+    .ccbb { padding: 10px 12px 12px; display: grid; gap: 10px; }
+    .ccbsend {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: start;
+    }
+    textarea.msg {
+      width: 100%;
+      min-height: 84px;
+      resize: vertical;
+      border-radius: 14px;
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,0.72);
+      padding: 10px 10px;
+      font-family: var(--sans);
+      font-size: 13px;
+      line-height: 1.45;
+      outline: none;
+    }
+    .runs {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .runrow {
+      border: 1px solid rgba(0,0,0,0.10);
+      background: rgba(255,255,255,0.70);
+      border-radius: 14px;
+      padding: 10px 10px;
+      display: grid;
+      gap: 8px;
+    }
+    .runrow .top {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    .runrow .top .id {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: rgba(0,0,0,0.55);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .runrow .msg {
+      font-size: 12px;
+      color: rgba(0,0,0,0.80);
+      overflow-wrap: anywhere;
+    }
+    .runrow .err {
+      font-size: 12px;
+      color: #8f1f1f;
+      background: rgba(201,29,59,0.10);
+      border: 1px solid rgba(201,29,59,0.20);
+      border-radius: 12px;
+      padding: 8px 9px;
+      overflow-wrap: anywhere;
+    }
+    .runrow .partial {
+      font-size: 12px;
+      color: #2f4a63;
+      background: rgba(47,111,237,0.10);
+      border: 1px solid rgba(47,111,237,0.22);
+      border-radius: 12px;
+      padding: 8px 9px;
+      overflow-wrap: anywhere;
+    }
+    .runrow .last {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: rgba(0,0,0,0.62);
+      background: rgba(0,0,0,0.03);
+      border: 1px solid rgba(0,0,0,0.06);
+      border-radius: 12px;
+      padding: 8px 8px;
+      white-space: pre-wrap;
+      max-height: 320px;
+      overflow: auto;
+    }
+    .runrow .last.reply {
+      font-family: var(--sans);
+      font-size: 12px;
+      line-height: 1.56;
+      white-space: normal;
+      background: rgba(47,111,237,0.07);
+      border-color: rgba(47,111,237,0.22);
+    }
+
+    @media (max-width: 1060px) {
+      header { grid-template-columns: 280px minmax(0, 1fr); grid-template-rows: auto auto; }
+      .hctrl { grid-column: 1 / -1; grid-template-columns: 1fr 112px; }
+      /* Auto: portrait-ish -> detail goes bottom (2 panels on top + detail below) */
+      body:not(.force-right) .body {
+        grid-template-columns: 280px minmax(0, 1fr);
+        grid-template-rows: minmax(0, 1fr) 360px;
+        grid-template-areas: "aside main" "detail detail";
+      }
+      body:not(.force-right) .detail {
+        border-left: none;
+        border-top: 1px solid var(--line);
+      }
+      body.force-bottom .body {
+        grid-template-columns: 280px minmax(0, 1fr);
+        grid-template-rows: minmax(0, 1fr) 360px;
+        grid-template-areas: "aside main" "detail detail";
+      }
+      body.force-bottom .detail {
+        border-left: none;
+        border-top: 1px solid var(--line);
+      }
+      body.force-right .body {
+        grid-template-columns: 280px minmax(0, 1fr) minmax(0, 1fr);
+        grid-template-rows: minmax(0, 1fr);
+        grid-template-areas: "aside main detail";
+      }
+    }
+    @media (max-width: 760px) {
+      header { grid-template-columns: 1fr; grid-template-rows: auto auto auto; }
+      .hctrl { grid-template-columns: 1fr 112px; }
+      .body {
+        grid-template-columns: 1fr;
+        grid-template-rows: minmax(0, 1fr) 360px;
+        grid-template-areas: "main" "detail";
+      }
+      aside { display: none; }
+      body.panel-conv .body {
+        grid-template-columns: 1fr;
+        grid-template-rows: minmax(220px, 36vh) minmax(0, 1fr);
+        grid-template-areas: "aside" "detail";
+      }
+      body.panel-conv aside { display: grid; border-right: none; border-bottom: 1px solid var(--line); }
+      .detail {
+        border-left: none;
+        border-top: 1px solid var(--line);
+      }
+      body { overflow: auto; }
+      main { overflow: visible; }
+    }
+  </style>
+</head>
+<body>
+  <div class="ambient-bg">
+    <div class="blob blob-1"></div>
+    <div class="blob blob-2"></div>
+    <div class="blob blob-3"></div>
+    <div class="blob blob-4"></div>
+    <div class="blob blob-5"></div>
+    <div class="blob blob-6"></div>
+    <div class="blob blob-7"></div>
+    <div class="blob blob-8"></div>
+  </div>
+
+  <div class="shell">
+    <header>
+      <div class="brand">
+        <div class="kicker">OpenClaw Workspace</div>
+        <div class="btitle" id="brandTitle">项目任务看板</div>
+        <div class="bsub" id="brandSub">伴生系统：只读扫描 + 可视化检视 + session_id 续跑。</div>
+      </div>
+      <nav class="tabs" id="tabs" aria-label="项目切换"></nav>
+      <div class="hctrl">
+        <input class="input" id="q" placeholder="搜索：标题 / 编号 / 负责人 / 路径（模糊）" />
+        <button class="btn" id="layoutBtn" title="切换详情布局：自动 / 右侧 / 底部">布局: 自动</button>
+      </div>
+    </header>
+
+    <div class="body">
+      <aside>
+        <div class="asideh">
+          <div class="asideleft">
+            <div class="pmseg" role="tablist" aria-label="页面维度切换">
+              <button class="segbtn active" id="panelOpsBtn" role="tab" aria-selected="true" title="查看任务执行视图">任务</button>
+              <button class="segbtn" id="panelConvBtn" role="tab" aria-selected="false" title="查看项目对话视图">对话</button>
+            </div>
+            <h2 class="at" id="asideTitle">通道</h2>
+          </div>
+          <div class="am" id="asideMeta"></div>
+        </div>
+        <div class="list" id="leftList"></div>
+      </aside>
+
+      <main>
+        <div class="maintop">
+          <div class="viewtabs" id="viewTabs">
+            <button class="viewtab" id="tabWork">工作任务</button>
+            <button class="viewtab sub" id="tabComms">沟通通道</button>
+          </div>
+          <div class="meta" id="mainMeta"></div>
+        </div>
+        <div class="filterbar" id="filterBar"></div>
+        <div class="filelist" id="fileList"></div>
+      </main>
+
+      <section class="detail" id="detail">
+        <div class="detailh">
+          <div>
+            <div class="dk">详情</div>
+            <div class="dt" id="detailTitle">未选择事项</div>
+            <div class="dsub" id="detailSub"></div>
+            <div class="dpathbar" id="detailPathBar" style="display:none;">
+              <div class="p" id="detailPathText" title="点击复制路径"></div>
+              <button class="iconbtn" id="detailRevealBtn" title="在 Finder 中打开">
+                <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path d="M3.5 7.5c0-1.1.9-2 2-2h4.1c.5 0 1 .2 1.4.6l.9.9c.2.2.4.3.7.3h6.8c1.1 0 2 .9 2 2v7.2c0 1.1-.9 2-2 2H5.5c-1.1 0-2-.9-2-2V7.5Z" stroke="currentColor" stroke-width="1.5"/>
+                  <path d="M3.5 9.2h17" stroke="currentColor" stroke-width="1.5" opacity="0.55"/>
+                </svg>
+              </button>
+            </div>
+          </div>
+        </div>
+        <div class="detailb">
+          <div class="chips" id="detailMeta" style="justify-content:flex-start;"></div>
+          <div id="detailExcerpt" class="mdview">(点击任意事项卡片，在此查看详情)</div>
+          <div class="items" id="detailMore"></div>
+          <section class="ccb" id="ccbBox">
+            <div class="ccbh">
+              <h3 class="t">通道对话（CCB）</h3>
+              <div class="chips" style="justify-content:flex-end; gap:8px;">
+                <span class="chip muted" id="ccbSidChip" style="display:none;"></span>
+                <button class="btn primary" id="ccbBindBtn" style="display:none;" title="为当前通道绑定一个 Codex session_id（保存在本机浏览器）">绑定对话</button>
+                <button class="btn" id="ccbCopySidBtn" style="display:none;" title="复制该通道绑定的 session_id">复制session_id</button>
+                <button class="btn" id="ccbEditBindBtn" style="display:none;" title="修改该通道绑定的 session_id（保存在本机浏览器）">改绑</button>
+                <button class="btn danger" id="ccbUnbindBtn" style="display:none;" title="清除本机保存的绑定（不会写入 config.toml）">解绑</button>
+                <button class="btn" id="ccbRefreshBtn" title="刷新对话回溯">刷新</button>
+              </div>
+            </div>
+            <div class="ccbb">
+              <div class="hint" id="ccbHint">在此向该通道绑定的 Codex session 发送消息，并实时查看处理过程与最后回复。</div>
+              <div class="ccbsend">
+                <textarea class="msg" id="ccbMsg" placeholder="输入要发给该通道 Codex 的消息（例如：请基于最新任务清单推进 TOP3，并把产物写回到对应目录）"></textarea>
+                <button class="btn primary" id="ccbSendBtn">发送</button>
+              </div>
+              <div class="runs" id="ccbRuns"></div>
+            </div>
+          </section>
+          <section class="convwrap" id="convWrap">
+            <div class="convtimeline" id="convTimeline"></div>
+            <div class="convcomposer">
+              <div class="convhint" id="convHint">在该会话下继续发送消息，系统会按 5 秒频率自动刷新处理状态。</div>
+              <div class="convsend">
+                <input class="convmsg" id="convMsg" placeholder="输入要发给该会话 Codex 的消息（Enter 发送）" />
+                <button class="btn primary" id="convSendBtn">发送</button>
+              </div>
+            </div>
+          </section>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <!-- Bind session_id modal (localStorage only, no config file writes) -->
+  <div class="bmask" id="bindMask" role="dialog" aria-modal="true" aria-label="绑定对话">
+    <div class="bmodal" role="document">
+      <div class="bmodalh">
+        <div class="t">绑定通道对话</div>
+        <div class="s" id="bindSub">-</div>
+      </div>
+      <div class="bmodalb">
+        <div style="display:grid; gap:6px;">
+          <label for="bindSid">Codex session_id</label>
+          <input class="input" id="bindSid" placeholder="例如：019bde9b-4793-70e0-b18a-a437279b2d18" />
+          <div class="berr" id="bindErr" style="display:none;"></div>
+        </div>
+        <div class="hint">该绑定仅保存在本机浏览器（localStorage），不会自动写入 <code>config.toml</code>。</div>
+      </div>
+      <div class="bmodalf">
+        <button class="btn" id="bindCreateBtn" title="在本机创建一个新的 Codex session，然后自动填入">创建新对话</button>
+        <button class="btn" id="bindCancelBtn">取消</button>
+        <button class="btn primary" id="bindSaveBtn">保存绑定</button>
+      </div>
+    </div>
+  </div>
+
+  <script id="data" type="application/json">__PAYLOAD__</script>
+  <script>
+    const DATA = JSON.parse(document.getElementById('data').textContent);
+    const OVERVIEW_PAGE = (DATA.links && DATA.links.overview_page) ? String(DATA.links.overview_page) : "/share/project-overview-dashboard.html";
+
+    (function initBrand() {
+      const t = (DATA.dashboard && DATA.dashboard.title) ? String(DATA.dashboard.title) : "项目任务看板";
+      const s = (DATA.dashboard && DATA.dashboard.subtitle) ? String(DATA.dashboard.subtitle) : "";
+      const elT = document.getElementById("brandTitle");
+      const elS = document.getElementById("brandSub");
+      if (elT) elT.textContent = t;
+      if (elS) elS.textContent = s || "伴生系统：只读扫描 + 可视化检视 + session_id 续跑。";
+      try { document.title = t + " · Qoreon"; } catch (_) {}
+    })();
+
+    const DONE_STATUSES = new Set(["已完成", "已验收通过", "已消费", "已解决", "已关闭", "已停止"]);
+    const PAUSE_STATUSES = new Set(["已暂停", "暂缓"]);
+    const STATUS_ORDER = ["督办", "进行中", "待开始", "待处理", "待验收", "待消费", "其他", "已暂停", "已完成"];
+    const CHANNEL_RENAME_MAP_BY_PROJECT = {
+      qoreon_v2: {
+        "子级01-Go后端平台（API-索引-服务控制面）": "研发01-Go后端平台（API-索引-服务控制面）",
+        "子级02-CCB与多CLI运行时（Legacy Connector-队列-CLI适配）": "研发02-CCB与多CLI运行时（Legacy Connector-队列-CLI适配）",
+        "子级03-Vue前端工作台（平台首页-Agent控制台-项目工作台）": "研发03-前端工作台（平台首页-Agent控制台-项目工作台）",
+        "子级03-前端工作台（平台首页-Agent控制台-项目工作台）": "研发03-前端工作台（平台首页-Agent控制台-项目工作台）",
+        "子级04-数据与知识治理（对象映射-迁移-知识沉淀）": "研发04-数据与知识治理（对象映射-迁移-知识沉淀）",
+        "子级05-测试与验收（性能-功能-迁移-回归）": "测试01-测试与验收（性能-功能-迁移-回归）",
+        "辅助04-产品与原型（IA-原型-业务规格）": "产品00-产品原型总控（IA-业务规格-原型门禁）",
+        "辅助04-原型设计与Demo可视化（静态数据填充-业务规格确认）": "产品00-产品原型总控（IA-业务规格-原型门禁）",
+        "辅助06-运维与远程访问（部署-健康-安全-远程访问）": "运维01-运维与远程访问（部署-健康-安全-远程访问）",
+        "辅助06-项目运维（运行巡检-异常告警-会话修复）": "运维01-运维与远程访问（部署-健康-安全-远程访问）",
+      },
+    };
+
+    function isQoreonV2Project(projectId) {
+      return String(projectId || "").trim() === "qoreon_v2";
+    }
+
+    function canonicalChannelName(projectId, channelName) {
+      const raw = String(channelName || "").trim();
+      if (!raw) return "";
+      const map = CHANNEL_RENAME_MAP_BY_PROJECT[String(projectId || "").trim()];
+      return (map && map[raw]) ? map[raw] : raw;
+    }
+
+    function currentChannelNameSet(projectId) {
+      const set = new Set();
+      const proj = projectById(projectId);
+      const add = (name) => {
+        const ch = canonicalChannelName(projectId, name);
+        if (ch) set.add(ch);
+      };
+      if (proj && Array.isArray(proj.channels)) for (const c of proj.channels) if (c && c.name) add(c.name);
+      if (proj && Array.isArray(proj.channel_sessions)) for (const cs of proj.channel_sessions) if (cs && cs.name) add(cs.name);
+      return set;
+    }
+
+    const STATE = {
+      project: ((DATA.projects && DATA.projects.length) ? String(DATA.projects[0].id || "") : ""), // <project_id>
+      channel: "",           // per project
+      q: "",
+      type: "全部",
+      status: "待办",        // 待办 | 进行中 | 已完成 | 全部
+      view: "work",          // work | comms
+      panelMode: "ops",      // ops | conv
+      layout: "auto",        // auto | right | bottom
+      selectedPath: "",
+      selectedSessionId: "",
+    };
+
+    function el(tag, attrs = {}, children = []) {
+      const n = document.createElement(tag);
+      for (const [k, v] of Object.entries(attrs)) {
+        if (k === "class") n.className = v;
+        else if (k === "text") n.textContent = v;
+        else if (k === "html") n.innerHTML = v;
+        else if (k === "style") n.setAttribute("style", v);
+        else n.setAttribute(k, v);
+      }
+      for (const c of children) n.appendChild(c);
+      return n;
+    }
+
+    function copyText(s) {
+      navigator.clipboard?.writeText(String(s)).catch(() => {});
+    }
+
+    function isHttpUrl(u) {
+      return /^https?:\/\//i.test(String(u || ""));
+    }
+
+    function openNew(u) {
+      try { window.open(String(u), "_blank", "noopener,noreferrer"); } catch (_) {}
+    }
+
+    function shortTitle(t) {
+      return String(t || "").replace(/^【[^】]+】\s*/, "");
+    }
+
+    function shortId(s) {
+      const t = String(s || "");
+      if (t.length <= 18) return t;
+      return t.slice(0, 8) + "…" + t.slice(-4);
+    }
+
+    function shortDateTime(ts) {
+      const t = String(ts || "").trim();
+      if (!t) return "";
+      return t.replace("T", " ").replace(/\.\d+/, "").slice(0, 19);
+    }
+
+    function parseDateTime(ts) {
+      const raw = String(ts || "").trim();
+      if (!raw) return null;
+      let s = raw;
+      // Normalize timezone like +0800 -> +08:00 for safer parsing.
+      if (/[\+\-]\d{4}$/.test(s)) s = s.replace(/([\+\-]\d{2})(\d{2})$/, "$1:$2");
+      const d = new Date(s);
+      if (!Number.isNaN(d.getTime())) return d;
+      const d2 = new Date(raw.replace(" ", "T"));
+      if (!Number.isNaN(d2.getTime())) return d2;
+      return null;
+    }
+
+    function imTime(ts) {
+      const d = parseDateTime(ts);
+      if (!d) return String(ts || "");
+      const now = new Date();
+      const pad2 = (n) => String(n).padStart(2, "0");
+      const hm = pad2(d.getHours()) + ":" + pad2(d.getMinutes());
+
+      const sameDay = d.getFullYear() === now.getFullYear()
+        && d.getMonth() === now.getMonth()
+        && d.getDate() === now.getDate();
+      if (sameDay) return hm;
+
+      const y = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      const x = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+      const diffDays = Math.round((y - x) / 86400000);
+      if (diffDays === 1) return "昨天 " + hm;
+      if (d.getFullYear() === now.getFullYear()) return (d.getMonth() + 1) + "/" + d.getDate() + " " + hm;
+      return d.getFullYear() + "/" + (d.getMonth() + 1) + "/" + d.getDate() + " " + hm;
+    }
+
+    function toTimeNum(ts) {
+      const d = parseDateTime(ts);
+      return d ? d.getTime() : -1;
+    }
+
+    function compactDateTime(ts) {
+      const t = shortDateTime(ts);
+      if (!t) return "";
+      const m = t.match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2})/);
+      if (!m) return t;
+      return m[2] + "-" + m[3] + " " + m[4] + ":" + m[5];
+    }
+
+    function escapeHtml(s) {
+      return String(s || "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+    }
+
+    function mdInline(raw) {
+      let s = escapeHtml(raw || "");
+      const stash = [];
+      const stashPush = (html) => {
+        stash.push(String(html || ""));
+        return "\u0000" + (stash.length - 1) + "\u0000";
+      };
+      s = s.replace(/`([^`]+)`/g, (_, code) => {
+        return stashPush("<code>" + code + "</code>");
+      });
+      s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, text, url) => {
+        const u = String(url || "").trim();
+        if (!/^https?:\/\//i.test(u)) return text;
+        return stashPush('<a href="' + escapeHtml(u) + '" target="_blank" rel="noopener noreferrer">' + text + "</a>");
+      });
+      s = s.replace(/(^|[\s(])(https?:\/\/[^\s<]+)/g, (_, pre, url) => {
+        return pre + stashPush('<a href="' + url + '" target="_blank" rel="noopener noreferrer">' + url + "</a>");
+      });
+      s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+      s = s.replace(/__([^_]+)__/g, "<strong>$1</strong>");
+      s = s.replace(/~~([^~]+)~~/g, "<del>$1</del>");
+      s = s.replace(/(^|[^\*])\*([^*\n]+)\*/g, "$1<em>$2</em>");
+      s = s.replace(/(^|[^_])_([^_\n]+)_/g, "$1<em>$2</em>");
+      s = s.replace(/\u0000(\d+)\u0000/g, (_, idx) => stash[Number(idx)] || "");
+      return s;
+    }
+
+    function markdownToHtml(input) {
+      const src = String(input || "").replace(/\r\n?/g, "\n");
+      if (!src.trim()) return "";
+      const lines = src.split("\n");
+      const out = [];
+      let paragraph = [];
+      let listType = "";
+      let listItems = [];
+      let inCode = false;
+      let codeLines = [];
+
+      function flushParagraph() {
+        if (!paragraph.length) return;
+        const text = paragraph.join("\n").trim();
+        paragraph = [];
+        if (!text) return;
+        out.push("<p>" + mdInline(text).replace(/\n/g, "<br>") + "</p>");
+      }
+      function flushList() {
+        if (!listItems.length || !listType) return;
+        out.push("<" + listType + ">" + listItems.map((x) => "<li>" + mdInline(x) + "</li>").join("") + "</" + listType + ">");
+        listType = "";
+        listItems = [];
+      }
+      function flushNormal() {
+        flushParagraph();
+        flushList();
+      }
+
+      for (const ln of lines) {
+        const line = String(ln || "");
+        if (inCode) {
+          if (/^```/.test(line.trim())) {
+            out.push('<pre class="md-code"><code>' + escapeHtml(codeLines.join("\n")) + "</code></pre>");
+            inCode = false;
+            codeLines = [];
+          } else {
+            codeLines.push(line);
+          }
+          continue;
+        }
+
+        if (/^```/.test(line.trim())) {
+          flushNormal();
+          inCode = true;
+          codeLines = [];
+          continue;
+        }
+
+        const t = line.trim();
+        if (!t) {
+          flushNormal();
+          continue;
+        }
+
+        let m = t.match(/^(#{1,6})\s+(.*)$/);
+        if (m) {
+          flushNormal();
+          const lv = Math.min(6, Math.max(1, m[1].length));
+          out.push("<h" + lv + ">" + mdInline(m[2]) + "</h" + lv + ">");
+          continue;
+        }
+
+        m = t.match(/^[-*+]\s+(.*)$/);
+        if (m) {
+          flushParagraph();
+          if (listType && listType !== "ul") flushList();
+          listType = "ul";
+          listItems.push(m[1]);
+          continue;
+        }
+
+        m = t.match(/^\d+\.\s+(.*)$/);
+        if (m) {
+          flushParagraph();
+          if (listType && listType !== "ol") flushList();
+          listType = "ol";
+          listItems.push(m[1]);
+          continue;
+        }
+
+        m = t.match(/^>\s?(.*)$/);
+        if (m) {
+          flushNormal();
+          out.push("<blockquote>" + mdInline(m[1]) + "</blockquote>");
+          continue;
+        }
+
+        if (listItems.length) flushList();
+        paragraph.push(line);
+      }
+
+      flushNormal();
+      if (inCode) out.push('<pre class="md-code"><code>' + escapeHtml(codeLines.join("\n")) + "</code></pre>");
+      return out.join("");
+    }
+
+    function setMarkdown(elNode, text, fallback = "") {
+      if (!elNode) return;
+      const src = String(text || "").trim() ? String(text || "") : String(fallback || "");
+      elNode.innerHTML = markdownToHtml(src);
+    }
+
+    function conversationPreviewLine(s) {
+      const text = String((s && s.lastPreview) || "").trim();
+      const speaker = String((s && s.lastSpeaker) || "assistant");
+      if (!text) return "系统: 暂无消息";
+      return (speaker === "user" ? "我: " : "Codex: ") + text;
+    }
+
+    function looksLikeSessionId(s) {
+      return /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(String(s || "").trim());
+    }
+
+    // Local session bindings (per project+channel) stored in localStorage.
+    // Purpose: allow quick binding from UI without editing config.toml.
+    const BINDINGS_KEY = "taskDashboard.sessionBindings.v1";
+    function loadBindings() {
+      try {
+        const raw = localStorage.getItem(BINDINGS_KEY);
+        const j = raw ? JSON.parse(raw) : {};
+        return (j && typeof j === "object") ? j : {};
+      } catch (_) { return {}; }
+    }
+    function saveBindings(obj) {
+      try { localStorage.setItem(BINDINGS_KEY, JSON.stringify(obj || {})); } catch (_) {}
+    }
+    function getBinding(projectId, channelName) {
+      const pid = String(projectId || "");
+      const ch = String(channelName || "");
+      if (!pid || !ch) return null;
+      const all = loadBindings();
+      const hit = all && all[pid] ? all[pid][ch] : null;
+      if (!hit) return null;
+      const sid = String(hit.session_id || hit.sessionId || "").trim();
+      if (!looksLikeSessionId(sid)) return null;
+      return { session_id: sid, updated_at: String(hit.updated_at || "") };
+    }
+    function setBinding(projectId, channelName, sessionId) {
+      const pid = String(projectId || "");
+      const ch = String(channelName || "");
+      const sid = String(sessionId || "").trim();
+      if (!pid || !ch || !looksLikeSessionId(sid)) return false;
+      const all = loadBindings();
+      if (!all[pid]) all[pid] = {};
+      all[pid][ch] = { session_id: sid, updated_at: new Date().toISOString() };
+      saveBindings(all);
+      return true;
+    }
+    function clearBinding(projectId, channelName) {
+      const pid = String(projectId || "");
+      const ch = String(channelName || "");
+      const all = loadBindings();
+      if (all && all[pid] && all[pid][ch]) {
+        delete all[pid][ch];
+        saveBindings(all);
+        return true;
+      }
+      return false;
+    }
+
+    const BIND_UI = { open: false, projectId: "", channelName: "" };
+    function bindModalError(msg) {
+      const err = document.getElementById("bindErr");
+      if (!err) return;
+      const m = String(msg || "").trim();
+      err.textContent = m;
+      err.style.display = m ? "" : "none";
+    }
+    function openBindModal(projectId, channelName) {
+      const pid = String(projectId || "");
+      const ch = String(channelName || "");
+      if (!pid || !ch || pid === "overview") return;
+      BIND_UI.open = true;
+      BIND_UI.projectId = pid;
+      BIND_UI.channelName = ch;
+      bindModalError("");
+      const sub = document.getElementById("bindSub");
+      const sidIn = document.getElementById("bindSid");
+      const mask = document.getElementById("bindMask");
+      if (sub) sub.textContent = `项目: ${pid} · 通道: ${ch}`;
+      if (sidIn) {
+        const cur = getBinding(pid, ch);
+        sidIn.value = cur ? String(cur.session_id || "") : "";
+        setTimeout(() => { try { sidIn.focus(); } catch (_) {} }, 10);
+      }
+      if (mask) mask.classList.add("show");
+    }
+    function closeBindModal() {
+      BIND_UI.open = false;
+      const mask = document.getElementById("bindMask");
+      if (mask) mask.classList.remove("show");
+    }
+
+    function bucketKeyForStatus(status) {
+      const s = String(status || "");
+      if (s.includes("督办")) return "督办";
+      if (s.includes("进行中")) return "进行中";
+      if (s.includes("待开始")) return "待开始";
+      if (s.includes("待处理")) return "待处理";
+      if (s.includes("待验收")) return "待验收";
+      if (s.includes("待消费")) return "待消费";
+      if (DONE_STATUSES.has(s)) return "已完成";
+      if (PAUSE_STATUSES.has(s)) return "已暂停";
+      return "其他";
+    }
+
+    function toneForBucket(bucket) {
+      if (bucket === "督办") return "bad";
+      if (bucket === "进行中") return "warn";
+      if (bucket === "待处理") return "warn";
+      if (bucket === "待验收") return "warn";
+      if (bucket === "待消费") return "warn";
+      if (bucket === "已完成") return "good";
+      return "muted";
+    }
+
+    function chip(text, cls = "") {
+      return el("span", { class: "chip " + (cls || ""), text });
+    }
+
+    function metaPill(text, tone = "muted") {
+      return el("span", { class: "metapill " + (tone || "muted"), text: String(text || "") });
+    }
+
+    function statusLabel(st) {
+      const s = String(st || "").toLowerCase();
+      if (s === "done") return "完成";
+      if (s === "running") return "处理中";
+      if (s === "queued") return "排队";
+      if (s === "error") return "异常";
+      return "空闲";
+    }
+
+    function statusTone(st) {
+      const s = String(st || "").toLowerCase();
+      if (s === "done") return "good";
+      if (s === "running" || s === "queued") return "warn";
+      if (s === "error") return "bad";
+      return "muted";
+    }
+
+    function statusChip(st) {
+      return el("span", { class: "stchip " + statusTone(st), text: statusLabel(st) });
+    }
+
+    function chipLink(label, url) {
+      const u = String(url || "");
+      const b = el("button", { class: "chip link", text: String(label || "链接"), title: u || "" });
+      b.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (isHttpUrl(u)) openNew(u);
+        else if (u) copyText(u);
+      });
+      return b;
+    }
+
+    function pages() {
+      const out = [];
+      for (const p of (DATA.projects || [])) out.push({ id: p.id, name: p.name, color: p.color || "#2f6fed" });
+      return out;
+    }
+
+    function projectById(id) {
+      return (DATA.projects || []).find(x => x.id === id) || null;
+    }
+
+    function allItems() {
+      return DATA.items || [];
+    }
+
+    function itemsForProject(projectId) {
+      if (projectId === "overview") return allItems();
+      return allItems().filter(x => x.project_id === projectId);
+    }
+
+    function isDiscussionSpaceItem(it) {
+      const p = String((it && it.path) || "");
+      if (p.includes("/讨论空间/")) return true;
+      return String((it && it.type) || "") === "讨论";
+    }
+
+    function matchesQuery(it) {
+      const q = String(STATE.q || "").trim().toLowerCase();
+      if (!q) return true;
+      const hay = (String(it.title || "") + " " + String(it.code || "") + " " + String(it.owner || "") + " " + String(it.path || "")).toLowerCase();
+      return hay.includes(q);
+    }
+
+    function matchesStatus(it, statusFilter) {
+      const f = String(statusFilter || "待办");
+      if (f === "全部") return true;
+      const b = bucketKeyForStatus(it.status);
+      // 图二语义：进行中通常包含“督办”这类更高优先级子集
+      if (f === "进行中") return (b === "进行中" || b === "督办");
+      if (f === "已完成") return b === "已完成";
+      // 待办：所有未完成（含进行中/督办），但排除暂停
+      if (f === "待办") return !(b === "已完成" || b === "已暂停");
+      return true;
+    }
+
+    // Content filters (type/status/search) apply ONLY to the main list/detail, not to the left "channel directory" layer.
+    function filteredItemsForProject(projectId) {
+      let items = itemsForProject(projectId);
+      items = items.filter(matchesQuery);
+      if (STATE.type && STATE.type !== "全部") items = items.filter(x => x.type === STATE.type);
+      items = items.filter(x => matchesStatus(x, STATE.status));
+      return items;
+    }
+
+    function unionChannelNames(projectId) {
+      const s = currentChannelNameSet(projectId);
+      const filterHistorical = isQoreonV2Project(projectId);
+      for (const it of itemsForProject(projectId)) {
+        if (!it || !it.channel) continue;
+        const ch = canonicalChannelName(projectId, it.channel);
+        if (!ch) continue;
+        if (filterHistorical && s.size && !s.has(ch)) continue;
+        s.add(ch);
+      }
+      return Array.from(s).sort((a,b) => a.localeCompare(b, "zh-Hans-CN"));
+    }
+
+    function sessionForChannel(projectId, channelName) {
+      const proj = projectById(projectId);
+      if (!proj) return null;
+      const local = getBinding(projectId, channelName);
+      const list = Array.isArray(proj.channel_sessions) ? proj.channel_sessions : [];
+      const hit = list.find(x => String(x.name || "") === String(channelName));
+      if (hit) {
+        if (local && local.session_id) return { ...hit, session_id: local.session_id, source: "local" };
+        return hit;
+      }
+      const cfg = Array.isArray(proj.channels) ? proj.channels : [];
+      const hit2 = cfg.find(x => String(x.name || "") === String(channelName));
+      if (hit2) {
+        const base = { name: hit2.name, alias: hit2.alias || "", session_id: hit2.session_id || "", desc: hit2.desc || "", source: "config" };
+        if (local && local.session_id) return { ...base, session_id: local.session_id, source: "local" };
+        return base;
+      }
+      const base = { name: channelName, alias: "", session_id: "", desc: "", source: "" };
+      if (local && local.session_id) return { ...base, session_id: local.session_id, source: "local" };
+      return base;
+    }
+
+    function defaultChannelForProject(projectId) {
+      const names = unionChannelNames(projectId);
+      if (!names.length) return "";
+      // Default channel selection must be stable and must not change due to content filters.
+      const items = itemsForProject(projectId);
+      const byChan = new Map();
+      for (const n of names) byChan.set(n, []);
+      for (const it of items) {
+        const k = String(it.channel || "");
+        if (!byChan.has(k)) byChan.set(k, []);
+        byChan.get(k).push(it);
+      }
+      function score(list) {
+        let s = 0;
+        for (const it of list) {
+          const b = bucketKeyForStatus(it.status);
+          if (b === "督办") s += 1000;
+          else if (b === "进行中") s += 300;
+          else if (b === "待验收" || b === "待消费" || b === "待处理" || b === "待开始") s += 120;
+          else if (b === "其他") s += 20;
+          else if (b === "已暂停") s += 5;
+          else if (b === "已完成") s += 1;
+        }
+        return s;
+      }
+      let best = names[0];
+      let bestScore = -1;
+      for (const n of names) {
+        const sc = score(byChan.get(n) || []);
+        if (sc > bestScore) { bestScore = sc; best = n; }
+      }
+      return best;
+    }
+
+    function ensureChannel() {
+      if (STATE.project === "overview") { STATE.channel = ""; return; }
+      const names = unionChannelNames(STATE.project);
+      if (!names.length) { STATE.channel = ""; return; }
+      if (!STATE.channel || !names.includes(STATE.channel)) STATE.channel = defaultChannelForProject(STATE.project);
+    }
+
+    function buildTabs() {
+      const tabs = document.getElementById("tabs");
+      tabs.innerHTML = "";
+
+      const overview = el("button", { class: "tab", title: "进入项目总揽页" });
+      overview.appendChild(el("span", { class: "dot", style: "background:#2f6fed" }));
+      overview.appendChild(el("span", { class: "name", text: "总揽" }));
+      overview.addEventListener("click", () => { location.href = OVERVIEW_PAGE; });
+      tabs.appendChild(overview);
+
+      for (const p of pages()) {
+        const b = el("button", { class: "tab" + (STATE.project === p.id ? " active" : "") });
+        b.appendChild(el("span", { class: "dot", style: "background:" + (p.color || "#2f6fed") }));
+        b.appendChild(el("span", { class: "name", text: p.name }));
+        b.addEventListener("click", () => {
+          STATE.project = p.id;
+          ensureChannel();
+          STATE.selectedPath = "";
+          setHash();
+          render();
+        });
+        tabs.appendChild(b);
+      }
+    }
+
+    function countByBucket(items) {
+      const m = new Map();
+      for (const it of items) {
+        const k = bucketKeyForStatus(it.status);
+        m.set(k, (m.get(k) || 0) + 1);
+      }
+      return m;
+    }
+
+    function buildLeftList() {
+      const left = document.getElementById("leftList");
+      const asideTitle = document.getElementById("asideTitle");
+      const asideMeta = document.getElementById("asideMeta");
+      left.innerHTML = "";
+
+      if (STATE.panelMode === "conv") {
+        buildConversationLeftList();
+        return;
+      }
+
+      if (STATE.project === "overview") {
+        asideTitle.textContent = "项目";
+        // Left is a "parent layer": do NOT change its spec/counters due to main content filters.
+        asideMeta.innerHTML = "";
+        asideMeta.appendChild(metaPill("项目 " + (pages().length - 1), "muted"));
+        asideMeta.appendChild(metaPill("事项 " + allItems().length, "good"));
+        for (const p of pages().filter(x => x.id !== "overview")) {
+          const itsAll = itemsForProject(p.id);
+          const active = itsAll.filter(x => !DONE_STATUSES.has(x.status) && !PAUSE_STATUSES.has(x.status)).length;
+          const done = itemsForProject(p.id).filter(x => DONE_STATUSES.has(x.status)).length;
+          const btn = el("button", { class: "rowbtn" });
+          btn.appendChild(el("div", { class: "name", text: p.name }));
+          const chips = el("div", { class: "chips" });
+          chips.appendChild(chip("活跃:" + active, active ? "warn" : "muted"));
+          chips.appendChild(chip("已完成:" + done, done ? "good" : "muted"));
+          btn.appendChild(chips);
+          btn.addEventListener("click", () => {
+            STATE.project = p.id;
+            ensureChannel();
+            STATE.selectedPath = "";
+            setHash();
+            render();
+          });
+          left.appendChild(btn);
+        }
+        return;
+      }
+
+      asideTitle.textContent = "通道";
+      const total = itemsForProject(STATE.project).length;
+      asideMeta.innerHTML = "";
+      asideMeta.appendChild(metaPill("通道 " + unionChannelNames(STATE.project).length, "muted"));
+      asideMeta.appendChild(metaPill("事项 " + total, "good"));
+
+      const names = unionChannelNames(STATE.project);
+      for (const name of names) {
+        // Stable channel directory layer: counts are based on full data, not content filters.
+        const its = itemsForProject(STATE.project).filter(x => String(x.channel || "") === String(name));
+        const buckets = countByBucket(its);
+        const active = its.filter(x => !DONE_STATUSES.has(x.status) && !PAUSE_STATUSES.has(x.status)).length;
+        const sess = sessionForChannel(STATE.project, name);
+        const hasSession = !!(sess && sess.session_id && String(sess.session_id).trim());
+        const btn = el("button", { class: "rowbtn" + (STATE.channel === name ? " active" : "") });
+        btn.appendChild(el("div", { class: "name", text: name }));
+        const chips = el("div", { class: "chips" });
+        const d = buckets.get("督办") || 0;
+        const ing = buckets.get("进行中") || 0;
+        if (d) chips.appendChild(chip("督办:" + d, "bad"));
+        if (ing) chips.appendChild(chip("进行中:" + ing, "warn"));
+        chips.appendChild(chip("活跃:" + active, active ? "warn" : "muted"));
+        chips.appendChild(chip(hasSession ? "session:已配" : "session:未配", hasSession ? "good" : "muted"));
+        btn.appendChild(chips);
+        // Keep left list compact: session status already in chips; avoid long commands here.
+        btn.addEventListener("click", () => {
+          STATE.channel = name;
+          STATE.selectedPath = "";
+          setHash();
+          render();
+        });
+        left.appendChild(btn);
+      }
+    }
+
+    function panel(title, rightNode, bodyNodes) {
+      const p = el("section", { class: "panel" });
+      const h = el("div", { class: "ph" });
+      h.appendChild(el("h2", { text: title }));
+      if (rightNode) h.appendChild(rightNode);
+      p.appendChild(h);
+      const b = el("div", { class: "pb" });
+      for (const n of (bodyNodes || [])) b.appendChild(n);
+      p.appendChild(b);
+      return p;
+    }
+
+    function kvRow(k, v, btnText, btnAction, primary) {
+      const wrap = el("div", { class: "rowbtn", style: "cursor:default" });
+      const rt = el("div", { class: "rt" });
+      rt.appendChild(el("div", { class: "name", text: String(k || "") }));
+      if (btnText) {
+        const b = el("button", { class: "btn" + (primary ? " primary" : ""), text: btnText });
+        b.addEventListener("click", (e) => { e.stopPropagation(); btnAction && btnAction(); });
+        rt.appendChild(b);
+      }
+      wrap.appendChild(rt);
+      if (v) wrap.appendChild(el("div", { class: "mono", text: String(v) }));
+      return wrap;
+    }
+
+    function isItemVisible(it) {
+      if (!it || !it.path) return false;
+      const p = String(it.path);
+      return scopeItems().some(x => String(x.path) === p);
+    }
+
+    function selectedItem() {
+      if (!STATE.selectedPath) return null;
+      const p = String(STATE.selectedPath);
+      return allItems().find(x => String(x.path) === p) || null;
+    }
+
+    function chooseDefaultItem() {
+      if (STATE.project === "overview") {
+        const all = filteredItemsForProject("overview");
+        all.sort((a,b) => String(b.updated_at || "").localeCompare(String(a.updated_at || "")));
+        return all[0] || null;
+      }
+      if (STATE.view === "comms") {
+        const base = itemsForProject(STATE.project).filter(x => String(x.channel || "") === String(STATE.channel));
+        const comms = base.filter(isDiscussionSpaceItem).filter(matchesQuery);
+        comms.sort((a,b) => String(b.updated_at || "").localeCompare(String(a.updated_at || "")));
+        return comms[0] || null;
+      }
+      const base = filteredItemsForProject(STATE.project).filter(x => String(x.channel || "") === String(STATE.channel));
+      base.sort((a,b) => {
+        const oa = STATUS_ORDER.indexOf(bucketKeyForStatus(a.status));
+        const ob = STATUS_ORDER.indexOf(bucketKeyForStatus(b.status));
+        if (oa !== ob) return oa - ob;
+        return String(b.updated_at || "").localeCompare(String(a.updated_at || ""));
+      });
+      return base[0] || null;
+    }
+
+    function ensureSelection() {
+      if (STATE.panelMode === "conv") return;
+      const cur = selectedItem();
+      if (cur && isItemVisible(cur)) return;
+      const d = chooseDefaultItem();
+      if (d) STATE.selectedPath = String(d.path);
+    }
+
+    function setSelectedPath(p) {
+      if (STATE.panelMode === "conv") return;
+      STATE.selectedPath = String(p || "");
+      try { localStorage.setItem("taskDashboard.selectedPath", STATE.selectedPath); } catch (_) {}
+      renderDetail(selectedItem());
+      refreshCCB();
+      updateSelectionUI();
+    }
+
+    function updateSelectionUI() {
+      const p = String(STATE.selectedPath || "");
+      for (const n of document.querySelectorAll("[data-path]")) {
+        if ((n.getAttribute("data-path") || "") === p) n.classList.add("active");
+        else n.classList.remove("active");
+      }
+    }
+
+    function chipButton(label, active, onClick) {
+      const b = el("button", { class: "chipbtn" + (active ? " active" : ""), text: label });
+      b.addEventListener("click", onClick);
+      return b;
+    }
+
+    function typeOptions() {
+      const preferred = ["任务", "问题", "反馈", "答复", "讨论"];
+      const types = Array.from(new Set(allItems().map(x => String(x.type || "")).filter(Boolean)));
+      const extra = types.filter(t => !preferred.includes(t)).sort((a,b) => a.localeCompare(b, "zh-Hans-CN"));
+      return ["全部", ...preferred.filter(t => types.includes(t)), ...extra];
+    }
+
+    function statusOptions() {
+      // 对齐图二：少而好用
+      return ["待办", "进行中", "已完成", "全部"];
+    }
+
+    function scopeItems() {
+      if (STATE.view === "comms") {
+        if (STATE.project === "overview") return [];
+        if (!STATE.channel) return [];
+        const base = itemsForProject(STATE.project).filter(x => String(x.channel || "") === String(STATE.channel));
+        const comms = base.filter(isDiscussionSpaceItem).filter(matchesQuery);
+        comms.sort((a,b) => String(b.updated_at || "").localeCompare(String(a.updated_at || "")));
+        return comms;
+      }
+      if (STATE.project === "overview") return filteredItemsForProject("overview");
+      if (!STATE.channel) return [];
+      return filteredItemsForProject(STATE.project).filter(x => String(x.channel || "") === String(STATE.channel));
+    }
+
+    function sortItemsInList(items) {
+      const arr = items.slice();
+      if (STATE.view === "comms") {
+        arr.sort((a,b) => String(b.updated_at || "").localeCompare(String(a.updated_at || "")));
+      } else {
+        arr.sort((a,b) => {
+          const oa = STATUS_ORDER.indexOf(bucketKeyForStatus(a.status));
+          const ob = STATUS_ORDER.indexOf(bucketKeyForStatus(b.status));
+          if (oa !== ob) return oa - ob;
+          return String(b.updated_at || "").localeCompare(String(a.updated_at || ""));
+        });
+      }
+      return arr;
+    }
+
+    function buildMainList() {
+      const proj = projectById(STATE.project);
+      const mainMeta = document.getElementById("mainMeta");
+      const bar = document.getElementById("filterBar");
+      const list = document.getElementById("fileList");
+
+      bar.innerHTML = "";
+      list.innerHTML = "";
+
+      if (STATE.panelMode === "conv") {
+        if (mainMeta) {
+          mainMeta.textContent = `view=项目对话 · scope=${(proj ? proj.name : STATE.project) || "-"} · generated_at=${DATA.generated_at}`;
+        }
+        return;
+      }
+
+      let items = scopeItems();
+      items = sortItemsInList(items);
+
+      const scopeLabel = (STATE.project === "overview")
+        ? "总览（跨项目）"
+        : `项目:${proj ? proj.name : STATE.project} · 通道:${STATE.channel || "-"}`;
+
+      const viewLabel = (STATE.view === "comms") ? "沟通通道" : "工作任务";
+      if (mainMeta) mainMeta.textContent = `view=${viewLabel} · scope=${scopeLabel} · generated_at=${DATA.generated_at} · items=${items.length}`;
+
+      if (STATE.view === "work") {
+        const typeRow = el("div", { class: "filterrow" });
+        for (const t of typeOptions()) {
+          typeRow.appendChild(chipButton(t === "全部" ? "全部" : t, STATE.type === t, () => {
+            STATE.type = t;
+            STATE.selectedPath = "";
+            setHash();
+            render();
+          }));
+        }
+
+        const statusRow = el("div", { class: "filterrow" });
+        for (const s of statusOptions()) {
+          statusRow.appendChild(chipButton(s, STATE.status === s, () => {
+            STATE.status = s;
+            STATE.selectedPath = "";
+            setHash();
+            render();
+          }));
+        }
+
+        bar.appendChild(typeRow);
+        bar.appendChild(statusRow);
+      } else {
+        const info = el("div", { class: "filterrow" });
+        info.appendChild(chip("仅加载：讨论空间", "muted"));
+        info.appendChild(chip("排序：按更新时间倒序（最新在上）", "muted"));
+        bar.appendChild(info);
+      }
+
+      if (!items.length) {
+        list.appendChild(el("div", { class: "hint", text: "当前筛选条件下没有匹配的事项。" }));
+        return;
+      }
+
+      for (const it of items.slice(0, 260)) {
+        const p = String(it.path || "");
+        const row = el("div", { class: "frow" + (p && p === String(STATE.selectedPath || "") ? " active" : ""), "data-path": p });
+        row.appendChild(el("div", { class: "t", text: shortTitle(it.title) }));
+        const m = el("div", { class: "m" });
+        const b = bucketKeyForStatus(it.status);
+        if (STATE.view === "work") {
+          m.appendChild(chip(b, toneForBucket(b)));
+          if (it.type) m.appendChild(chip(it.type, "muted"));
+        } else {
+          m.appendChild(chip("讨论", "muted"));
+        }
+        if (STATE.project === "overview") m.appendChild(chip(it.project_name || it.project_id, "muted"));
+        if (it.channel) m.appendChild(chip(it.channel, "muted"));
+        if (it.code) m.appendChild(chip(it.code, "muted"));
+        if (it.owner) m.appendChild(chip("负责人:" + it.owner, "muted"));
+        if (it.updated_at) m.appendChild(chip("更新:" + it.updated_at, "muted"));
+        row.appendChild(m);
+        row.appendChild(el("div", { class: "p", text: p }));
+        row.addEventListener("click", () => setSelectedPath(it.path));
+        list.appendChild(row);
+      }
+    }
+
+    function renderDetail(it) {
+      const titleEl = document.getElementById("detailTitle");
+      const subEl = document.getElementById("detailSub");
+      const metaEl = document.getElementById("detailMeta");
+      const exEl = document.getElementById("detailExcerpt");
+      const moreEl = document.getElementById("detailMore");
+      const pathBar = document.getElementById("detailPathBar");
+      const pathText = document.getElementById("detailPathText");
+      const revealBtn = document.getElementById("detailRevealBtn");
+      const convWrap = document.getElementById("convWrap");
+
+      if (STATE.panelMode === "conv") {
+        if (convWrap) convWrap.classList.add("show");
+        renderConversationDetail();
+        return;
+      }
+      if (convWrap) convWrap.classList.remove("show");
+      if (subEl) subEl.textContent = "";
+
+      metaEl.innerHTML = "";
+      moreEl.innerHTML = "";
+
+      const scopeProjectId = it ? String(it.project_id || "") : String(STATE.project || "");
+      const scopeChannel = it ? String(it.channel || "") : String(STATE.channel || "");
+      const scopeProject = (scopeProjectId && scopeProjectId !== "overview") ? projectById(scopeProjectId) : null;
+      const sess = (scopeProjectId && scopeChannel && scopeProjectId !== "overview") ? sessionForChannel(scopeProjectId, scopeChannel) : null;
+      const sid = sess && sess.session_id ? String(sess.session_id).trim() : "";
+      const resumeCmd = sid ? (`codex resume ${sid}`) : "";
+
+      // Path bar is bound to the selected item only (not just channel scope).
+      if (pathBar) pathBar.style.display = "none";
+      if (pathText) pathText.textContent = "";
+      if (revealBtn) { revealBtn.disabled = true; revealBtn.onclick = () => {}; }
+
+      if (!it) {
+        titleEl.textContent = scopeChannel ? `未选择事项（${scopeChannel}）` : "未选择事项";
+        if (subEl) subEl.textContent = "";
+        setMarkdown(exEl, "", "(点击列表任意行，在此查看详情)");
+
+        // 项目链接：做成顶部 chips，不占大面积
+        if (scopeProject && Array.isArray(scopeProject.links) && scopeProject.links.length) {
+          metaEl.appendChild(chip(scopeProject.name || scopeProject.id, "muted"));
+          for (const lk of scopeProject.links.slice(0, 6)) {
+            metaEl.appendChild(chipLink(lk.label || "链接", lk.url || ""));
+          }
+        }
+        return;
+      }
+
+      titleEl.textContent = shortTitle(it.title);
+      if (subEl) subEl.textContent = "";
+      const b = bucketKeyForStatus(it.status);
+      if (STATE.project === "overview") metaEl.appendChild(chip(it.project_name || it.project_id, "muted"));
+      metaEl.appendChild(chip(it.channel || "未归类", "muted"));
+      metaEl.appendChild(chip(b, toneForBucket(b)));
+      if (it.type) metaEl.appendChild(chip(it.type, "muted"));
+      if (it.code) metaEl.appendChild(chip(it.code, "muted"));
+      if (it.owner) metaEl.appendChild(chip("负责人:" + it.owner, "muted"));
+      if (it.due) metaEl.appendChild(chip("截止:" + it.due, "warn"));
+      if (it.updated_at) metaEl.appendChild(chip("更新:" + it.updated_at, "muted"));
+      if (scopeProject && Array.isArray(scopeProject.links) && scopeProject.links.length) {
+        for (const lk of scopeProject.links.slice(0, 6)) {
+          metaEl.appendChild(chipLink(lk.label || "链接", lk.url || ""));
+        }
+      }
+
+      setMarkdown(exEl, it.excerpt || "", "(empty)");
+
+      const p = String(it.path || "");
+      if (p && pathBar && pathText && revealBtn) {
+        pathBar.style.display = "";
+        pathText.textContent = p;
+        pathText.title = "点击复制路径";
+        pathText.onclick = () => copyText(p);
+
+        revealBtn.disabled = false;
+        revealBtn.onclick = async (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          try {
+            const ok = await apiHealth();
+            if (!ok) return;
+            await fetch("/api/fs/reveal", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ path: p }),
+            });
+          } catch (_) {}
+        };
+      }
+
+      if (!sid) {
+        if (scopeProjectId !== "overview" && scopeChannel) moreEl.appendChild(el("div", { class: "hint", text: "该通道未绑定 session_id：可在右侧「通道对话（CCB）」处点击【绑定对话】快速绑定（仅保存在本机浏览器），建议后续同步到 config.toml 以便团队一致。" }));
+      }
+    }
+
+    function layoutLabel() {
+      if (STATE.layout === "right") return "右侧";
+      if (STATE.layout === "bottom") return "底部";
+      return "自动";
+    }
+
+    function applyPanelMode() {
+      document.body.classList.toggle("panel-conv", STATE.panelMode === "conv");
+      const opsBtn = document.getElementById("panelOpsBtn");
+      const convBtn = document.getElementById("panelConvBtn");
+      if (opsBtn) {
+        opsBtn.classList.toggle("active", STATE.panelMode !== "conv");
+        opsBtn.setAttribute("aria-selected", STATE.panelMode !== "conv" ? "true" : "false");
+      }
+      if (convBtn) {
+        convBtn.classList.toggle("active", STATE.panelMode === "conv");
+        convBtn.setAttribute("aria-selected", STATE.panelMode === "conv" ? "true" : "false");
+      }
+    }
+
+    function applyLayout() {
+      document.body.classList.toggle("force-right", STATE.layout === "right");
+      document.body.classList.toggle("force-bottom", STATE.layout === "bottom");
+      const btn = document.getElementById("layoutBtn");
+      if (btn) {
+        btn.textContent = "布局: " + layoutLabel();
+        btn.classList.toggle("primary", STATE.layout !== "auto");
+        btn.disabled = STATE.panelMode === "conv";
+      }
+    }
+
+    const CCB = {
+      lastChannelId: "",
+      busy: false,
+      pollTimer: 0,
+      runs: [],
+      expanded: new Set(),
+      detailMap: Object.create(null),
+    };
+
+    const PCONV = {
+      lastProjectId: "",
+      busy: false,
+      pollTimer: 0,
+      sessions: [],
+      runsBySession: Object.create(null),
+      sessionTimelineMap: Object.create(null),
+      projectRuns: [],
+      detailMap: Object.create(null),
+      debugExpanded: new Set(),
+      bubbleExpanded: new Set(),
+      sending: false,
+      optimistic: null,
+      lastRefreshAt: "",
+      timelineRequestSeq: 0,
+      timelineLoadingKey: "",
+    };
+
+    function stopCCBPoll() {
+      if (CCB.pollTimer) {
+        clearTimeout(CCB.pollTimer);
+        CCB.pollTimer = 0;
+      }
+    }
+
+    function scheduleCCBPoll(ms = 1500) {
+      stopCCBPoll();
+      CCB.pollTimer = setTimeout(() => {
+        refreshCCB();
+      }, ms);
+    }
+
+    function stopConversationPoll() {
+      if (PCONV.pollTimer) {
+        clearTimeout(PCONV.pollTimer);
+        PCONV.pollTimer = 0;
+      }
+    }
+
+    function scheduleConversationPoll(ms = 5000) {
+      stopConversationPoll();
+      PCONV.pollTimer = setTimeout(() => {
+        refreshConversationPanel();
+      }, ms);
+    }
+
+    function ensureRunExpanded(runId) {
+      const id = String(runId || "");
+      if (!id) return;
+      CCB.expanded.add(id);
+      if (CCB.detailMap[id]) return;
+      CCB.detailMap[id] = {
+        loading: true,
+        message: "",
+        process: "",
+        last: "",
+        partial: "",
+        errorHint: "",
+        agentMessages: [],
+        status: "",
+        startedAt: "",
+        finishedAt: "",
+        runError: "",
+        error: "",
+      };
+      loadRun(id).then((full) => {
+        CCB.detailMap[id] = {
+          loading: false,
+          message: String((full && full.message) || ""),
+          process: String((full && full.logTail) || ""),
+          last: String((full && full.lastMessage) || ""),
+          partial: String((full && full.partialMessage) || ""),
+          errorHint: String((full && full.errorHint) || ""),
+          agentMessages: Array.isArray(full && full.agentMessages) ? full.agentMessages : [],
+          status: String((full && full.run && full.run.status) || ""),
+          startedAt: String((full && full.run && full.run.startedAt) || ""),
+          finishedAt: String((full && full.run && full.run.finishedAt) || ""),
+          runError: String((full && full.run && full.run.error) || ""),
+          error: "",
+        };
+        renderRuns(CCB.runs);
+      }).catch((e) => {
+        CCB.detailMap[id] = {
+          loading: false,
+          message: "",
+          process: "",
+          last: "",
+          partial: "",
+          errorHint: "",
+          agentMessages: [],
+          status: "",
+          startedAt: "",
+          finishedAt: "",
+          runError: "",
+          error: String(e || "load failed"),
+        };
+        renderRuns(CCB.runs);
+      });
+    }
+
+    function collapseRun(runId) {
+      const id = String(runId || "");
+      if (!id) return;
+      CCB.expanded.delete(id);
+      renderRuns(CCB.runs);
+    }
+
+    async function apiHealth() {
+      try {
+        const r = await fetch("/__health", { cache: "no-store" });
+        if (!r.ok) return false;
+        const j = await r.json();
+        return !!(j && j.ok);
+      } catch (_) {
+        return false;
+      }
+    }
+
+    function currentChannelCtx(it) {
+      const projectId = it ? String(it.project_id || "") : String(STATE.project || "");
+      const channelName = it ? String(it.channel || "") : String(STATE.channel || "");
+      const sess = (projectId && channelName && projectId !== "overview") ? sessionForChannel(projectId, channelName) : null;
+      const sid = sess && sess.session_id ? String(sess.session_id).trim() : "";
+      return { projectId, channelName, session: sess, sessionId: sid, channelId: projectId + "::" + channelName };
+    }
+
+    async function loadRuns(params = {}) {
+      const qs = new URLSearchParams();
+      qs.set("limit", String(params.limit || 30));
+      if (params.channelId) qs.set("channelId", String(params.channelId));
+      if (params.projectId) qs.set("projectId", String(params.projectId));
+      if (params.sessionId) qs.set("sessionId", String(params.sessionId));
+      const url = "/api/codex/runs?" + qs.toString();
+      const r = await fetch(url, { cache: "no-store" });
+      if (!r.ok) throw new Error("runs fetch failed");
+      return await r.json();
+    }
+
+    async function loadRun(id) {
+      const r = await fetch("/api/codex/run/" + encodeURIComponent(String(id || "")), { cache: "no-store" });
+      if (!r.ok) throw new Error("run fetch failed");
+      return await r.json();
+    }
+
+    function renderRuns(runs) {
+      const box = document.getElementById("ccbRuns");
+      CCB.runs = Array.isArray(runs) ? runs.slice() : [];
+      box.innerHTML = "";
+      if (!runs || !runs.length) {
+        box.appendChild(el("div", { class: "hint", text: "暂无回溯记录（从这里发送一条消息开始）。" }));
+        return;
+      }
+      for (const r of runs.slice(0, 20)) {
+        const row = el("div", { class: "runrow" });
+        const top = el("div", { class: "top" });
+        top.appendChild(el("div", { class: "id", text: (r.createdAt || "") + " · " + (r.id || "") }));
+        const st = String(r.status || "");
+        top.appendChild(chip(st, st === "done" ? "good" : (st === "error" ? "bad" : "warn")));
+        row.appendChild(top);
+        const msg = String(r.messagePreview || "").trim();
+        if (msg) row.appendChild(el("div", { class: "msg", text: "msg: " + msg }));
+        const err = String(r.error || "").trim();
+        if (st === "error") {
+          row.appendChild(el("div", { class: "err", text: "error: " + (err || "执行失败（未返回具体错误文本）") }));
+          const eh = String(r.errorHint || "").trim();
+          if (eh) row.appendChild(el("div", { class: "hint", text: eh }));
+        }
+        const partial = String(r.partialPreview || "").trim();
+        if (partial) {
+          const pv = el("div", { class: "partial md" });
+          setMarkdown(pv, partial);
+          row.appendChild(pv);
+        }
+        const amCount = Number(r.agentMessagesCount || 0);
+        if (amCount > 0) row.appendChild(el("div", { class: "hint", text: "已回捞过程消息 " + amCount + " 条" }));
+        const last = String(r.lastPreview || "");
+        if (last) {
+          const lv = el("div", { class: "last reply" });
+          setMarkdown(lv, last);
+          row.appendChild(lv);
+        }
+        const log = String(r.logPreview || "").trim();
+        if (log) {
+          const stLabel = (st === "queued" || st === "running") ? "process" : "log";
+          row.appendChild(el("div", { class: "last", text: stLabel + ":\n" + log }));
+        } else if (st === "error") {
+          row.appendChild(el("div", { class: "hint", text: "未采集到过程日志（可能是任务启动后进程提前退出，或该记录产生于旧版本服务）。" }));
+        }
+        const btns = el("div", { class: "chips", style: "justify-content:flex-end; gap:8px" });
+        if (st === "error") {
+          const recoverBtn = el("button", { class: "btn", text: "回收结果" });
+          recoverBtn.addEventListener("click", async (e) => {
+            e.stopPropagation();
+            recoverBtn.disabled = true;
+            try {
+              await recoverRun(r);
+            } finally {
+              recoverBtn.disabled = false;
+            }
+          });
+          btns.appendChild(recoverBtn);
+          const retryBtn = el("button", { class: "btn", text: "重试" });
+          retryBtn.addEventListener("click", async (e) => {
+            e.stopPropagation();
+            retryBtn.disabled = true;
+            try {
+              await retryRun(r);
+            } finally {
+              retryBtn.disabled = false;
+            }
+          });
+          btns.appendChild(retryBtn);
+        }
+        const isExpanded = CCB.expanded.has(String(r.id || ""));
+        const b = el("button", { class: "btn", text: isExpanded ? "收起" : "展开" });
+        b.addEventListener("click", (e) => {
+          e.stopPropagation();
+          const rid = String(r.id || "");
+          if (!rid) return;
+          if (CCB.expanded.has(rid)) collapseRun(rid);
+          else ensureRunExpanded(rid);
+        });
+        btns.appendChild(b);
+        row.appendChild(btns);
+
+        if (isExpanded) {
+          const d = CCB.detailMap[String(r.id || "")] || {
+            loading: true,
+            message: "",
+            process: "",
+            last: "",
+            partial: "",
+            errorHint: "",
+            agentMessages: [],
+            status: "",
+            startedAt: "",
+            finishedAt: "",
+            runError: "",
+            error: "",
+          };
+          if (d.loading) {
+            row.appendChild(el("div", { class: "hint", text: "加载详细过程中…" }));
+          } else if (d.error) {
+            row.appendChild(el("div", { class: "hint", text: "加载失败: " + d.error }));
+          } else {
+            const metaText = "status: " + String(d.status || "") +
+              (d.startedAt ? ("\nstarted: " + String(d.startedAt)) : "") +
+              (d.finishedAt ? ("\nfinished: " + String(d.finishedAt)) : "");
+            const errFull = String(d.runError || "").trim();
+            const processText = String(d.process || "");
+            let fullText = "meta:\n" + metaText + "\n\n";
+            const eh = String(d.errorHint || "").trim();
+            if (eh) fullText += "hint:\n" + eh + "\n\n";
+            if (errFull) fullText += "error:\n" + errFull + "\n\n";
+            const partialFull = String(d.partial || "").trim();
+            if (partialFull) fullText += "partial:\n" + partialFull + "\n\n";
+            const am = Array.isArray(d.agentMessages) ? d.agentMessages : [];
+            if (am.length) fullText += "agent_messages:\n- " + am.join("\n- ") + "\n\n";
+            fullText += "msg:\n" + String(d.message || "") + "\n\nprocess:\n" + processText + "\n\nlast:\n" + String(d.last || "");
+            row.appendChild(el("div", { class: "last", text: fullText }));
+          }
+        }
+        box.appendChild(row);
+      }
+    }
+
+    function configuredProjectConversations(projectId) {
+      const proj = projectById(projectId);
+      // Use sessionForChannel so local bindings are also included.
+      const names = unionChannelNames(projectId);
+      const list = [];
+      for (const n of names) {
+        const s = sessionForChannel(projectId, n);
+        if (s) list.push(s);
+      }
+      const map = new Map();
+      for (const s of list) {
+        const sid = String((s && s.session_id) || "").trim();
+        if (!looksLikeSessionId(sid)) continue;
+        const ch = String((s && s.name) || "").trim();
+        const alias = String((s && s.alias) || "").trim();
+        let it = map.get(sid);
+        if (!it) {
+          it = {
+            sessionId: sid,
+            alias: alias || ch || sid,
+            channels: [],
+            primaryChannel: ch || "",
+            displayChannel: ch || alias || sid,
+            lastActiveAt: "",
+            lastStatus: "idle",
+            lastPreview: "",
+            lastSpeaker: "assistant",
+            runCount: 0,
+          };
+          map.set(sid, it);
+        }
+        if (ch && !it.channels.includes(ch)) it.channels.push(ch);
+        if (!it.primaryChannel && ch) it.primaryChannel = ch;
+        if (!it.displayChannel && ch) it.displayChannel = ch;
+        if (!it.alias && alias) it.alias = alias;
+      }
+      return Array.from(map.values());
+    }
+
+    function buildConversationLeftList() {
+      const left = document.getElementById("leftList");
+      const asideTitle = document.getElementById("asideTitle");
+      const asideMeta = document.getElementById("asideMeta");
+      left.innerHTML = "";
+      asideTitle.textContent = "项目对话";
+
+      if (STATE.project === "overview") {
+        asideMeta.innerHTML = "";
+        asideMeta.appendChild(metaPill("请选择具体项目", "warn"));
+        left.appendChild(el("div", { class: "hint", text: "总揽模式下不展示会话，请先选择具体项目。" }));
+        return;
+      }
+
+      const sessions = Array.isArray(PCONV.sessions) ? PCONV.sessions : [];
+      const activeRuns = (Array.isArray(PCONV.projectRuns) ? PCONV.projectRuns : []).filter(x => {
+        const s = String((x && x.status) || "");
+        return s === "queued" || s === "running";
+      }).length;
+      asideMeta.innerHTML = "";
+      asideMeta.appendChild(metaPill("会话 " + sessions.length, "muted"));
+      asideMeta.appendChild(metaPill("运行 " + activeRuns, activeRuns > 0 ? "warn" : "good"));
+      asideMeta.appendChild(metaPill("刷新 " + (PCONV.lastRefreshAt || "-"), "muted"));
+
+      if (!sessions.length) {
+        left.appendChild(el("div", { class: "hint", text: "当前项目没有可用会话（请先在配置里维护 session_id）。" }));
+        return;
+      }
+
+      for (const s of sessions) {
+        const sid = String(s.sessionId || "");
+        const st = String(s.lastStatus || "idle");
+        const row = el("button", { class: "rowbtn" + (STATE.selectedSessionId === sid ? " active" : "") });
+        row.appendChild(el("div", { class: "name", text: String(s.displayChannel || s.primaryChannel || s.alias || shortId(sid)) }));
+        row.appendChild(el("div", { class: "mono", text: "session_id: " + sid }));
+        const chips = el("div", { class: "chips" });
+        chips.appendChild(statusChip(st));
+        chips.appendChild(el("span", { class: "stchip muted", text: "记录 " + Number(s.runCount || 0) }));
+        if (s.lastActiveAt) chips.appendChild(el("span", { class: "stchip muted", text: "活跃 " + compactDateTime(s.lastActiveAt) }));
+        row.appendChild(chips);
+        row.appendChild(el("div", { class: "preview", text: conversationPreviewLine(s) }));
+        row.addEventListener("click", () => setSelectedSessionId(sid, true));
+        left.appendChild(row);
+      }
+    }
+
+    function setSelectedSessionId(sessionId, forceScroll = false) {
+      const sid = String(sessionId || "").trim();
+      if (!sid) return;
+      const changed = sid !== String(STATE.selectedSessionId || "");
+      STATE.selectedSessionId = sid;
+      try { localStorage.setItem("taskDashboard.selectedSessionId", STATE.selectedSessionId); } catch (_) {}
+      buildConversationLeftList();
+      renderConversationDetail(changed || forceScroll);
+      if (STATE.panelMode === "conv" && STATE.project && STATE.project !== "overview") {
+        refreshConversationTimeline(String(STATE.project || ""), sid, changed || forceScroll);
+      }
+      setHash();
+    }
+
+    function currentConversationCtx() {
+      if (STATE.project === "overview") return null;
+      const sid = String(STATE.selectedSessionId || "").trim();
+      if (!sid) return null;
+      const sessions = Array.isArray(PCONV.sessions) ? PCONV.sessions : [];
+      const cur = sessions.find(x => String(x.sessionId || "") === sid) || null;
+      if (!cur) return null;
+      return {
+        projectId: String(STATE.project || ""),
+        sessionId: sid,
+        channelName: String(cur.primaryChannel || ""),
+        displayChannel: String(cur.displayChannel || cur.primaryChannel || cur.alias || ""),
+        alias: String(cur.alias || ""),
+      };
+    }
+
+    function maybeStickConversationBottom(force = false) {
+      const box = document.getElementById("convTimeline");
+      if (!box) return;
+      const nearBottom = (box.scrollHeight - box.scrollTop - box.clientHeight) < 80;
+      if (force || nearBottom) box.scrollTop = box.scrollHeight;
+    }
+
+    function ensureConversationRunDetail(runId) {
+      const rid = String(runId || "");
+      if (!rid) return;
+      if (PCONV.detailMap[rid]) return;
+      PCONV.detailMap[rid] = { loading: true, error: "" };
+      loadRun(rid).then((full) => {
+        PCONV.detailMap[rid] = {
+          loading: false,
+          full,
+          error: "",
+        };
+        renderConversationDetail();
+      }).catch((e) => {
+        PCONV.detailMap[rid] = { loading: false, full: null, error: String(e || "load failed") };
+        renderConversationDetail();
+      });
+    }
+
+    function shouldFoldBubble(text) {
+      const src = String(text || "");
+      if (!src.trim()) return false;
+      const lineCount = src.split(/\r\n?|\n/).length;
+      return src.length > 360 || lineCount > 10;
+    }
+
+    function appendConversationBubble(row, role, content, fallback, bubbleKey, opts = {}) {
+      const txt = String(content || "");
+      const bubble = el("div", { class: "mbubble md" });
+      setMarkdown(bubble, txt, fallback || "");
+      const foldable = shouldFoldBubble(txt || fallback || "");
+      const expanded = PCONV.bubbleExpanded.has(String(bubbleKey || ""));
+      const runId = String(opts.runId || "");
+      const isUserBubble = String(role || "") === "user";
+      if (expanded && runId && !PCONV.detailMap[runId]) ensureConversationRunDetail(runId);
+      if (foldable && !expanded) bubble.classList.add("collapsed");
+      row.appendChild(bubble);
+      if (!foldable) return;
+      const btn = el("button", {
+        class: "btn textbtn bubble-expand-toggle" + (isUserBubble ? " user-bubble-expand-toggle" : ""),
+        text: expanded
+          ? (isUserBubble ? "收起用户消息" : "收起正文")
+          : (isUserBubble ? "查看全部用户消息" : "展开全文"),
+        title: expanded
+          ? (isUserBubble ? "收起当前用户消息" : "收起正文")
+          : (isUserBubble ? "查看当前用户消息完整内容" : "展开全文"),
+      });
+      btn.addEventListener("click", () => {
+        const key = String(bubbleKey || "");
+        if (!key) return;
+        if (PCONV.bubbleExpanded.has(key)) PCONV.bubbleExpanded.delete(key);
+        else {
+          PCONV.bubbleExpanded.add(key);
+          if (runId) ensureConversationRunDetail(runId);
+        }
+        renderConversationDetail();
+      });
+      if (opts.opsContainer) {
+        opts.opsContainer.appendChild(btn);
+      } else {
+        const ops = el("div", { class: "bubbleops " + (role === "user" ? "user" : "assistant") });
+        ops.appendChild(btn);
+        row.appendChild(ops);
+      }
+    }
+
+    function renderConversationDetail(forceScroll = false) {
+      const titleEl = document.getElementById("detailTitle");
+      const subEl = document.getElementById("detailSub");
+      const hintEl = document.getElementById("convHint");
+      const timeline = document.getElementById("convTimeline");
+      const input = document.getElementById("convMsg");
+      const sendBtn = document.getElementById("convSendBtn");
+      const pathBar = document.getElementById("detailPathBar");
+      const basePlaceholder = "输入要发给该会话 Codex 的消息（Enter 发送）";
+      if (pathBar) pathBar.style.display = "none";
+      if (!titleEl || !timeline || !input || !sendBtn || !hintEl || !subEl) return;
+
+      const wasNearBottom = (timeline.scrollHeight - timeline.scrollTop - timeline.clientHeight) < 80;
+
+      timeline.innerHTML = "";
+      if (STATE.project === "overview") {
+        titleEl.textContent = "项目对话";
+        subEl.textContent = "";
+        hintEl.textContent = "";
+        input.placeholder = "请先选择具体项目，再发送会话消息";
+        input.disabled = true;
+        sendBtn.disabled = true;
+        timeline.appendChild(el("div", { class: "hint", text: "总揽模式不展示会话详情。" }));
+        return;
+      }
+
+      const ctx = currentConversationCtx();
+      if (!ctx) {
+        titleEl.textContent = "项目对话";
+        subEl.textContent = "";
+        hintEl.textContent = "";
+        input.placeholder = "当前项目没有可用会话，请先维护 session_id";
+        input.disabled = true;
+        sendBtn.disabled = true;
+        timeline.appendChild(el("div", { class: "hint", text: "无可用会话。" }));
+        return;
+      }
+
+      titleEl.textContent = String(ctx.displayChannel || ctx.channelName || ctx.alias || "会话") + " · " + String(ctx.sessionId || "");
+      subEl.textContent = "";
+      hintEl.textContent = "";
+      input.placeholder = basePlaceholder;
+      input.disabled = false;
+      sendBtn.disabled = PCONV.sending;
+      sendBtn.textContent = PCONV.sending ? "发送中..." : "发送";
+
+      const timelineKey = String(STATE.project || "") + "::" + String(ctx.sessionId || "");
+      const runSource = Array.isArray(PCONV.sessionTimelineMap[timelineKey])
+        ? PCONV.sessionTimelineMap[timelineKey]
+        : (PCONV.runsBySession[ctx.sessionId] || []);
+      const runs = runSource.slice().sort((a, b) => {
+        const ta = toTimeNum(a.createdAt);
+        const tb = toTimeNum(b.createdAt);
+        if (ta >= 0 && tb >= 0 && ta !== tb) return ta - tb;
+        return String(a.createdAt || "").localeCompare(String(b.createdAt || ""));
+      });
+      const timelineLoading = PCONV.timelineLoadingKey === timelineKey;
+
+      if (!runs.length && !(PCONV.optimistic && PCONV.optimistic.sessionId === ctx.sessionId)) {
+        timeline.appendChild(el("div", { class: "hint", text: timelineLoading ? "加载会话记录中..." : "该会话暂无消息记录，可直接在下方发送消息。" }));
+      }
+
+      for (const r of runs) {
+        const rid = String(r.id || "");
+        const st = String(r.status || "");
+        const d = PCONV.detailMap[rid] || null;
+        const userText = (d && d.full && d.full.message) ? String(d.full.message) : String(r.messagePreview || "");
+        const assistantText = (d && d.full && d.full.lastMessage) ? String(d.full.lastMessage) : String(r.lastPreview || r.partialPreview || "");
+        const err = String(r.error || "").trim();
+        const hint = String(r.errorHint || "").trim();
+
+        const userRow = el("div", { class: "msgrow user" });
+        const userMeta = el("div", { class: "msgmeta" });
+        userMeta.appendChild(chip("我", "muted"));
+        if (r.createdAt) userMeta.appendChild(el("span", { text: imTime(r.createdAt) }));
+        userRow.appendChild(userMeta);
+        appendConversationBubble(userRow, "user", userText || "", "(空消息)", rid + ":user");
+        timeline.appendChild(userRow);
+
+        const aiRow = el("div", { class: "msgrow assistant" });
+        const aiMeta = el("div", { class: "msgmeta" });
+        aiMeta.appendChild(chip("Codex", "muted"));
+        aiMeta.appendChild(statusChip(st || "idle"));
+        if (r.createdAt) aiMeta.appendChild(el("span", { text: imTime(r.createdAt) }));
+        if (st === "running" || st === "queued") aiMeta.appendChild(el("span", { class: "dotspin" }));
+        aiRow.appendChild(aiMeta);
+        const ops = el("div", { class: "chips", style: "justify-content:flex-start; gap:8px" });
+        appendConversationBubble(
+          aiRow,
+          "assistant",
+          assistantText || "",
+          ((st === "running" || st === "queued") ? "处理中..." : "(暂无回复)"),
+          rid + ":assistant",
+          { opsContainer: ops, runId: rid }
+        );
+        if (st === "error") {
+          aiRow.appendChild(el("div", { class: "merr", text: "error: " + (err || "执行失败（未返回具体错误文本）") }));
+          if (hint) aiRow.appendChild(el("div", { class: "hint", text: hint }));
+        }
+        if (st === "error") {
+          const recoverBtn = el("button", { class: "btn", text: "回收结果" });
+          recoverBtn.addEventListener("click", async () => {
+            recoverBtn.disabled = true;
+            try { await recoverRun(r); } finally { recoverBtn.disabled = false; }
+          });
+          ops.appendChild(recoverBtn);
+          const retryBtn = el("button", { class: "btn", text: "重试" });
+          retryBtn.addEventListener("click", async () => {
+            retryBtn.disabled = true;
+            try { await retryRun(r); } finally { retryBtn.disabled = false; }
+          });
+          ops.appendChild(retryBtn);
+        }
+        const expanded = PCONV.debugExpanded.has(rid);
+        const dbgBtn = el("button", { class: "btn textbtn", text: expanded ? "收起调试" : "展开调试" });
+        dbgBtn.addEventListener("click", () => {
+          if (expanded) {
+            PCONV.debugExpanded.delete(rid);
+            renderConversationDetail();
+          } else {
+            PCONV.debugExpanded.add(rid);
+            ensureConversationRunDetail(rid);
+            renderConversationDetail();
+          }
+        });
+        ops.appendChild(dbgBtn);
+        if (ops.childNodes.length) aiRow.appendChild(ops);
+
+        if (expanded) {
+          if (!d || d.loading) {
+            aiRow.appendChild(el("div", { class: "hint", text: "加载调试日志中..." }));
+          } else if (d.error) {
+            aiRow.appendChild(el("div", { class: "hint", text: "调试日志加载失败: " + d.error }));
+          } else if (d.full) {
+            const f = d.full;
+            const run = f.run || {};
+            const log = String(f.logTail || "").trim();
+            const txt = [
+              "status: " + String(run.status || ""),
+              run.startedAt ? ("started: " + String(run.startedAt)) : "",
+              run.finishedAt ? ("finished: " + String(run.finishedAt)) : "",
+              String(run.error || "").trim() ? ("error: " + String(run.error || "").trim()) : "",
+              "",
+              "log:",
+              log || "(empty)",
+            ].filter(Boolean).join("\n");
+            aiRow.appendChild(el("div", { class: "mdebug", text: txt }));
+          }
+        }
+        timeline.appendChild(aiRow);
+      }
+
+      if (PCONV.optimistic && PCONV.optimistic.sessionId === ctx.sessionId) {
+        const m = PCONV.optimistic;
+        const userRow = el("div", { class: "msgrow user" });
+        const userMeta = el("div", { class: "msgmeta" });
+        userMeta.appendChild(chip("我", "muted"));
+        userMeta.appendChild(el("span", { text: imTime(m.createdAt || "") }));
+        userRow.appendChild(userMeta);
+        appendConversationBubble(userRow, "user", m.message || "", "", "optimistic:user");
+        timeline.appendChild(userRow);
+
+        const aiRow = el("div", { class: "msgrow assistant" });
+        const aiMeta = el("div", { class: "msgmeta" });
+        aiMeta.appendChild(chip("Codex", "muted"));
+        aiMeta.appendChild(chip("running", "warn"));
+        aiMeta.appendChild(el("span", { class: "dotspin" }));
+        aiRow.appendChild(aiMeta);
+        appendConversationBubble(aiRow, "assistant", "处理中...", "", "optimistic:assistant");
+        timeline.appendChild(aiRow);
+      }
+
+      maybeStickConversationBottom(forceScroll || wasNearBottom);
+    }
+
+    async function refreshConversationTimeline(projectId, sessionId, forceScroll = false) {
+      const pid = String(projectId || "").trim();
+      const sid = String(sessionId || "").trim();
+      if (!pid || !sid || pid === "overview") return;
+      const key = pid + "::" + sid;
+      const shouldForce = forceScroll || !Array.isArray(PCONV.sessionTimelineMap[key]);
+      const seq = ++PCONV.timelineRequestSeq;
+      PCONV.timelineLoadingKey = key;
+      renderConversationDetail(shouldForce);
+      try {
+        const resp = await loadRuns({ projectId: pid, sessionId: sid, limit: 100 });
+        if (seq !== PCONV.timelineRequestSeq) return;
+        PCONV.sessionTimelineMap[key] = Array.isArray(resp && resp.runs) ? resp.runs : [];
+      } catch (_) {
+        if (seq !== PCONV.timelineRequestSeq) return;
+        // Keep fallback timeline from project-level grouping.
+      } finally {
+        if (seq === PCONV.timelineRequestSeq) PCONV.timelineLoadingKey = "";
+        renderConversationDetail(shouldForce);
+      }
+    }
+
+    async function refreshConversationPanel() {
+      if (STATE.panelMode !== "conv") return;
+      if (PCONV.busy) return;
+      const projectId = String(STATE.project || "");
+      if (!projectId || projectId === "overview") {
+        stopConversationPoll();
+        PCONV.sessions = [];
+        PCONV.projectRuns = [];
+        PCONV.runsBySession = Object.create(null);
+        PCONV.sessionTimelineMap = Object.create(null);
+        PCONV.bubbleExpanded = new Set();
+        PCONV.timelineRequestSeq = 0;
+        PCONV.timelineLoadingKey = "";
+        buildConversationLeftList();
+        renderConversationDetail(true);
+        return;
+      }
+
+      if (PCONV.lastProjectId !== projectId) {
+        PCONV.lastProjectId = projectId;
+        PCONV.detailMap = Object.create(null);
+        PCONV.debugExpanded = new Set();
+        PCONV.bubbleExpanded = new Set();
+        PCONV.sessionTimelineMap = Object.create(null);
+        PCONV.timelineRequestSeq = 0;
+        PCONV.timelineLoadingKey = "";
+      }
+
+      PCONV.busy = true;
+      try {
+        const baseSessions = configuredProjectConversations(projectId);
+        const runResp = await loadRuns({ projectId, limit: 200 });
+        const allRuns = Array.isArray(runResp && runResp.runs) ? runResp.runs : [];
+        PCONV.projectRuns = allRuns.slice();
+
+        const grouped = Object.create(null);
+        for (const r of allRuns) {
+          const sid = String((r && r.sessionId) || "").trim();
+          if (!sid) continue;
+          if (!grouped[sid]) grouped[sid] = [];
+          grouped[sid].push(r);
+        }
+        PCONV.runsBySession = grouped;
+
+        for (const s of baseSessions) {
+          const runs = (grouped[s.sessionId] || []).slice().sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+          s.runCount = runs.length;
+          const top = runs[0] || null;
+          s.lastActiveAt = top ? String(top.createdAt || "") : "";
+          s.lastStatus = top ? String(top.status || "idle") : "idle";
+          const aiPreview = top ? String(top.lastPreview || top.partialPreview || "") : "";
+          const userPreview = top ? String(top.messagePreview || "") : "";
+          s.lastSpeaker = aiPreview ? "assistant" : (userPreview ? "user" : "assistant");
+          s.lastPreview = aiPreview || userPreview || "";
+          if (top && top.channelName && !isQoreonV2Project(projectId)) {
+            s.primaryChannel = String(top.channelName || s.primaryChannel || "");
+            s.displayChannel = String(top.channelName || s.displayChannel || s.primaryChannel || "");
+          }
+          if (!s.primaryChannel) s.primaryChannel = (s.channels && s.channels[0]) ? String(s.channels[0]) : "";
+          if (!s.displayChannel) s.displayChannel = s.primaryChannel || s.alias || s.sessionId;
+        }
+
+        const q = String(STATE.q || "").trim().toLowerCase();
+        let sessions = baseSessions.slice();
+        if (q) {
+          sessions = sessions.filter((s) => {
+            const hay = [
+              s.alias,
+              s.sessionId,
+              (s.channels || []).join(" "),
+              s.lastPreview || "",
+            ].join(" ").toLowerCase();
+            return hay.includes(q);
+          });
+        }
+        sessions.sort((a, b) => {
+          const ta = String(a.lastActiveAt || "");
+          const tb = String(b.lastActiveAt || "");
+          if (ta !== tb) return tb.localeCompare(ta);
+          return String(a.alias || "").localeCompare(String(b.alias || ""), "zh-Hans-CN");
+        });
+        PCONV.sessions = sessions;
+        PCONV.lastRefreshAt = new Date().toLocaleTimeString("zh-CN", { hour12: false });
+
+        if (sessions.length) {
+          const ok = sessions.some(x => String(x.sessionId || "") === String(STATE.selectedSessionId || ""));
+          if (!ok) STATE.selectedSessionId = String(sessions[0].sessionId || "");
+        } else {
+          STATE.selectedSessionId = "";
+        }
+
+        buildConversationLeftList();
+        renderConversationDetail(!STATE.selectedSessionId);
+        if (STATE.selectedSessionId) {
+          refreshConversationTimeline(projectId, STATE.selectedSessionId, !STATE.selectedSessionId);
+        }
+
+        const hasRunning = allRuns.some(x => {
+          const s = String((x && x.status) || "");
+          return s === "queued" || s === "running";
+        });
+        if (hasRunning || PCONV.sending) scheduleConversationPoll(5000);
+        else stopConversationPoll();
+      } catch (_) {
+        stopConversationPoll();
+      } finally {
+        PCONV.busy = false;
+      }
+    }
+
+    async function sendConversationMessage() {
+      const input = document.getElementById("convMsg");
+      const sendBtn = document.getElementById("convSendBtn");
+      const hint = document.getElementById("convHint");
+      if (!input || !sendBtn || !hint) return;
+      const ctx = currentConversationCtx();
+      if (!ctx || !ctx.sessionId || !ctx.channelName) {
+        input.placeholder = "该会话缺少通道路由，请先为该 session 绑定通道";
+        return;
+      }
+      const message = String(input.value || "").trim();
+      if (!message) return;
+
+      PCONV.sending = true;
+      PCONV.optimistic = {
+        sessionId: ctx.sessionId,
+        message,
+        createdAt: new Date().toISOString(),
+      };
+      sendBtn.disabled = true;
+      sendBtn.textContent = "发送中...";
+      renderConversationDetail(true);
+
+      try {
+        const r = await fetch("/api/codex/announce", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            projectId: ctx.projectId,
+            channelName: ctx.channelName,
+            sessionId: ctx.sessionId,
+            message,
+          }),
+        });
+        if (r.ok) {
+          input.value = "";
+          const resp = await r.json();
+          const runId = resp && resp.run ? String(resp.run.id || "") : "";
+          PCONV.optimistic = null;
+          PCONV.sending = false;
+          await refreshConversationPanel();
+        if (runId) scheduleConversationPoll(5000);
+        return;
+      }
+        input.placeholder = "发送失败：服务暂未返回成功状态";
+      } catch (_) {
+        input.placeholder = "发送失败：网络或服务异常，请重试";
+      }
+      PCONV.sending = false;
+      PCONV.optimistic = null;
+      sendBtn.disabled = false;
+      sendBtn.textContent = "发送";
+      renderConversationDetail();
+    }
+
+    async function refreshCCB() {
+      if (STATE.panelMode === "conv") return;
+      if (CCB.busy) return;
+      const hint = document.getElementById("ccbHint");
+      const sendBtn = document.getElementById("ccbSendBtn");
+      const refreshBtn = document.getElementById("ccbRefreshBtn");
+      const sidChip = document.getElementById("ccbSidChip");
+      const copySidBtn = document.getElementById("ccbCopySidBtn");
+      const bindBtn = document.getElementById("ccbBindBtn");
+      const editBtn = document.getElementById("ccbEditBindBtn");
+      const unbindBtn = document.getElementById("ccbUnbindBtn");
+      if (!hint || !sendBtn || !refreshBtn) return;
+
+      const it = selectedItem();
+      const ctx = currentChannelCtx(it);
+      const channelId = ctx.channelId;
+      if (CCB.lastChannelId !== channelId) {
+        CCB.lastChannelId = channelId;
+        CCB.expanded = new Set();
+        CCB.detailMap = Object.create(null);
+        CCB.runs = [];
+      }
+      if (sidChip) {
+        sidChip.style.display = ctx.sessionId ? "" : "none";
+        if (ctx.sessionId) sidChip.textContent = "session_id:" + shortId(ctx.sessionId);
+      }
+      if (copySidBtn) {
+        copySidBtn.style.display = ctx.sessionId ? "" : "none";
+        copySidBtn.onclick = ctx.sessionId ? (() => copyText(ctx.sessionId)) : (() => {});
+      }
+      if (bindBtn) {
+        bindBtn.style.display = ctx.sessionId ? "none" : "";
+        bindBtn.onclick = (!ctx.sessionId && ctx.projectId && ctx.channelName && ctx.projectId !== "overview")
+          ? (() => openBindModal(ctx.projectId, ctx.channelName))
+          : (() => {});
+      }
+      if (editBtn) {
+        editBtn.style.display = ctx.sessionId ? "" : "none";
+        editBtn.onclick = (ctx.projectId && ctx.channelName && ctx.projectId !== "overview")
+          ? (() => openBindModal(ctx.projectId, ctx.channelName))
+          : (() => {});
+      }
+      if (unbindBtn) {
+        const hasLocal = !!getBinding(ctx.projectId, ctx.channelName);
+        unbindBtn.style.display = (ctx.sessionId && hasLocal) ? "" : "none";
+        unbindBtn.onclick = (ctx.projectId && ctx.channelName && ctx.projectId !== "overview")
+          ? (() => { clearBinding(ctx.projectId, ctx.channelName); render(); })
+          : (() => {});
+      }
+      if (!channelId || channelId.includes("overview::")) {
+        stopCCBPoll();
+        hint.textContent = "CCB：请进入具体项目并选择通道后使用。";
+        sendBtn.disabled = true;
+        refreshBtn.disabled = true;
+        renderRuns([]);
+        return;
+      }
+
+      CCB.busy = true;
+      try {
+        const ok = await apiHealth();
+        if (!ok) {
+          stopCCBPoll();
+          hint.textContent = "CCB API 未启用：请用 run_local.sh 启动看板服务（需要同源 API 才能发消息/回看回复）。";
+          sendBtn.disabled = true;
+          refreshBtn.disabled = true;
+          renderRuns([]);
+          return;
+        }
+
+        refreshBtn.disabled = false;
+        if (!ctx.sessionId) {
+          stopCCBPoll();
+          hint.textContent = "该通道未绑定 session_id：点击右上角【绑定对话】填写 Codex session_id（保存在本机浏览器）后即可发送。";
+          sendBtn.disabled = true;
+          renderRuns([]);
+          return;
+        }
+
+        hint.textContent = "发送后会调用 `codex exec resume <sessionId>`，并在回溯列表实时显示处理过程和最后回复。";
+        sendBtn.disabled = false;
+
+        const j = await loadRuns({ channelId, limit: 30 });
+        const runs = (j && j.runs) ? j.runs : [];
+        renderRuns(runs);
+        const hasRunning = runs.some(x => {
+          const s = String((x && x.status) || "");
+          return s === "queued" || s === "running";
+        });
+        if (hasRunning) {
+          hint.textContent = "Codex 正在处理该通道消息，日志会自动刷新。";
+          scheduleCCBPoll(5000);
+        } else {
+          stopCCBPoll();
+        }
+      } finally {
+        CCB.busy = false;
+      }
+    }
+
+    async function sendCCB() {
+      if (STATE.panelMode === "conv") return;
+      const it = selectedItem();
+      const ctx = currentChannelCtx(it);
+      const msgEl = document.getElementById("ccbMsg");
+      const sendBtn = document.getElementById("ccbSendBtn");
+      const refreshBtn = document.getElementById("ccbRefreshBtn");
+      if (!msgEl || !sendBtn || !refreshBtn) return;
+
+      const message = String(msgEl.value || "").trim();
+      if (!message) return;
+      if (!ctx.sessionId) return;
+
+      sendBtn.disabled = true;
+      refreshBtn.disabled = true;
+      try {
+        const r = await fetch("/api/codex/announce", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            projectId: ctx.projectId,
+            channelName: ctx.channelName,
+            sessionId: ctx.sessionId,
+            message,
+          }),
+        });
+        if (r.ok) {
+          const resp = await r.json();
+          const runId = resp && resp.run ? String(resp.run.id || "") : "";
+          msgEl.value = "";
+          await refreshCCB();
+          if (runId) scheduleCCBPoll(5000);
+        }
+      } catch (_) {}
+      sendBtn.disabled = false;
+      refreshBtn.disabled = false;
+      await refreshCCB();
+    }
+
+    async function retryRun(runMeta) {
+      const rid = String((runMeta && runMeta.id) || "").trim();
+      if (!rid) return;
+      const full = await loadRun(rid);
+      const run = (full && full.run) ? full.run : {};
+      const message = String((full && full.message) || "").trim();
+      const projectId = String(run.projectId || runMeta.projectId || "").trim();
+      const channelName = String(run.channelName || runMeta.channelName || "").trim();
+      const sessionId = String(run.sessionId || runMeta.sessionId || "").trim();
+      if (!projectId || !channelName || !sessionId || !message) return;
+
+      const r = await fetch("/api/codex/announce", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectId, channelName, sessionId, message }),
+      });
+      if (!r.ok) return;
+      const resp = await r.json();
+      const runId = resp && resp.run ? String(resp.run.id || "") : "";
+      if (STATE.panelMode === "conv") {
+        await refreshConversationPanel();
+        if (runId) scheduleConversationPoll(5000);
+      } else {
+        await refreshCCB();
+        if (runId) scheduleCCBPoll(5000);
+      }
+    }
+
+    async function recoverRun(runMeta) {
+      const rid = String((runMeta && runMeta.id) || "").trim();
+      if (!rid) return;
+      const full = await loadRun(rid);
+      const run = (full && full.run) ? full.run : {};
+      const original = String((full && full.message) || "").trim();
+      const partial = String((full && full.partialMessage) || "").trim();
+      const err = String((run && run.error) || (runMeta && runMeta.error) || "").trim();
+      const hint = String((full && full.errorHint) || "").trim();
+      const projectId = String(run.projectId || runMeta.projectId || "").trim();
+      const channelName = String(run.channelName || runMeta.channelName || "").trim();
+      const sessionId = String(run.sessionId || runMeta.sessionId || "").trim();
+      if (!projectId || !channelName || !sessionId || !original) return;
+
+      let recoveryMsg = "";
+      recoveryMsg += "上一次执行已发生超时/中断，请做结果回收。\n";
+      recoveryMsg += "要求：不要整段重跑耗时浏览器流程，优先基于已完成步骤做最终收口；如确需补测，仅补最小必要步骤后直接给最终结论。\n";
+      recoveryMsg += "输出：\n";
+      recoveryMsg += "1) 本次已完成事实（按步骤）\n";
+      recoveryMsg += "2) 最终结论/判断\n";
+      recoveryMsg += "3) 风险与待补项（如有）\n";
+      recoveryMsg += "4) 下一步可执行动作（最多3条）\n";
+      recoveryMsg += "\n原始消息：\n" + original + "\n";
+      if (err) recoveryMsg += "\n错误信息：\n" + err + "\n";
+      if (hint) recoveryMsg += "\n错误提示：\n" + hint + "\n";
+      if (partial) recoveryMsg += "\n已回捞片段：\n" + partial + "\n";
+
+      const r = await fetch("/api/codex/announce", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectId, channelName, sessionId, message: recoveryMsg }),
+      });
+      if (!r.ok) return;
+      const resp = await r.json();
+      const runId = resp && resp.run ? String(resp.run.id || "") : "";
+      if (STATE.panelMode === "conv") {
+        await refreshConversationPanel();
+        if (runId) scheduleConversationPoll(5000);
+      } else {
+        await refreshCCB();
+        if (runId) scheduleCCBPoll(5000);
+      }
+    }
+
+    function cycleLayout() {
+      const cur = STATE.layout;
+      STATE.layout = (cur === "auto") ? "right" : (cur === "right") ? "bottom" : "auto";
+      try { localStorage.setItem("taskDashboard.layout", STATE.layout); } catch (_) {}
+      setHash();
+      applyLayout();
+    }
+
+    function setPanelMode(nextMode) {
+      const mode = (nextMode === "conv") ? "conv" : "ops";
+      if (STATE.panelMode === mode) return;
+      STATE.panelMode = mode;
+      try { localStorage.setItem("taskDashboard.panelMode", STATE.panelMode); } catch (_) {}
+      if (STATE.panelMode === "conv") {
+        stopCCBPoll();
+      } else {
+        stopConversationPoll();
+      }
+      setHash();
+      render();
+    }
+
+    function wire() {
+      const qEl = document.getElementById("q");
+      qEl.addEventListener("input", (e) => {
+        STATE.q = e.target.value || "";
+        if (STATE.panelMode !== "conv") STATE.selectedPath = "";
+        setHash();
+        render();
+      });
+      const opsBtn = document.getElementById("panelOpsBtn");
+      const convBtn = document.getElementById("panelConvBtn");
+      if (opsBtn) opsBtn.addEventListener("click", () => setPanelMode("ops"));
+      if (convBtn) convBtn.addEventListener("click", () => setPanelMode("conv"));
+      document.getElementById("layoutBtn").addEventListener("click", cycleLayout);
+      document.getElementById("tabWork").addEventListener("click", () => {
+        STATE.view = "work";
+        STATE.selectedPath = "";
+        try { localStorage.setItem("taskDashboard.view", STATE.view); } catch (_) {}
+        setHash();
+        render();
+      });
+      document.getElementById("tabComms").addEventListener("click", () => {
+        STATE.view = "comms";
+        STATE.selectedPath = "";
+        try { localStorage.setItem("taskDashboard.view", STATE.view); } catch (_) {}
+        setHash();
+        render();
+      });
+      document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") setSelectedPath("");
+      });
+
+      const rb = document.getElementById("ccbRefreshBtn");
+      const sb = document.getElementById("ccbSendBtn");
+      if (rb) rb.addEventListener("click", (e) => { e.preventDefault(); refreshCCB(); });
+      if (sb) sb.addEventListener("click", (e) => { e.preventDefault(); sendCCB(); });
+      const csb = document.getElementById("convSendBtn");
+      if (csb) csb.addEventListener("click", (e) => { e.preventDefault(); sendConversationMessage(); });
+      const cmsg = document.getElementById("convMsg");
+      if (cmsg) cmsg.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          sendConversationMessage();
+        }
+      });
+
+      // Bind modal wiring
+      const bmask = document.getElementById("bindMask");
+      const bcancel = document.getElementById("bindCancelBtn");
+      const bsave = document.getElementById("bindSaveBtn");
+      const bcreate = document.getElementById("bindCreateBtn");
+      const bsid = document.getElementById("bindSid");
+      if (bmask) bmask.addEventListener("click", (e) => {
+        // click mask to close, but ignore clicks inside modal
+        if (e.target === bmask) closeBindModal();
+      });
+      if (bcancel) bcancel.addEventListener("click", (e) => { e.preventDefault(); closeBindModal(); });
+      async function commitBind() {
+        const pid = String(BIND_UI.projectId || "");
+        const ch = String(BIND_UI.channelName || "");
+        const sid = String((bsid && bsid.value) || "").trim();
+        if (!looksLikeSessionId(sid)) {
+          bindModalError("session_id 格式不正确（需要 UUID 格式）。");
+          return;
+        }
+        bindModalError("");
+        setBinding(pid, ch, sid);
+        closeBindModal();
+        render();
+      }
+      if (bsave) bsave.addEventListener("click", (e) => { e.preventDefault(); commitBind(); });
+      if (bcreate) bcreate.addEventListener("click", async (e) => {
+        e.preventDefault();
+        const pid = String(BIND_UI.projectId || "");
+        const ch = String(BIND_UI.channelName || "");
+        if (!pid || !ch || pid === "overview") return;
+        const oldText = bcreate.textContent;
+        bcreate.disabled = true;
+        bcreate.textContent = "创建中...";
+        bindModalError("");
+        try {
+          const r = await fetch("/api/codex/session/new", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ projectId: pid, channelName: ch }),
+          });
+          const j = await r.json().catch(() => ({}));
+          if (!r.ok) {
+            const detail = j && (j.detail || j.error || j.message);
+            bindModalError("创建失败：" + String(detail || "unknown"));
+            return;
+          }
+          const sid = String((j && j.sessionId) || "").trim();
+          if (!looksLikeSessionId(sid)) {
+            bindModalError("创建失败：未拿到有效 session_id");
+            return;
+          }
+          if (bsid) bsid.value = sid;
+        } catch (err) {
+          bindModalError("创建失败：网络或服务异常");
+        } finally {
+          bcreate.disabled = false;
+          bcreate.textContent = oldText || "创建新对话";
+        }
+      });
+      if (bsid) bsid.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") { e.preventDefault(); commitBind(); }
+        if (e.key === "Escape") { e.preventDefault(); closeBindModal(); }
+      });
+
+      // Keep native scrolling behavior for the right panel.
+    }
+
+    function parseHash() {
+      const h = String(location.hash || "").replace(/^#/, "");
+      const params = new URLSearchParams(h || "");
+      const p = params.get("p");
+      const c = params.get("c");
+      const q = params.get("q");
+      const t = params.get("t");
+      const s = params.get("s");
+      const vm = params.get("vm");
+      const pm = params.get("pm");
+      const l = params.get("l");
+      if (p && pages().some(x => x.id === p)) STATE.project = p;
+      if (q !== null) STATE.q = q;
+      if (t) STATE.type = t;
+      if (s) STATE.status = s;
+      if (vm === "c") STATE.view = "comms";
+      if (vm === "w") STATE.view = "work";
+      if (pm === "c") STATE.panelMode = "conv";
+      if (pm === "o") STATE.panelMode = "ops";
+      if (l === "r") STATE.layout = "right";
+      if (l === "b") STATE.layout = "bottom";
+      if (!STATE.project || !pages().some(x => x.id === STATE.project)) {
+        const ps = pages();
+        STATE.project = ps.length ? String(ps[0].id || "") : "";
+      }
+      ensureChannel();
+      if (STATE.project !== "overview") {
+        const names = unionChannelNames(STATE.project);
+        if (c) {
+          const legacyMap = {
+            "子级01-Agent编排": "子级01-智能体系统-Agent编排",
+            "子级02-场景编排": "子级02-智能体系统-场景编排",
+            "子级03-任务蓝图": "子级03-智能体系统-任务蓝图",
+            "子级04-模型与安全": "子级04-智能体系统-模型与安全",
+            "子级05-验证与指标": "子级05-智能体系统-验证与指标",
+            "子级06-客户沟通训练": "子级06-智能体系统-客户沟通训练"
+          };
+          const mapped = legacyMap[c] || c;
+          if (names.includes(mapped)) STATE.channel = mapped;
+        }
+      }
+    }
+
+    function setHash() {
+      try {
+        const params = new URLSearchParams();
+        params.set("p", STATE.project);
+        if (STATE.channel) params.set("c", STATE.channel);
+        if (STATE.q) params.set("q", STATE.q);
+        if (STATE.type && STATE.type !== "全部") params.set("t", STATE.type);
+        if (STATE.status && STATE.status !== "待办") params.set("s", STATE.status);
+        if (STATE.view === "comms") params.set("vm", "c");
+        if (STATE.panelMode === "conv") params.set("pm", "c");
+        if (STATE.layout === "right") params.set("l", "r");
+        if (STATE.layout === "bottom") params.set("l", "b");
+        const s = params.toString();
+        history.replaceState(null, "", s ? ("#" + s) : "#");
+      } catch (_) {}
+    }
+
+    function applyViewTabs() {
+      const w = document.getElementById("tabWork");
+      const c = document.getElementById("tabComms");
+      if (w) w.classList.toggle("active", STATE.view === "work");
+      if (c) c.classList.toggle("active", STATE.view === "comms");
+    }
+
+    function render() {
+      const qEl = document.getElementById("q");
+      if (document.activeElement !== qEl) qEl.value = STATE.q;
+
+      ensureChannel();
+      buildTabs();
+      buildLeftList();
+      buildMainList();
+      applyPanelMode();
+
+      if (STATE.panelMode === "conv") {
+        stopCCBPoll();
+        renderDetail(null);
+        refreshConversationPanel();
+      } else {
+        stopConversationPoll();
+        ensureSelection();
+        renderDetail(selectedItem());
+        refreshCCB();
+        updateSelectionUI();
+      }
+      applyLayout();
+      applyViewTabs();
+    }
+
+    (function bootstrap() {
+      try {
+        const lay = localStorage.getItem("taskDashboard.layout");
+        if (lay === "right" || lay === "bottom" || lay === "auto") STATE.layout = lay;
+        const vm = localStorage.getItem("taskDashboard.view");
+        if (vm === "work" || vm === "comms") STATE.view = vm;
+        const pm = localStorage.getItem("taskDashboard.panelMode");
+        if (pm === "ops" || pm === "conv") STATE.panelMode = pm;
+        const sp = localStorage.getItem("taskDashboard.selectedPath");
+        if (sp) STATE.selectedPath = sp;
+        const ss = localStorage.getItem("taskDashboard.selectedSessionId");
+        if (ss) STATE.selectedSessionId = ss;
+      } catch (_) {}
+      parseHash();
+      wire();
+      render();
+    })();
+  </script>
+
+  <script>
+    // Ambient blobs (low-energy). No-op when user prefers reduced motion.
+    (function () {
+      const reduceMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      if (reduceMotion) return;
+
+      class Blob {
+        constructor(el, index) {
+          this.el = el;
+          const w = window.innerWidth;
+          const h = window.innerHeight;
+          this.x = (index % 3) * (w / 3) - (w * 0.15);
+          this.y = (Math.floor(index / 3) % 3) * (h / 3) - (h * 0.15);
+          this.vx = (Math.random() - 0.5) * 0.08;
+          this.vy = (Math.random() - 0.5) * 0.08;
+          this.z = 0.9 + Math.random() * 0.2;
+          this.vz = (Math.random() - 0.5) * 0.0005;
+          this.bounds = () => {
+            const ww = window.innerWidth;
+            const hh = window.innerHeight;
+            return { minX: -ww * 0.3, maxX: ww * 1.0, minY: -hh * 0.3, maxY: hh * 1.0 };
+          };
+        }
+        update() {
+          this.x += this.vx; this.y += this.vy; this.z += this.vz;
+          const b = this.bounds();
+          if (this.x < b.minX || this.x > b.maxX) this.vx *= -1;
+          if (this.y < b.minY || this.y > b.maxY) this.vy *= -1;
+          if (this.z < 0.8) this.vz += 0.001;
+          if (this.z > 1.2) this.vz -= 0.001;
+          this.render();
+        }
+        render() {
+          let blur = 0;
+          let opacity = 0.8;
+          if (this.z > 1.1) {
+            const t = (this.z - 1.1) / 0.1;
+            blur = Math.max(0, 5 * (1 - t));
+            opacity = 0.9 + t * 0.1;
+          } else {
+            const t = (1.1 - this.z) / 0.3;
+            blur = 5 + t * 15;
+            opacity = 0.9 - t * 0.3;
+          }
+          blur = Math.min(20, Math.max(0, blur));
+          opacity = Math.min(1, Math.max(0.4, opacity));
+          this.el.style.transform = `translate3d(${this.x}px, ${this.y}px, 0) scale(1)`;
+          this.el.style.filter = `blur(${blur}px)`;
+          this.el.style.opacity = String(opacity);
+        }
+      }
+
+      const blobs = Array.from(document.querySelectorAll(".blob")).map((el, i) => new Blob(el, i));
+      function animate() {
+        blobs.forEach((b) => b.update());
+        requestAnimationFrame(animate);
+      }
+      animate();
+    })();
+  </script>
+</body>
+</html>

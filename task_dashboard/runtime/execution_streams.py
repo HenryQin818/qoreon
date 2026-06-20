@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
+from task_dashboard.adapters.codebuddy_output import sanitize_process_event_text
+
 
 def _event_text(value: Any, max_len: int = 120) -> str:
     text = str(value or "").replace("\r\n", "\n").strip()
@@ -34,7 +36,9 @@ def extract_process_event_from_parsed(parsed: dict[str, Any]) -> dict[str, str]:
     if not (is_started or is_completed):
         return {}
 
-    name = _event_name_from_item(item)
+    name = _event_text(parsed.get("title"), max_len=200) or _event_name_from_item(item)
+    explicit_text = _event_text(parsed.get("text"), max_len=3000)
+    explicit_event_type = _event_text(parsed.get("event_type"), max_len=80)
     low_type = item_type.lower()
     if low_type == "command_execution" or "command" in low_type:
         event_type = "command_started" if is_started else "command_completed"
@@ -45,12 +49,20 @@ def extract_process_event_from_parsed(parsed: dict[str, Any]) -> dict[str, str]:
     else:
         event_type = "runtime_event_started" if is_started else "runtime_event_completed"
         prefix = "运行事件" if is_started else "运行事件完成"
-    return {
-        "event_type": event_type,
+    out = {
+        "event_type": explicit_event_type or event_type,
         "item_type": item_type,
         "title": name,
-        "text": f"{prefix}: {name}" if name else prefix,
+        "text": explicit_text or (f"{prefix}: {name}" if name else prefix),
     }
+    at = _event_text(parsed.get("at"), max_len=80)
+    if at:
+        out["at"] = at
+    for optional_key in ("path", "source", "raw_ref", "call_id"):
+        optional_value = _event_text(parsed.get(optional_key), max_len=1000)
+        if optional_value:
+            out[optional_key] = optional_value
+    return out
 
 
 def append_process_event(
@@ -63,13 +75,21 @@ def append_process_event(
 ) -> bool:
     if not isinstance(event, dict):
         return False
-    text = safe_text(event.get("text"), 3000).strip()
-    if not text:
-        return False
-    at = str(event.get("at") or now_iso() or "").strip()
     event_type = safe_text(event.get("event_type"), 80).strip()
     item_type = safe_text(event.get("item_type"), 120).strip()
     title = safe_text(event.get("title"), 200).strip()
+    text = safe_text(
+        sanitize_process_event_text(
+            event.get("text"),
+            title=title,
+            item_type=item_type,
+            event_type=event_type,
+        ),
+        3000,
+    ).strip()
+    if not text:
+        return False
+    at = str(event.get("at") or now_iso() or "").strip()
     key = "|".join([event_type, item_type, title, text])
     if key and str(process_state.get("last_event_key") or "") == key:
         return False
@@ -82,7 +102,7 @@ def append_process_event(
         "text": text,
         "at": at,
     }
-    for optional_key in ("path", "source"):
+    for optional_key in ("path", "source", "raw_ref", "call_id"):
         optional_value = safe_text(event.get(optional_key), 1000).strip()
         if optional_value:
             event_row[optional_key] = optional_value
@@ -105,6 +125,7 @@ def append_process_event(
         rows = rows[-240:]
     process_state["rows"] = rows
     meta["process_events"] = [dict(row) for row in events]
+    meta["processEvents"] = [dict(row) for row in events]
     meta["processRows"] = [dict(row) for row in rows]
     if not str(meta.get("lastPreview") or "").strip():
         meta["partialPreview"] = text

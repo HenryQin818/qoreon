@@ -10,10 +10,44 @@ import shutil
 from typing import Any, Optional
 
 from task_dashboard.adapters import CodexAdapter, get_adapter
+from task_dashboard.adapters.codebuddy_output import extract_final_text as extract_codebuddy_final_text
 from task_dashboard.helpers import parse_iso_ts
+from task_dashboard.runtime.execution_streams import extract_process_event_from_parsed
 
 
-_TERMINAL_TEXT_CLIS = {"claude", "opencode"}
+_TERMINAL_TEXT_CLIS = {"claude", "opencode", "gemini", "codebuddy"}
+CODEBUDDY_UNSAFE_FINAL_PLACEHOLDER = "CodeBuddy 最终正文包含原始事件内容，已隐藏；请查看过程摘要或重新发起结果收口。"
+_CODEBUDDY_UNSAFE_FINAL_TEXT_NEEDLES = (
+    "<system-reminder",
+    'data-role="memory"',
+    "data-role='memory'",
+    "<memory>",
+    '"role": "user"',
+    '"role":"user"',
+    '"role": "system"',
+    '"role":"system"',
+    '"type": "input_text"',
+    '"type":"input_text"',
+    "rawcontent",
+    "raw_content",
+    "providerdata",
+)
+_CODEBUDDY_UNSAFE_FINAL_KEYS = {
+    "rawcontent",
+    "raw_content",
+    "providerdata",
+    "provider_data",
+    "reasoning",
+    "reasoningcontent",
+    "reasoning_content",
+}
+_CODEBUDDY_EVENT_TYPES = {
+    "function_call",
+    "function_call_result",
+    "tool_call.started",
+    "tool_call.completed",
+    "runtime_event.completed",
+}
 _IMAGE_FILE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 _HTML_FILE_EXTS = {".html", ".htm"}
 _MEDIA_FILE_EXTS = _IMAGE_FILE_EXTS | _HTML_FILE_EXTS
@@ -38,6 +72,70 @@ def _safe_text(s: Any, max_len: int) -> str:
     if len(s2) > max_len:
         return s2[: max_len - 1] + "…"
     return s2
+
+
+def _codebuddy_text_has_unsafe_final_projection(text: str) -> bool:
+    low = str(text or "").lower()
+    return any(needle in low for needle in _CODEBUDDY_UNSAFE_FINAL_TEXT_NEEDLES)
+
+
+def _codebuddy_parsed_has_unsafe_final_projection(value: Any, depth: int = 0) -> bool:
+    if depth > 24:
+        return False
+    if isinstance(value, dict):
+        lowered_keys = {str(key or "").strip().lower() for key in value.keys()}
+        if lowered_keys & _CODEBUDDY_UNSAFE_FINAL_KEYS:
+            return True
+        role = str(value.get("role") or "").strip().lower()
+        if role in {"user", "system", "developer"}:
+            return True
+        item_type = str(value.get("type") or value.get("item_type") or "").strip().lower()
+        if item_type in _CODEBUDDY_EVENT_TYPES:
+            return True
+        if item_type == "input_text":
+            return True
+        text_value = value.get("text")
+        if isinstance(text_value, str) and _codebuddy_text_has_unsafe_final_projection(text_value):
+            return True
+        return any(_codebuddy_parsed_has_unsafe_final_projection(item, depth + 1) for item in value.values())
+    if isinstance(value, list):
+        return any(_codebuddy_parsed_has_unsafe_final_projection(item, depth + 1) for item in value)
+    if isinstance(value, str):
+        return _codebuddy_text_has_unsafe_final_projection(value)
+    return False
+
+
+def safe_codebuddy_visible_text(value: Any, *, placeholder: str = CODEBUDDY_UNSAFE_FINAL_PLACEHOLDER) -> str:
+    """Return a user-visible CodeBuddy final message, never raw event JSON."""
+    text = str(value or "").replace("\r\n", "\n").strip()
+    if not text:
+        return ""
+    parsed: Any = None
+    parsed_ok = False
+    if text.startswith(("{", "[")):
+        try:
+            parsed = json.loads(text)
+            parsed_ok = True
+        except Exception:
+            parsed_ok = False
+    if parsed_ok:
+        extracted = str(extract_codebuddy_final_text(parsed) or "").strip()
+        if extracted and not _codebuddy_text_has_unsafe_final_projection(extracted):
+            return extracted
+        if _codebuddy_parsed_has_unsafe_final_projection(parsed):
+            return placeholder
+        return text
+    if _codebuddy_text_has_unsafe_final_projection(text):
+        return placeholder
+    return text
+
+
+def safe_terminal_visible_text(value: Any, *, cli_type: str = "codex") -> str:
+    cli = str(cli_type or "").strip().lower()
+    text = str(value or "").replace("\r\n", "\n").strip()
+    if cli == "codebuddy":
+        return safe_codebuddy_visible_text(text)
+    return text
 
 
 def _parse_adapter_output_line(adapter_cls: Any, payload: str) -> Optional[dict[str, Any]]:
@@ -146,11 +244,57 @@ def extract_agent_messages_from_file(path: Path, max_items: int = 12, cli_type: 
     return list(out)
 
 
+def extract_process_events_from_file(path: Path, max_items: int = 240, cli_type: str = "codex") -> list[dict[str, str]]:
+    out: deque[dict[str, str]] = deque(maxlen=max(1, int(max_items or 1)))
+    if not path.exists():
+        return []
+    adapter_cls = get_adapter(cli_type) or CodexAdapter
+    last_key = ""
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as f:
+            for raw in f:
+                line = raw.strip()
+                payload = ""
+                if line.startswith("[stdout] "):
+                    payload = line[len("[stdout] ") :].strip()
+                elif line.startswith("{") and '"type"' in line:
+                    payload = line
+                if not payload:
+                    continue
+                parsed = _parse_adapter_output_line(adapter_cls, payload)
+                if not parsed:
+                    continue
+                event = extract_process_event_from_parsed(parsed)
+                if not event:
+                    continue
+                at = _safe_text(parsed.get("at"), 80).strip()
+                if at:
+                    event["at"] = at
+                key = "|".join(
+                    [
+                        str(event.get("event_type") or ""),
+                        str(event.get("item_type") or ""),
+                        str(event.get("title") or ""),
+                        str(event.get("text") or ""),
+                        str(event.get("call_id") or event.get("raw_ref") or ""),
+                    ]
+                )
+                if key and key == last_key:
+                    continue
+                last_key = key
+                out.append(dict(event))
+    except Exception:
+        return []
+    return list(out)
+
+
 def extract_terminal_message_text(log_text: str, *, cli_type: str = "codex") -> str:
     cli = str(cli_type or "").strip().lower()
     if not log_text or cli not in _TERMINAL_TEXT_CLIS:
         return ""
     adapter_cls = get_adapter(cli) or CodexAdapter
+    if cli == "gemini":
+        return _extract_gemini_terminal_message_text(log_text, adapter_cls=adapter_cls)
     out: list[str] = []
     for raw in log_text.splitlines():
         line = raw.strip()
@@ -171,7 +315,46 @@ def extract_terminal_message_text(log_text: str, *, cli_type: str = "codex") -> 
             continue
         if from_stdout:
             out.append(payload)
-    return "\n".join(part for part in out if str(part or "").strip()).strip()
+    text = "\n".join(part for part in out if str(part or "").strip()).strip()
+    if cli == "codebuddy":
+        return safe_codebuddy_visible_text(text)
+    return text
+
+
+def _extract_gemini_terminal_message_text(log_text: str, *, adapter_cls: Any) -> str:
+    stdout_lines: list[str] = []
+    collecting_json = False
+    for raw in str(log_text or "").splitlines():
+        line = raw.strip()
+        payload = ""
+        if line.startswith("[stdout] "):
+            payload = line[len("[stdout] ") :].strip()
+        elif collecting_json and not line.startswith("[") and line:
+            payload = line
+        if not payload:
+            continue
+        if payload.startswith(("{", "[")):
+            collecting_json = True
+        if collecting_json or stdout_lines:
+            stdout_lines.append(payload)
+
+    stdout_text = "\n".join(stdout_lines).strip()
+    if not stdout_text:
+        return ""
+
+    parsed = _parse_adapter_output_line(adapter_cls, stdout_text)
+    text = extract_agent_message_text_from_parsed(parsed or {})
+    if text:
+        return text
+
+    # Last-resort fallback for non-JSON stdout; avoid returning raw braces from pretty JSON.
+    if stdout_text in {"{", "}", "[", "]"}:
+        return ""
+    try:
+        json.loads(stdout_text)
+        return ""
+    except Exception:
+        return stdout_text
 
 
 def extract_terminal_message_from_file(path: Path, *, cli_type: str = "codex") -> str:
@@ -751,7 +934,7 @@ def _clean_business_path(raw: Any) -> str:
         return ""
     p = p[: m.end()]
     low = p.lower()
-    if low.endswith("/skill.md") or "/.codex/" in low:
+    if low.endswith("/skill.md") or ("/.codex/" + "skills/") in low:
         return ""
     if not any(seg in p for seg in _BUSINESS_PATH_SEGMENTS):
         return ""
