@@ -292,6 +292,7 @@ desc = "delete"
                 project_channel_exists=lambda pid, cname: pid == "task_dashboard" and cname == channel_name,
                 session_store=session_store,
                 session_binding_store=binding_store,
+                worktree_root=repo_root,
                 config_toml_path=lambda: config_path,
                 repo_root=lambda: repo_root,
                 decorate_sessions_display_fields=lambda rows: rows,

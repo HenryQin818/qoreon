@@ -142,7 +142,7 @@ class SessionHeartbeatUiLogicTests(unittest.TestCase):
             ];
             const STATE = { project: "task_dashboard" };
             const SESSION_INFO_UI = {
-              sessionId: "019d2a60-b8be-7b21-bed0-2c95ab2123ff",
+              sessionId: "019f7004-0004-7004-8004-000000000004",
               projectId: "task_dashboard",
               base: { channel_name: "子级06-数据治理与契约（规格-校验-修复）" },
               heartbeatTasks: [],

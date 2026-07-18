@@ -239,6 +239,7 @@
         ["newConvEnvironment", "change"],
         ["newConvModel", "input"],
         ["newConvCodeBuddyModel", "change"],
+        ["newConvReasoningEffort", "change"],
         ["newConvPurpose", "input"],
         ["newConvWorktreeRoot", "input"],
         ["newConvWorkdir", "input"],
@@ -249,11 +250,19 @@
         node.addEventListener(eventName, () => {
           if (id === "newConvModel") {
             const cliSelect = document.getElementById("newConvCliType");
-            node.dataset.modelCliType = String((cliSelect && cliSelect.value) || "codex").trim().toLowerCase() || "codex";
+            const cliType = String((cliSelect && cliSelect.value) || "codex").trim().toLowerCase() || "codex";
+            node.dataset.modelCliType = cliType;
             node.dataset.modelSource = "user";
             node.dataset.standardModel = normalizeSessionModel(node.value);
+            if (isCodexCliType(cliType)) {
+              node.dataset.codexModel = normalizeSessionModel(node.value);
+              node.dataset.codexModelSource = "user";
+            }
             delete node.dataset.codebuddyModelApplied;
+            syncNewConvModelUI();
           }
+          if (id === "newConvReasoningEffort") node.dataset.reasoningSource = "user";
+          if (id === "newConvReuseStrategy") syncNewConvModelUI();
           syncNewConvAdvancedSummary();
         });
       });
@@ -295,6 +304,7 @@
       }
       if (next === "attach" && sidInput) sidInput.value = "";
       if (next === "create") syncNewConvInitMessage(false);
+      syncNewConvModelUI();
       syncNewConvAdvancedSummary();
     }
 
@@ -302,16 +312,17 @@
       const sidInput = document.getElementById("newConvSessionId");
       const cliSelect = document.getElementById("newConvCliType");
       const modelInput = document.getElementById("newConvModel");
+      const reasoningSelect = document.getElementById("newConvReasoningEffort");
       const cur = getBinding(NEW_CONV_UI.projectId, NEW_CONV_UI.channelName);
       const sess = sessionForChannel(NEW_CONV_UI.projectId, NEW_CONV_UI.channelName);
       if (sidInput) sidInput.value = "";
       if (cliSelect && cur && cur.cli_type) cliSelect.value = String(cur.cli_type || "codex");
       if (modelInput) {
         const cliType = String((cliSelect && cliSelect.value) || "codex").trim().toLowerCase() || "codex";
-        const model = normalizeSessionModel(sess && sess.model);
+        const model = NEW_CONV_UI.mode === "attach" ? normalizeSessionModel(sess && sess.model) : "";
         modelInput.value = model;
         modelInput.dataset.modelCliType = cliType;
-        modelInput.dataset.modelSource = "preset";
+        modelInput.dataset.modelSource = model ? "preset" : "";
         delete modelInput.dataset.codebuddyModelApplied;
         if (isCodeBuddyCliType(cliType)) {
           modelInput.dataset.codebuddyModel = model;
@@ -320,18 +331,41 @@
           modelInput.dataset.standardModel = model;
           delete modelInput.dataset.codebuddyModel;
         }
+        if (isCodexCliType(cliType)) {
+          modelInput.dataset.codexModel = model;
+          modelInput.dataset.codexModelSource = model ? "preset" : "";
+        }
+      }
+      if (reasoningSelect) {
+        const effort = NEW_CONV_UI.mode === "attach"
+          ? normalizeReasoningEffort(sess && (sess.reasoning_effort || sess.reasoningEffort))
+          : "";
+        reasoningSelect.dataset.reasoningSource = effort ? "preset" : "";
+        reasoningSelect.dataset.reasoningEffort = effort;
       }
       syncNewConvModelUI();
     }
 
-    function selectedNewConvModelValue(cliTypeRaw, modelInput, codeBuddySelect) {
+    function selectedNewConvModelValue(cliTypeRaw, modelInput, codeBuddySelect, opts = {}) {
       if (isCodeBuddyCliType(cliTypeRaw)) {
         const selected = normalizeSessionModel(codeBuddySelect && codeBuddySelect.value)
           || normalizeSessionModel(modelInput && modelInput.value)
           || codeBuddyDefaultModel();
         return selected;
       }
+      if (isCodexCliType(cliTypeRaw)) {
+        const source = String((modelInput && modelInput.dataset && modelInput.dataset.modelSource) || "").trim();
+        const selected = normalizeSessionModel(modelInput && modelInput.value);
+        return source === "user" ? selected : "";
+      }
       return normalizeSessionModel(modelInput && modelInput.value);
+    }
+
+    function selectedNewConvReasoningEffortValue(cliTypeRaw, reasoningSelect, opts = {}) {
+      if (!isCodexCliType(cliTypeRaw)) return "";
+      const source = String((reasoningSelect && reasoningSelect.dataset && reasoningSelect.dataset.reasoningSource) || "").trim();
+      const selected = normalizeReasoningEffort(reasoningSelect && reasoningSelect.value);
+      return source === "user" ? selected : "";
     }
 
     function collectNewConvEnvironmentOptions(prefill) {
@@ -450,6 +484,9 @@
       const cliSelect = document.getElementById("newConvCliType");
       const modelInput = document.getElementById("newConvModel");
       const codeBuddySelect = document.getElementById("newConvCodeBuddyModel");
+      const modelHint = document.getElementById("newConvModelHint");
+      const reasoningRow = document.getElementById("newConvReasoningRow");
+      const reasoningSelect = document.getElementById("newConvReasoningEffort");
       const hintEl = document.getElementById("newConvCliHint");
       const cli = String((cliSelect && cliSelect.value) || "codex").trim() || "codex";
       const normalized = cli.toLowerCase();
@@ -472,8 +509,25 @@
           modelInput.dataset.codebuddyModel = selected;
           modelInput.dataset.modelCliType = "codebuddy";
           modelInput.dataset.modelSource = current ? (modelInput.dataset.modelSource || "preset") : "default";
+        } else if (isCodexCliType(normalized)) {
+          if (previousCli && !isCodexCliType(previousCli)) {
+            if (!isCodeBuddyCliType(previousCli)) modelInput.dataset.standardModel = normalizeSessionModel(modelInput.value);
+          }
+          const source = String(modelInput.dataset.codexModelSource || "").trim();
+          const current = source === "user"
+            ? normalizeSessionModel(modelInput.value)
+            : normalizeSessionModel(modelInput.dataset.codexModel);
+          const selected = current;
+          populateCodexModelInput(modelInput, null, selected, { allowEmpty: true });
+          modelInput.hidden = false;
+          modelInput.disabled = false;
+          modelInput.dataset.codexModel = selected;
+          modelInput.dataset.modelCliType = "codex";
+          modelInput.dataset.modelSource = source === "user" ? "user" : "inherit";
+          modelInput.dataset.codexModelSource = modelInput.dataset.modelSource;
+          delete modelInput.dataset.codebuddyModelApplied;
         } else {
-          if (isCodeBuddyCliType(previousCli)) {
+          if (isCodeBuddyCliType(previousCli) || isCodexCliType(previousCli)) {
             modelInput.value = normalizeSessionModel(modelInput.dataset.standardModel);
           }
           modelInput.hidden = false;
@@ -491,8 +545,32 @@
         codeBuddySelect.disabled = !show;
         if (!show) codeBuddySelect.innerHTML = "";
       }
+      if (reasoningRow) reasoningRow.hidden = !isCodexCliType(normalized);
+      if (reasoningSelect) {
+        const showReasoning = isCodexCliType(normalized);
+        reasoningSelect.disabled = !showReasoning;
+        if (showReasoning) {
+          const source = String(reasoningSelect.dataset.reasoningSource || "").trim();
+          const current = source === "user"
+            ? normalizeReasoningEffort(reasoningSelect.value)
+            : normalizeReasoningEffort(reasoningSelect.dataset.reasoningEffort);
+          const selected = current;
+          populateCodexReasoningEffortSelect(reasoningSelect, selected, { allowEmpty: true });
+          reasoningSelect.dataset.reasoningEffort = selected;
+          reasoningSelect.dataset.reasoningSource = source === "user" ? "user" : "inherit";
+        } else {
+          reasoningSelect.disabled = true;
+        }
+      }
+      if (modelHint) {
+        modelHint.textContent = isCodexCliType(normalized)
+          ? (codexModelSelectionHint(modelInput && modelInput.value) || "留空跟随 Codex CLI 默认；也可选 7 个预设或直接输入自定义模型 ID。")
+          : "";
+      }
       if (!hintEl) return;
-      if (normalized === "codebuddy") {
+      if (normalized === "codex") {
+        hintEl.textContent = "Codex：模型和思考强度默认留空并跟随本机 CLI 配置；只有主动选择时才保存到当前会话。";
+      } else if (normalized === "codebuddy") {
         hintEl.textContent = "CodeBuddy Code：默认 deepseek-v4-pro 仅为创建预设，可改选，不代表所有环境已验收；界面可读名如 DeepSeek V4 Pro，实际保存值为模型 ID：deepseek-v4-pro。AGENTS.md 是唯一规则真源，CODEBUDDY.md 是受管镜像；权限模式与工具白名单由本机 CodeBuddy 配置控制，运行详情只消费后端归一后的 terminal text 输出。";
       } else if (normalized === "trae") {
         hintEl.textContent = "Trae Agent CLI：模型可选；运行前需由后端环境配置 TRAE_CONFIG_FILE。";
@@ -1822,6 +1900,10 @@
     }
 
     function responseErrorDetailFromJson(payload, fallbackText = "") {
+      if (typeof normalizeManualAgentAddressabilityError === "function") {
+        const normalized = normalizeManualAgentAddressabilityError(payload, fallbackText);
+        if (normalized) return normalized;
+      }
       const src = (payload && typeof payload === "object") ? payload : {};
       const detail = src && (src.detail || src.error || src.message);
       if (detail && typeof detail === "object") {
@@ -1990,8 +2072,16 @@
       if (!looksLikeSessionId(sid)) return;
       const form = SESSION_INFO_UI.form || {};
       const cliType = String(form.cli_type || "codex").trim().toLowerCase() || "codex";
+      const alias = String(form.alias || "").trim();
+      const aliasValidationMessage = typeof manualAgentAliasValidationMessage === "function"
+        ? manualAgentAliasValidationMessage(SESSION_INFO_UI.projectId || STATE.project || "", alias, sid)
+        : (!alias ? "Agent 可读名（alias）不能为空。" : "");
+      if (aliasValidationMessage) {
+        setConversationSessionInfoError(aliasValidationMessage);
+        return;
+      }
       const payload = {
-        alias: String(form.alias || "").trim(),
+        alias,
         channel_name: String(form.channel_name || "").trim(),
         cli_type: cliType,
         model: normalizeSessionModel(form.model),
@@ -2110,8 +2200,28 @@
           }) || row;
           break;
         }
+        const directoryProjectId = String(SESSION_INFO_UI.projectId || STATE.project || "").trim();
+        if (directoryProjectId && PCONV.sessionDirectoryByProject && Array.isArray(PCONV.sessionDirectoryByProject[directoryProjectId])) {
+          PCONV.sessionDirectoryByProject[directoryProjectId] = PCONV.sessionDirectoryByProject[directoryProjectId].map((row) => {
+            if (String(getSessionId(row) || "").trim() !== sid) return row;
+            return normalizeConversationSession({
+              ...(row || {}),
+              id: sid,
+              sessionId: sid,
+              alias: updated.alias,
+              display_name: updated.alias || updated.display_name || row.display_name || row.displayName,
+              displayName: updated.alias || updated.display_name || row.displayName || row.display_name,
+              channel_name: updated.channel_name,
+              primaryChannel: updated.channel_name,
+              cli_type: updated.cli_type,
+              model: updated.model,
+              status: updated.status,
+              is_primary: updated.is_primary,
+            }) || row;
+          });
+        }
         closeConversationSessionInfoModal();
-        setHintText(STATE.panelMode, "会话信息已保存。");
+        setHintText(STATE.panelMode, "会话信息已保存，联系人名和左侧列表已按 SessionStore 可读名刷新；Agent Directory/CCR 若仍显示旧名，请刷新静态页或等待通讯录同步。");
         render();
       } catch (_) {
         setConversationSessionInfoError("保存失败：网络或服务异常。");
@@ -2397,9 +2507,20 @@
       avatarConfig.appendChild(avatarActions);
       formNode.appendChild(mkField("头像配置", avatarConfig));
 
-      const aliasInput = el("input", { class: "input", value: String(form.alias || "") });
+      const aliasInput = el("input", {
+        class: "input",
+        value: String(form.alias || ""),
+        placeholder: "例如：前端-Agent",
+        required: "required",
+      });
       aliasInput.addEventListener("input", () => { form.alias = String(aliasInput.value || ""); });
-      formNode.appendChild(mkField("对话agent名称（alias）", aliasInput));
+      const aliasWrap = el("div");
+      aliasWrap.appendChild(aliasInput);
+      aliasWrap.appendChild(el("div", {
+        class: "hint",
+        text: "必填。保存后作为 SessionStore 身份真源，用于通讯录按名寻址；项目内重名会被阻断并显示冲突对象。",
+      }));
+      formNode.appendChild(mkField("对话agent名称（alias，必填）", aliasWrap));
 
       const channelSel = el("select", { class: "input" });
       const channelOptions = unionChannelNames(SESSION_INFO_UI.projectId || STATE.project || "");
@@ -2432,16 +2553,28 @@
       const modelTextInput = el("input", {
         class: "input",
         value: String(form.model || ""),
+        list: "convSessionCodexModelOptions",
         placeholder: modelInputPlaceholderByCli(form.cli_type || base.cli_type || "codex"),
       });
-      modelTextInput.addEventListener("input", () => { form.model = String(modelTextInput.value || ""); });
+      const codexModelDatalist = el("datalist", { id: "convSessionCodexModelOptions" });
+      const modelHint = el("div", { class: "hint" });
+      modelTextInput.addEventListener("input", () => {
+        form.model = String(modelTextInput.value || "");
+        const cliType = String(form.cli_type || base.cli_type || "codex").trim().toLowerCase() || "codex";
+        if (isCodexCliType(cliType)) {
+          modelHint.textContent = codexModelSelectionHint(form.model)
+            || "可选 7 个预设，也可保留历史或自定义模型 ID；留空继续继承现有设置。";
+        }
+      });
       const codeBuddyModelSelect = el("select", { class: "input", style: "cursor:pointer;" });
       codeBuddyModelSelect.addEventListener("change", () => {
         form.model = String(codeBuddyModelSelect.value || codeBuddyDefaultModel());
       });
       const modelFieldWrap = el("div", { class: "conv-session-model-control" });
       modelFieldWrap.appendChild(modelTextInput);
+      modelFieldWrap.appendChild(codexModelDatalist);
       modelFieldWrap.appendChild(codeBuddyModelSelect);
+      modelFieldWrap.appendChild(modelHint);
       formNode.appendChild(mkField("模型（model）", modelFieldWrap));
 
       const codeBuddyPermissionSelect = el("select", { class: "input", style: "cursor:pointer;" });
@@ -2456,13 +2589,10 @@
       const reasoningField = el("div", { class: "conv-session-field" });
       reasoningField.appendChild(el("label", { text: "推理强度（reasoning_effort，仅 codex）" }));
       const reasoningSel = el("select", { class: "input" });
-      reasoningSel.appendChild(el("option", { value: "", text: "默认" }));
-      reasoningSel.appendChild(el("option", { value: "low", text: "low" }));
-      reasoningSel.appendChild(el("option", { value: "medium", text: "medium" }));
-      reasoningSel.appendChild(el("option", { value: "high", text: "high" }));
-      reasoningSel.appendChild(el("option", { value: "xhigh", text: "xhigh" }));
-      reasoningSel.value = normalizeReasoningEffort(form.reasoning_effort);
-      reasoningSel.addEventListener("change", () => { form.reasoning_effort = String(reasoningSel.value || ""); });
+      populateCodexReasoningEffortSelect(reasoningSel, form.reasoning_effort, { allowEmpty: true });
+      reasoningSel.addEventListener("change", () => {
+        form.reasoning_effort = normalizeReasoningEffort(reasoningSel.value);
+      });
       reasoningField.appendChild(reasoningSel);
       formNode.appendChild(reasoningField);
 
@@ -2485,10 +2615,26 @@
           modelTextInput.disabled = true;
           codeBuddyModelSelect.hidden = false;
           codeBuddyModelSelect.disabled = false;
+          modelTextInput.removeAttribute("list");
+          modelHint.textContent = "";
           permissionField.style.display = "";
           codeBuddyPermissionSelect.disabled = false;
+        } else if (isCodexCliType(cliType)) {
+          populateCodexModelInput(modelTextInput, codexModelDatalist, form.model, { allowEmpty: true });
+          modelTextInput.setAttribute("list", "convSessionCodexModelOptions");
+          modelTextInput.hidden = false;
+          modelTextInput.disabled = false;
+          codeBuddyModelSelect.hidden = true;
+          codeBuddyModelSelect.disabled = true;
+          codeBuddyModelSelect.innerHTML = "";
+          modelHint.textContent = codexModelSelectionHint(form.model)
+            || "可选 7 个预设，也可保留历史或自定义模型 ID；留空继续继承现有设置。";
+          permissionField.style.display = "none";
+          codeBuddyPermissionSelect.disabled = true;
+          codeBuddyPermissionSelect.innerHTML = "";
         } else {
           modelTextInput.value = normalizeSessionModel(form.model);
+          modelTextInput.removeAttribute("list");
           modelTextInput.hidden = false;
           modelTextInput.disabled = false;
           codeBuddyModelSelect.hidden = true;
@@ -2497,9 +2643,12 @@
           permissionField.style.display = "none";
           codeBuddyPermissionSelect.disabled = true;
           codeBuddyPermissionSelect.innerHTML = "";
+          modelHint.textContent = "";
         }
         reasoningField.style.display = cliType === "codex" ? "" : "none";
-        if (cliType !== "codex") {
+        if (cliType === "codex") {
+          populateCodexReasoningEffortSelect(reasoningSel, form.reasoning_effort, { allowEmpty: true });
+        } else {
           form.reasoning_effort = "";
           reasoningSel.value = "";
         }

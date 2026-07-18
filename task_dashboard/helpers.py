@@ -245,6 +245,14 @@ def _repo_root() -> Path:
         return score
 
     repo_root = Path(__file__).absolute().parents[1]
+    sentinel = repo_root / ".task_dashboard_source_root"
+    if not str(os.environ.get("TASK_DASHBOARD_REPO_ROOT") or "").strip() and sentinel.exists() and sentinel.is_file():
+        try:
+            source_repo = Path(sentinel.read_text(encoding="utf-8").strip()).expanduser().resolve()
+        except Exception:
+            source_repo = Path()
+        if source_repo.exists() and source_repo.is_dir() and (source_repo / "config.toml").exists():
+            return _prefer_desktop_alias(source_repo.parents[2] if len(source_repo.parents) >= 3 else source_repo)
     workspace_root = repo_root.parents[2] if len(repo_root.parents) >= 3 else repo_root
     config_path = repo_root / "config.toml"
     first_hints = _first_project_hints(config_path)

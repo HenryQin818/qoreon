@@ -12,9 +12,10 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 class ClaudeCodeFrontendSelectorsUiLogicTests(unittest.TestCase):
     def test_claudecode_composer_has_model_and_permission_selectors(self) -> None:
         html = (REPO_ROOT / "web" / "task.html.tpl").read_text(encoding="utf-8")
-        ops_js = (REPO_ROOT / "web" / "task_entry_parts" / "80-project-ops.js").read_text(encoding="utf-8")
+        options_js = (REPO_ROOT / "web" / "task_parts" / "08-cli-model-options.js").read_text(encoding="utf-8")
         session_info_js = (REPO_ROOT / "web" / "task_entry_parts" / "81-session-info-and-bindings.js").read_text(encoding="utf-8")
         composer_js = (REPO_ROOT / "web" / "task_parts" / "75-conversation-composer.js").read_text(encoding="utf-8")
+        controls_js = (REPO_ROOT / "web" / "task_parts" / "75-00-conversation-cli-controls.js").read_text(encoding="utf-8")
         conversation_js = (REPO_ROOT / "web" / "task_parts" / "60-conversation.js").read_text(encoding="utf-8")
         bootstrap_js = (REPO_ROOT / "web" / "task_parts" / "74-session-bootstrap-and-sessions.js").read_text(encoding="utf-8")
 
@@ -32,8 +33,8 @@ class ClaudeCodeFrontendSelectorsUiLogicTests(unittest.TestCase):
         self.assertIn('value="acceptEdits">自动接受编辑', sender_meta)
         self.assertIn('value="plan">计划模式', sender_meta)
 
-        self.assertIn('const CLAUDE_DEFAULT_MODEL = "claude-opus-4-8";', ops_js)
-        model_options_match = re.search(r"const CLAUDE_MODEL_OPTIONS = \[([\s\S]*?)\];", ops_js)
+        self.assertIn('const CLAUDE_DEFAULT_MODEL = "claude-opus-4-8";', options_js)
+        model_options_match = re.search(r"const CLAUDE_MODEL_OPTIONS = \[([\s\S]*?)\];", options_js)
         self.assertIsNotNone(model_options_match)
         model_options = model_options_match.group(1)
         self.assertIn('"claude-opus-4-8"', model_options)
@@ -49,32 +50,32 @@ class ClaudeCodeFrontendSelectorsUiLogicTests(unittest.TestCase):
         self.assertNotIn("claude-sonnet-4-20250514", model_options)
         self.assertNotIn("claude-opus-4-20250514", model_options)
         self.assertNotIn('"claude-sonnet"', model_options)
-        self.assertIn('const CLAUDE_PERMISSION_MODE_DEFAULT = "bypassPermissions";', ops_js)
-        self.assertIn("function isClaudeCliType", ops_js)
-        self.assertIn("function populateClaudeModelSelect", ops_js)
-        self.assertIn("function populateClaudePermissionModeSelect", ops_js)
-        self.assertIn('"claude-opus-4-8": "Claude Opus 4.8"', ops_js)
-        self.assertIn('"claude-fable-5": "Claude Fable 5"', ops_js)
+        self.assertIn('const CLAUDE_PERMISSION_MODE_DEFAULT = "bypassPermissions";', options_js)
+        self.assertIn("function isClaudeCliType", options_js)
+        self.assertIn("function populateClaudeModelSelect", options_js)
+        self.assertIn("function populateClaudePermissionModeSelect", options_js)
+        self.assertIn('"claude-opus-4-8": "Claude Opus 4.8"', options_js)
+        self.assertIn('"claude-fable-5": "Claude Fable 5"', options_js)
         self.assertIn('<option value="claude-fable-5"></option>', html)
-        self.assertIn('"default": "Alias: default"', ops_js)
-        self.assertIn("默认 claude-opus-4-8；可选完整模型 ID 或 alias", ops_js)
-        self.assertNotIn('return typeof claudeDefaultModel === "function" ? claudeDefaultModel() : "claude-sonnet";', composer_js)
+        self.assertIn('"default": "Alias: default"', options_js)
+        self.assertIn("默认 claude-opus-4-8；可选完整模型 ID 或 alias", options_js)
+        self.assertNotIn('return typeof claudeDefaultModel === "function" ? claudeDefaultModel() : "claude-sonnet";', controls_js)
 
-        self.assertIn("function renderConversationComposerClaudeModel", composer_js)
-        self.assertIn("function conversationComposerModelReadiness", composer_js)
-        self.assertIn("function hydrateConversationComposerModelIfNeeded", composer_js)
-        self.assertIn("读取模型配置中", composer_js)
-        self.assertIn("function renderConversationComposerClaudePermissionMode", composer_js)
-        self.assertIn("function resolveConversationComposerClaudePermissionMode", composer_js)
-        self.assertIn("function resolveConversationComposerPermissionPayload", composer_js)
-        self.assertIn("tryUpdateSessionClaudePermissionMode(sid, next)", composer_js)
-        self.assertIn("syncConversationComposerClaudeModelToLocal", composer_js)
-        self.assertIn("syncConversationComposerClaudePermissionModeToLocal", composer_js)
-        self.assertIn("permission_mode: mode", composer_js)
-        self.assertIn("permissionMode: mode", composer_js)
-        self.assertIn("claude_permission_mode: mode", composer_js)
-        self.assertIn("claudePermissionMode: mode", composer_js)
-        self.assertIn("最大授权会追加 --dangerously-skip-permissions", composer_js)
+        self.assertIn("function renderConversationComposerClaudeModel", controls_js)
+        self.assertIn("function conversationComposerModelReadiness", controls_js)
+        self.assertIn("function hydrateConversationComposerModelIfNeeded", controls_js)
+        self.assertIn("读取模型配置中", controls_js)
+        self.assertIn("function renderConversationComposerClaudePermissionMode", controls_js)
+        self.assertIn("function resolveConversationComposerClaudePermissionMode", controls_js)
+        self.assertIn("function resolveConversationComposerPermissionPayload", controls_js)
+        self.assertIn("tryUpdateSessionClaudePermissionMode(sid, next)", controls_js)
+        self.assertIn("syncConversationComposerClaudeModelToLocal", controls_js)
+        self.assertIn("syncConversationComposerClaudePermissionModeToLocal", controls_js)
+        self.assertIn("permission_mode: mode", controls_js)
+        self.assertIn("permissionMode: mode", controls_js)
+        self.assertIn("claude_permission_mode: mode", controls_js)
+        self.assertIn("claudePermissionMode: mode", controls_js)
+        self.assertIn("最大授权会追加 --dangerously-skip-permissions", controls_js)
 
         self.assertIn("renderConversationComposerClaudeModel(null)", conversation_js)
         self.assertIn("renderConversationComposerClaudeModel(ctx)", conversation_js)
@@ -183,12 +184,14 @@ class ClaudeCodeFrontendSelectorsUiLogicTests(unittest.TestCase):
               return String(fallback || "");
             }
             function normalizeSessionModel(raw) { return String(raw || "").trim(); }
+            function isCodexCliType(raw) { return String(raw || "").trim().toLowerCase() === "codex"; }
             function isCodeBuddyCliType(raw) { return String(raw || "").trim().toLowerCase() === "codebuddy"; }
             function isClaudeCliType(raw) {
               const t = String(raw || "").trim().toLowerCase();
               return t === "claude" || t === "claudecode" || t === "claude_code" || t === "claude-code";
             }
             function codeBuddyDefaultModel() { return "deepseek-v4-pro"; }
+            function codexDefaultModel() { return ""; }
             function claudeDefaultModel() { return "claude-opus-4-8"; }
             function normalizeCodeBuddyPermissionMode(raw) {
               const text = String(raw || "").trim();
@@ -246,6 +249,7 @@ class ClaudeCodeFrontendSelectorsUiLogicTests(unittest.TestCase):
             const functions = [
               "conversationComposerCliType",
               "conversationComposerSupportsModelSwitch",
+              "conversationComposerCliTypesMatch",
               "conversationComposerDefaultModelForCli",
               "conversationComposerModelSelectForCli",
               "conversationComposerCachedModelForCli",
@@ -265,7 +269,7 @@ class ClaudeCodeFrontendSelectorsUiLogicTests(unittest.TestCase):
               "resolveConversationComposerPermissionPayload",
             ];
             for (const name of functions) {
-              eval(extractFunction("web/task_parts/75-conversation-composer.js", name));
+              eval(extractFunction("web/task_parts/75-00-conversation-cli-controls.js", name));
             }
 
             const ctx = { sessionId: "session-a", cliType: "claude", model: "claude-opus-4-8" };

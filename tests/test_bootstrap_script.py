@@ -32,10 +32,14 @@ class BootstrapScriptTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root_path = Path(td) / ".sessions" / "task_dashboard.json"
             runtime_path = Path(td) / ".runtime" / "stable" / ".sessions" / "task_dashboard.json"
+            channel_root = Path(td) / "任务规划" / "子级99-创建通道链路检查"
             bs = bootstrap_script.Bootstrapper.__new__(bootstrap_script.Bootstrapper)
             bs.project_id = "task_dashboard"
             bs.sessions_project_path = root_path
             bs.runtime_sessions_project_path = runtime_path
+            bs.channel_root = channel_root
+            bs.desktop_cwd = str(Path(td))
+            bs.names = SimpleNamespace(session_title="创建通道链路检查主会话")
 
             bs._append_project_session_store_local(
                 session_id="019c-test-bootstrap-session",
@@ -51,8 +55,21 @@ class BootstrapScriptTests(unittest.TestCase):
                 self.assertEqual(len(sessions), 1)
                 self.assertEqual(sessions[0].get("id"), "019c-test-bootstrap-session")
                 self.assertEqual(sessions[0].get("channel_name"), "子级99-创建通道链路检查")
+                self.assertTrue(sessions[0].get("is_primary"))
+                self.assertEqual(sessions[0].get("session_role"), "primary")
+                self.assertEqual(sessions[0].get("workdir"), str(channel_root))
+                self.assertEqual(sessions[0].get("alias"), "创建通道链路检查主会话")
+                self.assertEqual(sessions[0].get("agent_name"), "创建通道链路检查主会话")
 
-    def test_create_session_retries_once_after_channel_not_found(self):
+    def test_ensure_scripts_exist_skips_desktopize_dependency_when_disabled(self):
+        bs = bootstrap_script.Bootstrapper.__new__(bootstrap_script.Bootstrapper)
+        bs.args = SimpleNamespace(no_desktopize=True)
+        bs.desktopize_script = Path("/tmp/missing-desktopize-taskboard-session.py")
+
+        with mock.patch.object(bootstrap_script, "_die", side_effect=AssertionError("_die should not be called")):
+            bs._ensure_scripts_exist()
+
+    def test_create_session_retries_channel_not_found_until_ready(self):
         bs = bootstrap_script.Bootstrapper.__new__(bootstrap_script.Bootstrapper)
         bs.project_id = "task_dashboard"
         bs.base_url = "http://localhost:18770"
@@ -64,6 +81,7 @@ class BootstrapScriptTests(unittest.TestCase):
 
         side_effects = [
             RuntimeError('POST http://localhost:18770/api/sessions -> HTTP 404: {"error":"channel not found"}'),
+            RuntimeError('POST http://localhost:18770/api/sessions -> HTTP 404: {"error":"channel not found"}'),
             {"session": {"id": "019c-retry-session"}},
         ]
         with mock.patch.object(bootstrap_script, "_http_request_json", side_effect=side_effects) as m_http, \
@@ -71,8 +89,9 @@ class BootstrapScriptTests(unittest.TestCase):
             sid = bs._create_session()
 
         self.assertEqual(sid, "019c-retry-session")
-        self.assertEqual(m_http.call_count, 2)
-        m_sleep.assert_called_once_with(1.0)
+        self.assertEqual(m_http.call_count, 3)
+        self.assertEqual((m_http.call_args.kwargs.get("payload") or {}).get("agent_name"), "子级99-创建通道链路检查")
+        self.assertEqual(m_sleep.call_count, 2)
 
     def test_seed_and_training_messages_include_message_cli_guidance(self):
         bs = bootstrap_script.Bootstrapper.__new__(bootstrap_script.Bootstrapper)

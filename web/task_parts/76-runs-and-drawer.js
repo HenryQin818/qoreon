@@ -2080,6 +2080,9 @@
       const conversationModel = typeof resolveConversationComposerPayloadModel === "function"
         ? resolveConversationComposerPayloadModel(ctx)
         : "";
+      const conversationReasoningPayload = typeof resolveConversationComposerReasoningPayload === "function"
+        ? resolveConversationComposerReasoningPayload(ctx)
+        : {};
       if (String(STATE.selectedSessionId || "") !== String(ctx.sessionId || "")) {
         setSelectedSessionId(ctx.sessionId, true, { explicit: false });
       }
@@ -2114,6 +2117,7 @@
             sessionId: ctx.sessionId,
             cliType: ctx.cliType || "codex",
             ...(conversationModel ? { model: conversationModel } : {}),
+            ...conversationReasoningPayload,
             message: quickMsg,
             ...buildUiUserSenderFields(),
           }),

@@ -26,6 +26,29 @@ class SessionStoreModelTests(unittest.TestCase):
             self.assertEqual(got.get("model"), "codex-spark")
             self.assertEqual(got.get("reasoning_effort"), "high")
 
+    def test_create_and_update_session_persists_agent_name(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            store = SessionStore(base_dir=Path(td))
+            created = store.create_session(
+                project_id="task_dashboard",
+                channel_name="子级02-CCB运行时（server-并发-安全-启动）",
+                cli_type="codex",
+                session_id="10101010-1010-1010-1010-101010101010",
+                alias="后端-任务业务",
+                agent_name="后端-任务业务",
+            )
+            self.assertEqual(created.get("agent_name"), "后端-任务业务")
+
+            updated = store.update_session(
+                "10101010-1010-1010-1010-101010101010",
+                agent_name="任务维度运行时",
+            ) or {}
+            self.assertEqual(updated.get("agent_name"), "任务维度运行时")
+
+            got = store.get_session("10101010-1010-1010-1010-101010101010") or {}
+            self.assertEqual(got.get("alias"), "后端-任务业务")
+            self.assertEqual(got.get("agent_name"), "任务维度运行时")
+
     def test_update_session_supports_model(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             store = SessionStore(base_dir=Path(td))
@@ -399,6 +422,43 @@ class SessionStoreModelTests(unittest.TestCase):
             self.assertTrue(bool(fallback.get("is_primary")))
             visible = store.list_sessions("task_dashboard", channel_name)
             self.assertEqual([row.get("id") for row in visible], [sid2])
+
+    def test_channel_default_and_manage_skip_context_exhausted_primary(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            store = SessionStore(base_dir=Path(td))
+            exhausted_sid = "68686868-6868-6868-6868-686868686868"
+            replacement_sid = "79797979-7979-7979-7979-797979797979"
+            channel_name = "子级02-CCB运行时（server-并发-安全-启动）"
+            store.create_session(
+                project_id="task_dashboard",
+                channel_name=channel_name,
+                cli_type="codex",
+                session_id=exhausted_sid,
+                alias="旧主 Agent",
+                session_role="primary",
+                is_primary=True,
+                context_binding_state="context_exhausted",
+            )
+            store.create_session(
+                project_id="task_dashboard",
+                channel_name=channel_name,
+                cli_type="codex",
+                session_id=replacement_sid,
+                alias="新主 Agent",
+            )
+
+            default_row = store.get_channel_default_session("task_dashboard", channel_name) or {}
+            self.assertEqual(default_row.get("id"), replacement_sid)
+
+            result = store.manage_channel_sessions(
+                "task_dashboard",
+                channel_name,
+                primary_session_id=exhausted_sid,
+            )
+            rows = {row.get("id"): row for row in result.get("sessions") or []}
+            self.assertEqual(result.get("primary_session_id"), replacement_sid)
+            self.assertFalse(bool((rows.get(exhausted_sid) or {}).get("is_primary")))
+            self.assertTrue(bool((rows.get(replacement_sid) or {}).get("is_primary")))
 
     def test_get_channel_default_session_ignores_legacy_status_field(self) -> None:
         with tempfile.TemporaryDirectory() as td:

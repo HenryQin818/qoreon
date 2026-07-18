@@ -75,6 +75,12 @@
             <div class="channel-list" id="channelList"></div>
           </div>
         </div>
+        <div class="results-services-entry-wrap" id="resultsServicesEntryWrap">
+          <button class="results-services-entry-btn" id="resultsServicesTrigger" type="button" title="打开成果与服务清单">
+            <span class="results-services-entry-icon" aria-hidden="true">+</span>
+            <span>成果与服务</span>
+          </button>
+        </div>
         <div class="system-settings" id="systemSettingsWrap">
           <button class="system-settings-trigger" id="systemSettingsTrigger" type="button" aria-haspopup="true" aria-expanded="false" title="打开系统设置">
             <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -367,30 +373,20 @@
           <!-- 对话区块 -->
           <section class="convwrap" id="convWrap">
             <div class="convtimeline" id="convTimeline"></div>
-            <div class="convtrainingdock" id="convTrainingDock" aria-hidden="true">
-              <div class="convtraining" id="convTraining" style="display:none;">
-                <div class="convtraining-ico" aria-hidden="true">
-                  <svg viewBox="0 0 24 24" fill="none">
-                    <path d="M4 8.8 12 5l8 3.8-8 3.8L4 8.8Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
-                    <path d="M7 11.4V15c0 .9 2 2.4 5 2.4s5-1.5 5-2.4v-3.6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
-                  </svg>
-                </div>
-                <div class="convtraining-main">
-                  <div class="convtraining-title-row">
-                    <span class="convtraining-title">Agent培训</span>
-                    <span class="convtraining-count" id="convTrainingCount">再 1 条消息后自动消失</span>
-                  </div>
-                  <div class="convtraining-desc" id="convTrainingDesc">新 Agent 开始协作前，先学习项目 skills、发消息方式与回执规则，并完成一次通讯录正式发送验证。</div>
-                </div>
-                <div class="convtraining-actions">
-                  <button class="btn primary convtraining-send" id="convTrainingSendBtn" type="button">发送培训</button>
-                  <button class="convtraining-close" id="convTrainingCloseBtn" type="button" aria-label="关闭培训提醒" title="关闭">×</button>
-                </div>
-              </div>
-            </div>
             <div class="convcomposer">
               <div class="convsenderrow" id="convSenderRow">
                 <div class="convsendermeta">
+                  <label class="conv-model-switch" id="convCodexModelControl" hidden>
+                    <span class="conv-model-switch-label">模型</span>
+                    <input class="conv-model-switch-select" id="convCodexModelInput" list="convCodexModelOptions" aria-label="Codex 模型" autocomplete="off" />
+                    <datalist id="convCodexModelOptions"></datalist>
+                    <span class="conv-model-switch-status" id="convCodexModelStatus"></span>
+                  </label>
+                  <label class="conv-model-switch conv-reasoning-switch" id="convCodexReasoningControl" hidden>
+                    <span class="conv-model-switch-label">思考</span>
+                    <select class="conv-model-switch-select conv-reasoning-switch-select" id="convCodexReasoningSelect" aria-label="Codex 思考强度"></select>
+                    <span class="conv-model-switch-status" id="convCodexReasoningStatus"></span>
+                  </label>
                   <label class="conv-model-switch" id="convCodeBuddyModelControl" hidden>
                     <span class="conv-model-switch-label">模型</span>
                     <select class="conv-model-switch-select" id="convCodeBuddyModelSelect" aria-label="CodeBuddy 模型"></select>
@@ -423,12 +419,6 @@
                   <div class="convhint" id="convHint">在该会话下继续发送消息，系统会按 5 秒频率自动刷新处理状态。</div>
                 </div>
                 <div class="convsenderactions">
-                  <button class="conv-training-toggle" id="convTrainingReopenBtn" type="button" title="重新显示 Agent 培训" aria-label="重新显示 Agent 培训" style="display:none;">
-                    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                      <path d="M4 8.8 12 5l8 3.8-8 3.8L4 8.8Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
-                      <path d="M7 11.4V15c0 .9 2 2.4 5 2.4s5-1.5 5-2.4v-3.6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
-                    </svg>
-                  </button>
                   <button class="convrecentagents-global-toggle active" id="convRecentAgentsGlobalToggle" type="button" title="已显示最近联系，点击隐藏" aria-label="隐藏最近联系" aria-pressed="true">
                     <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
                       <path d="M8 11.2a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4Z" stroke="currentColor" stroke-width="1.6"/>
@@ -620,8 +610,9 @@
             <div class="newconv-static-instruction-hint" id="newConvStaticInstructionHint" hidden></div>
           </div>
           <div class="newconv-field">
-            <label for="newConvAlias">对话agent名称（alias，可选）</label>
-            <input class="input" id="newConvAlias" placeholder="例如：服务开发-通讯能力" />
+            <label for="newConvAlias">对话agent名称（alias） <span style="color:var(--bad);">*</span></label>
+            <input class="input" id="newConvAlias" placeholder="例如：服务开发-通讯能力" required />
+            <div class="hint" id="newConvAliasHint" style="margin-top:0;">必填。用于 Agent 通讯录按名寻址，需在当前项目内唯一；重名会提示冲突对象。</div>
           </div>
           <div class="newconv-field">
             <label for="newConvSessionRole">会话角色</label>
@@ -649,8 +640,15 @@
                 <label for="newConvModel">模型（可选）</label>
                 <input class="input" id="newConvModel" list="newConvModelSuggestions" placeholder="留空使用该 CLI 默认模型" />
                 <select class="input" id="newConvCodeBuddyModel" style="cursor:pointer;" hidden aria-label="CodeBuddy 模型"></select>
+                <div class="hint" id="newConvModelHint" style="margin-top:6px;"></div>
                 <datalist id="newConvModelSuggestions">
-                  <option value="codex-spark"></option>
+                  <option value="gpt-5.6-sol"></option>
+                  <option value="gpt-5.6-terra"></option>
+                  <option value="gpt-5.6-luna"></option>
+                  <option value="gpt-5.5"></option>
+                  <option value="gpt-5.4"></option>
+                  <option value="gpt-5.4-mini"></option>
+                  <option value="gpt-5.3-codex-spark" label="API 兼容受限"></option>
                   <option value="claude-opus-4-8"></option>
                   <option value="claude-sonnet-4-6"></option>
                   <option value="claude-haiku-4-5"></option>
@@ -663,20 +661,26 @@
                   <option value="opusplan"></option>
                   <option value="gemini-2.0-flash"></option>
                   <option value="gpt-4.1"></option>
-                  <option value="deepseek-v4-pro"></option>
-                  <option value="deepseek-v4-flash"></option>
-                  <option value="deepseek-v3-2-volc"></option>
+                  <option value="hy3"></option>
+                  <option value="glm-5.2"></option>
                   <option value="glm-5.1"></option>
                   <option value="glm-5.0"></option>
                   <option value="glm-5.0-turbo"></option>
                   <option value="glm-5v-turbo"></option>
                   <option value="glm-4.7"></option>
-                  <option value="minimax-m3"></option>
+                  <option value="minimax-m3-pay"></option>
                   <option value="minimax-m2.7"></option>
+                  <option value="kimi-k2.7"></option>
                   <option value="kimi-k2.6"></option>
-                  <option value="kimi-k2.5"></option>
-                  <option value="hy3-preview"></option>
+                  <option value="deepseek-v4-pro"></option>
+                  <option value="deepseek-v4-flash"></option>
+                  <option value="deepseek-v3-2-volc"></option>
                 </datalist>
+              </div>
+              <div class="newconv-field" id="newConvReasoningRow" hidden>
+                <label for="newConvReasoningEffort">思考强度</label>
+                <select class="input" id="newConvReasoningEffort" style="cursor:pointer;" aria-label="Codex 思考强度"></select>
+                <div class="hint" style="margin-top:6px;">留空跟随 Codex CLI 默认；选择后只保存到当前会话。</div>
               </div>
               <div class="newconv-field">
                 <label for="newConvPurpose">用途说明（可选）</label>

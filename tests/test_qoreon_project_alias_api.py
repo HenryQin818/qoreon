@@ -85,7 +85,7 @@ class QoreonProjectAliasApiTests(unittest.TestCase):
             httpd, store, session_store, binding_store = self._start_server(base)
 
             pid = "task_dashboard"
-            sid = "019d7529-5944-74e2-999d-b87383434c44"
+            sid = "019f7008-0008-7008-8008-000000000008"
             channel_name = "子级02-CCB运行时（server-并发-安全-启动）"
             session_store.create_session(pid, channel_name, cli_type="codex", session_id=sid)
             binding_store.save_binding(sid, pid, channel_name, cli_type="codex")

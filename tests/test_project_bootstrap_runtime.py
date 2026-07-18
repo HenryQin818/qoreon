@@ -642,11 +642,11 @@ class ProjectBootstrapRuntimeTests(unittest.TestCase):
                             "onboarding_source_ref": {
                                 "project_id": "test_demo_project",
                                 "channel_name": "辅助04",
-                                "session_id": "019db997-36c9-73c3-b660-7e291474b3da",
+                                "session_id": "019f700c-000c-700c-800c-00000000000c",
                             },
                             "onboarding_callback_to": {
                                 "channel_name": "辅助04",
-                                "session_id": "019db997-36c9-73c3-b660-7e291474b3da",
+                                "session_id": "019f700c-000c-700c-800c-00000000000c",
                             },
                         },
                     },
@@ -679,8 +679,8 @@ class ProjectBootstrapRuntimeTests(unittest.TestCase):
             self.assertEqual(payload["onboarding_delivery"]["init_training_messages"][0]["target_session_id"], created_sid)
             training_payload = sent_payloads[1]
             self.assertEqual(training_payload["interaction_mode"], "task_with_receipt")
-            self.assertEqual(training_payload["source_ref"]["session_id"], "019db997-36c9-73c3-b660-7e291474b3da")
-            self.assertEqual(training_payload["callback_to"]["session_id"], "019db997-36c9-73c3-b660-7e291474b3da")
+            self.assertEqual(training_payload["source_ref"]["session_id"], "019f700c-000c-700c-800c-00000000000c")
+            self.assertEqual(training_payload["callback_to"]["session_id"], "019f700c-000c-700c-800c-00000000000c")
             self.assertIn("announce_run_id + target_session_id一致 + visible_in_channel_chat=true", training_payload["message"])
 
     def test_bootstrap_onboarding_blocks_non_test_project_without_sending(self) -> None:

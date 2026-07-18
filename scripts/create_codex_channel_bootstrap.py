@@ -38,6 +38,8 @@ except Exception:  # pragma: no cover
 
 DESKTOPIZE_SESSION_FILE_MAX_ATTEMPTS = 4
 DESKTOPIZE_SESSION_FILE_RETRY_DELAY_S = 2.0
+API_SESSION_CHANNEL_READY_MAX_ATTEMPTS = 6
+API_SESSION_CHANNEL_READY_RETRY_DELAY_S = 0.75
 
 
 def _now_local() -> str:
@@ -63,6 +65,11 @@ def _info(msg: str) -> None:
 
 def _warn(msg: str) -> None:
     print(f"[WARN] {msg}")
+
+
+def _is_channel_not_found_error(exc: BaseException) -> bool:
+    text = str(exc or "").lower()
+    return "channel not found" in text and ("http 404" in text or "404" in text)
 
 
 def _safe_stem(text: str) -> str:
@@ -465,6 +472,8 @@ class Bootstrapper:
         return out
 
     def _ensure_scripts_exist(self) -> None:
+        if self.args.no_desktopize:
+            return
         if not self.desktopize_script.exists():
             _die(f"desktopize_taskboard_session.py 不存在: {self.desktopize_script}")
 
@@ -681,46 +690,40 @@ class Bootstrapper:
             "channel_name": self.names.channel_dir_name,
             "cli_type": "codex",
             "alias": str(self.args.session_alias or "").strip(),
+            "agent_name": str(self.args.session_alias or getattr(self.names, "session_title", "") or self.names.channel_dir_name or "").strip(),
             "first_message": self._build_seed_message(),
         }
+        api_timeout_s = max(5, int(self.args.api_session_timeout_s))
+        max_attempts = max(1, int(API_SESSION_CHANNEL_READY_MAX_ATTEMPTS))
         try:
-            api_timeout_s = max(5, int(self.args.api_session_timeout_s))
-            resp = _http_request_json(
-                method="POST",
-                url=f"{self.base_url}/api/sessions",
-                payload=payload,
-                token=self.token,
-                timeout_s=api_timeout_s,
-            )
-            session = resp.get("session") if isinstance(resp, dict) else None
-            if not isinstance(session, dict):
-                raise RuntimeError(f"无 session 字段: {_json_dumps(resp)}")
-            sid = str(session.get("id") or "").strip()
-            if not sid:
-                raise RuntimeError(f"session.id 为空: {_json_dumps(resp)}")
-            _info(f"会话创建成功（API）: {sid}")
-            return sid
-        except Exception as e:
-            err_text = str(e)
-            if "HTTP 404" in err_text and "channel not found" in err_text:
-                _warn("新通道刚创建后 /api/sessions 短暂不可见，1s 后重试一次")
-                time.sleep(1.0)
+            for attempt in range(1, max_attempts + 1):
                 try:
                     resp = _http_request_json(
                         method="POST",
                         url=f"{self.base_url}/api/sessions",
                         payload=payload,
                         token=self.token,
-                        timeout_s=max(5, int(self.args.api_session_timeout_s)),
+                        timeout_s=api_timeout_s,
                     )
                     session = resp.get("session") if isinstance(resp, dict) else None
-                    if isinstance(session, dict):
-                        sid = str(session.get("id") or "").strip()
-                        if sid:
-                            _info(f"会话创建成功（API 重试）: {sid}")
-                            return sid
-                except Exception as retry_error:
-                    e = retry_error
+                    if not isinstance(session, dict):
+                        raise RuntimeError(f"无 session 字段: {_json_dumps(resp)}")
+                    sid = str(session.get("id") or "").strip()
+                    if not sid:
+                        raise RuntimeError(f"session.id 为空: {_json_dumps(resp)}")
+                    suffix = "" if attempt == 1 else f"（API 第 {attempt} 次尝试）"
+                    _info(f"会话创建成功{suffix}: {sid}")
+                    return sid
+                except Exception as e:
+                    if not _is_channel_not_found_error(e) or attempt >= max_attempts:
+                        raise
+                    delay_s = min(API_SESSION_CHANNEL_READY_RETRY_DELAY_S * attempt, 3.0)
+                    _warn(
+                        "新通道刚创建后 /api/sessions 暂未识别 channel，"
+                        f"{delay_s:.2f}s 后重试 ({attempt}/{max_attempts})"
+                    )
+                    time.sleep(delay_s)
+        except Exception as e:
             _warn(f"/api/sessions 创建失败，切换本地直连 fallback: {e}")
             sid = self._create_session_via_local_codex(
                 alias=str(self.args.session_alias or "").strip(),
@@ -749,7 +752,12 @@ class Bootstrapper:
         except Exception as e:
             _die(f"构建 Codex 建会话命令失败: {e}")
 
-        run_cwd = Path(self.desktop_cwd)
+        channel_root = getattr(self, "channel_root", None)
+        run_cwd = (
+            channel_root
+            if isinstance(channel_root, Path) and channel_root.exists() and channel_root.is_dir()
+            else Path(self.desktop_cwd)
+        )
         if not (run_cwd.exists() and run_cwd.is_dir()):
             run_cwd = self.repo_root
 
@@ -798,6 +806,19 @@ class Bootstrapper:
     ) -> None:
         target_paths = self._iter_project_session_store_paths()
         now = _utc_now_iso()
+        channel_root_value = getattr(self, "channel_root", None)
+        channel_root = (
+            channel_root_value
+            if isinstance(channel_root_value, Path)
+            else Path(
+                str(channel_root_value or getattr(self, "desktop_cwd", "") or getattr(self, "repo_root", "") or ".")
+            )
+        )
+        workdir = str(channel_root.resolve()) if channel_root.exists() else str(channel_root)
+        worktree_root = str(getattr(self, "desktop_cwd", "") or getattr(self, "repo_root", "") or "")
+        names = getattr(self, "names", None)
+        effective_alias = str(alias or getattr(names, "session_title", "") or channel_name or "").strip()
+        effective_purpose = f"{channel_name} 主会话" if channel_name else "新建通道主会话"
         for project_path in target_paths:
             project_path.parent.mkdir(parents=True, exist_ok=True)
             data = _read_json(project_path, {})
@@ -811,24 +832,61 @@ class Bootstrapper:
             for sess in sessions:
                 if not isinstance(sess, dict):
                     continue
-                if str(sess.get("id") or "").strip() != session_id:
+                same_channel = str(sess.get("channel_name") or "").strip() == channel_name
+                is_target_session = str(sess.get("id") or "").strip() == session_id
+                if same_channel and not is_target_session:
+                    sess["is_primary"] = False
+                    sess["session_role"] = "child"
+                if not is_target_session:
                     continue
                 sess["cli_type"] = str(cli_type or sess.get("cli_type") or "codex")
-                sess["alias"] = str(alias or sess.get("alias") or "")
+                sess["alias"] = str(effective_alias or sess.get("alias") or "")
+                sess["agent_name"] = str(sess.get("agent_name") or effective_alias or "")
                 sess["channel_name"] = str(channel_name or sess.get("channel_name") or "")
                 sess["status"] = str(sess.get("status") or "active")
+                sess["environment"] = str(sess.get("environment") or "stable")
+                sess["worktree_root"] = str(sess.get("worktree_root") or worktree_root)
+                sess["workdir"] = str(sess.get("workdir") or workdir)
+                sess["session_role"] = "primary"
+                sess["purpose"] = str(sess.get("purpose") or effective_purpose)
+                sess["schema_version"] = str(sess.get("schema_version") or "session.create.v2")
+                sess["created_via"] = str(sess.get("created_via") or "bootstrap.local_fallback")
+                sess["context_binding_state"] = str(sess.get("context_binding_state") or "bound")
+                sess["is_primary"] = True
+                sess["is_deleted"] = False
+                sess["deleted_at"] = str(sess.get("deleted_at") or "")
+                sess["deleted_reason"] = str(sess.get("deleted_reason") or "")
                 sess["last_used_at"] = now
                 updated = True
-                break
 
             if not updated:
                 sessions.append(
                     {
                         "id": session_id,
                         "cli_type": str(cli_type or "codex"),
-                        "alias": str(alias or ""),
+                        "alias": effective_alias,
+                        "agent_name": effective_alias,
+                        "model": "",
+                        "reasoning_effort": "",
+                        "codebuddy_permission_mode": "default",
+                        "claude_permission_mode": "",
+                        "environment": "stable",
+                        "worktree_root": worktree_root,
+                        "workdir": workdir,
+                        "branch": "",
+                        "session_role": "primary",
+                        "purpose": effective_purpose,
+                        "reuse_strategy": "",
+                        "schema_version": "session.create.v2",
+                        "created_via": "bootstrap.local_fallback",
+                        "context_binding_state": "bound",
+                        "project_execution_context": {},
                         "channel_name": str(channel_name or ""),
                         "status": "active",
+                        "is_primary": True,
+                        "is_deleted": False,
+                        "deleted_at": "",
+                        "deleted_reason": "",
                         "created_at": now,
                         "last_used_at": now,
                     }

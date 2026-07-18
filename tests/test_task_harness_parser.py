@@ -151,7 +151,7 @@ class TaskHarnessParserTests(unittest.TestCase):
 
 2. `数据治理-任务监控`
 - 通道：`子级06-数据治理与契约（规格-校验-修复）`
-- session_id：`019d2a61-38e0-72e2-aa87-03e6e5d17209`
+- session_id：`019f7005-0005-7005-8005-000000000005`
 - 职责：评估契约边界。
                 """.strip(),
                 encoding="utf-8",

@@ -61,7 +61,6 @@
     const CONV_UNREAD_CURSOR_KEY = "taskDashboard.convUnreadCursor.v1";
     const CONV_MEMO_CONSUMED_KEY = "taskDashboard.convMemoConsumed.v1";
     const CONV_FILE_STARRED_KEY = "taskDashboard.convFileStarred.v1";
-    const CONV_TRAINING_SENT_KEY = "taskDashboard.convTrainingSent.v1";
     const TASK_COMPLETED_VIEWED_KEY = "taskDashboard.taskCompletedViewed.v1";
     const ORG_MANUAL_RELATIONS_KEY = "taskDashboard.orgManualRelations.v1";
     const FEATURE_UNREAD_MONOTONIC_KEY = "__feature_unread_monotonic__";

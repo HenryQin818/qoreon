@@ -166,6 +166,19 @@ def _resolution_next_action(code: str) -> str:
     return ""
 
 
+def _ambiguity_governance_items(*, project_id: str, channel_name: str = "") -> list[dict[str, Any]]:
+    return [
+        {
+            "code": "channel_primary_disambiguation_required",
+            "message": "目标解析命中多个可发送会话，不能按通道或 Agent 名猜测发送。",
+            "suggested_action": "调用 /api/channel-sessions/manage 设置 primary_session_id，并将冗余 active 会话以 updates[].is_deleted=true 软归档。",
+            "endpoint": "POST /api/channel-sessions/manage",
+            "project_id": project_id,
+            **({"channel_name": channel_name} if channel_name else {}),
+        }
+    ]
+
+
 @dataclass
 class TargetResolution:
     ok: bool
@@ -342,6 +355,7 @@ def _resolve_target_from_store(
                 "agent_ambiguous",
                 "目标解析命中多个 active 候选，请显式指定 session_id",
                 next_action=_resolution_next_action("agent_ambiguous"),
+                governance_items=_ambiguity_governance_items(project_id=project_id, channel_name=channel_name),
             ),
         )
 
@@ -853,13 +867,28 @@ def post_announce(args: argparse.Namespace, payload: dict[str, Any]) -> dict[str
             "blocking_error": _blocking("announce_failed", f"announce 请求失败: {exc}"),
         }
     if code < 200 or code >= 300 or not bool(response.get("ok", True)):
+        blocking = response.get("blocking_error") if isinstance(response.get("blocking_error"), dict) else {}
+        blocking_code = _as_str((blocking or {}).get("code")).strip()
+        if blocking_code == "target_busy":
+            return {
+                "ok": False,
+                "state": "blocked",
+                "http_status": code,
+                "project_id": _as_str(payload.get("projectId")).strip(),
+                "target_ref": payload.get("target_ref"),
+                "response": response,
+                "blocking_error": blocking,
+                "target_busy": response.get("target_busy"),
+                "busy_confirm": response.get("busy_confirm"),
+                "pending_confirm_available": bool(response.get("pending_confirm_available")),
+            }
         error_code = "token_required" if code in {401, 403} else "announce_failed"
         return {
             "ok": False,
             "state": "failed",
             "http_status": code,
             "response": response,
-            "blocking_error": _blocking(error_code, "announce 接口返回失败"),
+            "blocking_error": blocking or _blocking(error_code, "announce 接口返回失败"),
         }
     run = response.get("run") if isinstance(response.get("run"), dict) else {}
     run_id = _as_str(run.get("id")).strip()

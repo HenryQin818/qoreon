@@ -4189,6 +4189,58 @@
       gap: 12px;
       padding: 14px 16px 18px;
     }
+    .msgobj-nav {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+      padding: 8px;
+      border: 1px solid rgba(0,0,0,0.08);
+      border-radius: 8px;
+      background: rgba(250,251,248,0.92);
+    }
+    .msgobj-nav-back {
+      flex: 0 0 auto;
+    }
+    .msgobj-crumbs {
+      min-width: 0;
+      flex: 1 1 auto;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      overflow-x: auto;
+      padding: 2px 0;
+    }
+    .msgobj-crumb {
+      flex: 0 0 auto;
+      max-width: 280px;
+      border: 1px solid rgba(0,0,0,0.08);
+      border-radius: 8px;
+      background: rgba(255,255,255,0.9);
+      color: rgba(0,0,0,0.78);
+      padding: 5px 8px;
+      font-size: 12px;
+      line-height: 1.35;
+      cursor: pointer;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .msgobj-crumb:hover {
+      border-color: rgba(37,99,235,0.26);
+      background: rgba(239,246,255,0.84);
+    }
+    .msgobj-crumb.current {
+      color: var(--muted2);
+      cursor: default;
+      background: rgba(244,246,241,0.9);
+    }
+    .msgobj-crumb-sep {
+      flex: 0 0 auto;
+      color: var(--muted2);
+      font-size: 12px;
+      font-family: var(--mono);
+    }
     .msgobj-meta-grid {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -4304,6 +4356,9 @@
       text-align: left;
       cursor: zoom-in;
     }
+    .msgobj-image-card.open-viewer {
+      cursor: pointer;
+    }
     .msgobj-image-card:hover { box-shadow: var(--shadow2); }
     .msgobj-image-thumb {
       display: block;
@@ -4357,9 +4412,27 @@
       display: flex;
       align-items: center;
       gap: 8px;
+      width: 100%;
       padding: 10px 12px;
+      border: none;
       border-bottom: 1px solid rgba(0,0,0,0.06);
+      background: transparent;
+      color: inherit;
+      font: inherit;
+      text-align: left;
+      cursor: pointer;
       min-width: 0;
+    }
+    .msgobj-dir-item:hover {
+      background: rgba(239,246,255,0.72);
+    }
+    .msgobj-dir-item:focus-visible {
+      outline: 2px solid rgba(37,99,235,0.32);
+      outline-offset: -2px;
+    }
+    .msgobj-dir-item:disabled {
+      cursor: not-allowed;
+      opacity: 0.56;
     }
     .msgobj-dir-item:last-child {
       border-bottom: none;
@@ -4841,7 +4914,24 @@
       padding: 8px;
       display: grid;
       gap: 6px;
+      position: relative;
     }
+    .memo-item.memo-dragging {
+      opacity: 0.58;
+    }
+    .memo-item.memo-drop-before::before,
+    .memo-item.memo-drop-after::after {
+      content: "";
+      position: absolute;
+      left: 10px;
+      right: 10px;
+      height: 2px;
+      border-radius: 999px;
+      background: rgba(47,111,237,0.78);
+      box-shadow: 0 0 0 3px rgba(47,111,237,0.12);
+    }
+    .memo-item.memo-drop-before::before { top: -5px; }
+    .memo-item.memo-drop-after::after { bottom: -5px; }
     .memo-item-head {
       display: flex;
       align-items: center;
@@ -4851,6 +4941,13 @@
       color: rgba(0,0,0,0.54);
       font-family: var(--mono);
     }
+    .memo-item-head-meta {
+      display: inline-flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 8px;
+      flex: 0 0 auto;
+    }
     .memo-item-check {
       display: inline-flex;
       align-items: center;
@@ -4858,16 +4955,75 @@
       cursor: pointer;
       user-select: none;
     }
+    .memo-drag-handle {
+      border: 0;
+      background: transparent;
+      color: rgba(47,111,237,0.72);
+      font: inherit;
+      font-size: 11px;
+      padding: 0;
+      cursor: grab;
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }
+    .memo-drag-handle:active {
+      cursor: grabbing;
+    }
+    .memo-drag-handle:disabled {
+      cursor: default;
+      opacity: 0.42;
+      text-decoration: none;
+    }
     .memo-item-text {
       font-size: 12px;
       line-height: 1.45;
       color: rgba(0,0,0,0.82);
       white-space: pre-wrap;
       overflow-wrap: anywhere;
-      max-height: 140px;
-      overflow: auto;
     }
     .memo-item-files {
+      display: grid;
+      gap: 6px;
+    }
+    .memo-image-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+      gap: 8px;
+    }
+    .memo-image-thumb-btn {
+      min-width: 0;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      color: inherit;
+      text-align: left;
+      cursor: zoom-in;
+    }
+    .memo-image-thumb {
+      display: block;
+      width: 100%;
+      aspect-ratio: 4 / 3;
+      object-fit: cover;
+      border: 1px solid rgba(47,111,237,0.18);
+      border-radius: 10px;
+      background: rgba(47,111,237,0.06);
+      transition: border-color 0.14s ease, box-shadow 0.14s ease, transform 0.14s ease;
+    }
+    .memo-image-thumb-btn:hover .memo-image-thumb,
+    .memo-image-thumb-btn:focus-visible .memo-image-thumb {
+      border-color: rgba(47,111,237,0.46);
+      box-shadow: 0 10px 22px rgba(47,111,237,0.14);
+      transform: translateY(-1px);
+    }
+    .memo-image-name {
+      display: block;
+      margin-top: 4px;
+      font-size: 10px;
+      line-height: 1.3;
+      color: rgba(0,0,0,0.52);
+      overflow-wrap: anywhere;
+    }
+    .memo-file-chip-row {
       display: flex;
       flex-wrap: wrap;
       gap: 6px;
@@ -4875,23 +5031,49 @@
     .memo-file-chip {
       display: inline-flex;
       align-items: center;
-      height: 20px;
+      min-height: 20px;
       border-radius: 999px;
       border: 1px solid rgba(47,111,237,0.22);
       background: rgba(47,111,237,0.10);
       color: #2f6fed;
-      padding: 0 8px;
+      padding: 3px 8px;
       font-size: 10px;
       max-width: 100%;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
+      overflow-wrap: anywhere;
     }
     .memo-item-row {
       display: flex;
       align-items: center;
-      justify-content: space-between;
-      gap: 8px;
+      justify-content: flex-start;
+      gap: 12px;
+      flex-wrap: wrap;
+      padding-top: 2px;
+    }
+    .memo-text-action {
+      border: 0;
+      background: transparent;
+      padding: 0;
+      color: #2f6fed;
+      font-size: 12px;
+      line-height: 1.5;
+      cursor: pointer;
+    }
+    .memo-text-action.primary {
+      color: #1d4ed8;
+      font-weight: 700;
+    }
+    .memo-text-action.danger {
+      color: #c91d3b;
+    }
+    .memo-text-action:hover:not(:disabled),
+    .memo-text-action:focus-visible:not(:disabled) {
+      text-decoration: underline;
+      text-underline-offset: 3px;
+    }
+    .memo-text-action:disabled {
+      cursor: default;
+      opacity: 0.42;
+      text-decoration: none;
     }
     .memo-empty {
       border: 1px dashed rgba(0,0,0,0.14);
@@ -6159,6 +6341,17 @@
       .msgobj-viewer-actions .btn {
         flex: 1;
         justify-content: center;
+      }
+      .msgobj-nav {
+        align-items: stretch;
+        flex-direction: column;
+      }
+      .msgobj-nav-back {
+        width: 100%;
+        justify-content: center;
+      }
+      .msgobj-crumb {
+        max-width: 220px;
       }
       .msgobj-meta-grid {
         grid-template-columns: 1fr;
