@@ -9,6 +9,7 @@ from .main import (
     dispatch_get_request,
     dispatch_post_request,
     dispatch_put_request,
+    dispatch_patch_request,
     dispatch_delete_request,
     dispatch_head_request,
 )
@@ -19,6 +20,7 @@ __all__ = [
     "dispatch_get_request",
     "dispatch_post_request",
     "dispatch_put_request",
+    "dispatch_patch_request",
     "dispatch_delete_request",
     "dispatch_head_request",
 ]

@@ -191,6 +191,28 @@ class MessageCliTests(unittest.TestCase):
             self.assertEqual(payload["blocking_error"]["code"], "agent_ambiguous")
             self.assertEqual(len(payload["candidates"]), 2)
 
+    def test_channel_multi_active_returns_primary_governance_item(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._create_session(root, session_id=SID_TARGET, alias="主 Agent", channel_name="同通道")
+            self._create_session(root, session_id=SID_TARGET_2, alias="子 Agent", channel_name="同通道")
+            code, payload = self._run(
+                [
+                    "resolve",
+                    "--root",
+                    str(root),
+                    "--channel",
+                    "同通道",
+                ]
+            )
+
+            self.assertEqual(code, 1)
+            self.assertEqual(payload["blocking_error"]["code"], "agent_ambiguous")
+            governance_items = payload["blocking_error"].get("governance_items") or []
+            self.assertEqual(governance_items[0]["code"], "channel_primary_disambiguation_required")
+            self.assertEqual(governance_items[0]["endpoint"], "POST /api/channel-sessions/manage")
+            self.assertIn("primary_session_id", governance_items[0]["suggested_action"])
+
     def test_deleted_context_exhausted_and_project_mismatch_are_blocked(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

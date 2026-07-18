@@ -2070,6 +2070,8 @@ class SessionRuntimeStateApiTests(unittest.TestCase):
                                 "project_id": pid,
                                 "channel_name": channel_name,
                                 "cli_type": "codex",
+                                "alias": "CCB运行时-新主会话",
+                                "agent_name": "CCB运行时-新主会话",
                                 "environment": "refactor",
                                 "worktree_root": str(custom_root),
                                 "workdir": str(workdir_b),

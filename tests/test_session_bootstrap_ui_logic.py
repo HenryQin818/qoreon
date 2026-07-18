@@ -129,6 +129,8 @@ class SessionBootstrapUiLogicTests(unittest.TestCase):
             global.STATE = { panelMode: "conversation" };
             global.normalizeNewConvMode = (value) => String(value || "").trim() || "create_new";
             global.normalizeSessionModel = (value) => String(value || "").trim();
+            global.isCodexCliType = (value) => String(value || "").trim().toLowerCase() === "codex";
+            global.normalizeReasoningEffort = (value) => String(value || "").trim();
             global.normalizeSessionEnvironmentValue = (value) => String(value || "stable").trim() || "stable";
             global.looksLikeSessionId = (value) => /^[0-9a-z_-]{10,}$/i.test(String(value || "").trim());
             global.buildProjectExecutionContextMeta = () => ({ available: false, sourceMeta: { text: "" } });
@@ -359,6 +361,8 @@ class SessionBootstrapUiLogicTests(unittest.TestCase):
             global.STATE = { panelMode: "conversation" };
             global.normalizeNewConvMode = (value) => String(value || "").trim() || "create";
             global.normalizeSessionModel = (value) => String(value || "").trim();
+            global.isCodexCliType = (value) => String(value || "").trim().toLowerCase() === "codex";
+            global.normalizeReasoningEffort = (value) => String(value || "").trim();
             global.normalizeSessionEnvironmentValue = (value) => String(value || "stable").trim() || "stable";
             global.looksLikeSessionId = (value) => /^[0-9a-z_-]{10,}$/i.test(String(value || "").trim());
             global.buildProjectExecutionContextMeta = () => ({ available: false, sourceMeta: { text: "" } });
@@ -528,6 +532,8 @@ class SessionBootstrapUiLogicTests(unittest.TestCase):
             global.STATE = { panelMode: "conversation" };
             global.normalizeNewConvMode = (value) => String(value || "").trim() || "create";
             global.normalizeSessionModel = (value) => String(value || "").trim();
+            global.isCodexCliType = (value) => String(value || "").trim().toLowerCase() === "codex";
+            global.normalizeReasoningEffort = (value) => String(value || "").trim();
             global.normalizeSessionEnvironmentValue = (value) => String(value || "stable").trim() || "stable";
             global.looksLikeSessionId = (value) => /^[0-9a-z_-]{10,}$/i.test(String(value || "").trim());
             global.buildProjectExecutionContextMeta = () => ({ available: false, sourceMeta: { text: "" } });

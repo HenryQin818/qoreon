@@ -71,7 +71,7 @@
     async function tryUpdateSessionModel(sessionId, model) {
       const sid = String(sessionId || "").trim();
       const normalized = normalizeSessionModel(model);
-      if (!looksLikeSessionId(sid) || !normalized) return false;
+      if (!looksLikeSessionId(sid)) return false;
       try {
         const r = await fetch("/api/sessions/" + encodeURIComponent(sid), {
           method: "PUT",
@@ -79,6 +79,27 @@
           body: JSON.stringify({ model: normalized }),
         });
         return !!(r && r.ok);
+      } catch (_) {
+        return false;
+      }
+    }
+
+    async function tryUpdateSessionReasoningEffort(sessionId, reasoningEffort) {
+      const sid = String(sessionId || "").trim();
+      const normalized = normalizeReasoningEffort(reasoningEffort);
+      if (!looksLikeSessionId(sid)) return false;
+      try {
+        const r = await fetch("/api/sessions/" + encodeURIComponent(sid), {
+          method: "PUT",
+          headers: authHeaders({ "Content-Type": "application/json" }),
+          body: JSON.stringify({ reasoning_effort: normalized }),
+        });
+        if (!r || !r.ok) return false;
+        const payload = await r.json().catch(() => null);
+        if (!payload || typeof payload !== "object") return true;
+        const session = payload.session && typeof payload.session === "object" ? payload.session : payload;
+        const echoedRaw = session.reasoning_effort || session.reasoningEffort || "";
+        return !echoedRaw || normalizeReasoningEffort(echoedRaw) === normalized;
       } catch (_) {
         return false;
       }
@@ -1686,6 +1707,165 @@
       return task;
     }
 
+    function normalizeManualAgentReadableAlias(raw) {
+      return String(raw || "").trim().replace(/\s+/g, " ");
+    }
+
+    function manualAgentSessionId(row) {
+      const src = (row && typeof row === "object") ? row : {};
+      return String(src.sessionId || src.session_id || src.id || "").trim();
+    }
+
+    function manualAgentReadableName(row) {
+      const src = (row && typeof row === "object") ? row : {};
+      return normalizeManualAgentReadableAlias(firstNonEmptyText([
+        src.alias,
+        src.agent_alias,
+        src.agentName,
+        src.agent_name,
+        src.display_name,
+        src.displayName,
+      ], ""));
+    }
+
+    function manualAgentSessionOccupiesReadableName(row) {
+      const src = (row && typeof row === "object") ? row : {};
+      if (src.__pendingCreate === true) return true;
+      if (typeof isVisibleConversationSession === "function") {
+        if (!isVisibleConversationSession(src)) return false;
+      } else {
+        const deleted = String(src.is_deleted || src.isDeleted || "").trim().toLowerCase();
+        if (["1", "true", "yes", "y"].includes(deleted)) return false;
+      }
+      const status = String(src.status || src.session_status || src.sessionStatus || "").trim().toLowerCase();
+      if (["inactive", "deleted", "archived", "context_exhausted", "exhausted"].includes(status)) return false;
+      return true;
+    }
+
+    function manualAgentConflictChannel(row) {
+      const src = (row && typeof row === "object") ? row : {};
+      if (typeof getSessionChannelName === "function") return String(getSessionChannelName(src) || "").trim();
+      return String(src.channel_name || src.channelName || src.primaryChannel || "").trim();
+    }
+
+    function findManualAgentAliasConflict(projectId, alias, ignoreSessionId = "") {
+      const pid = String(projectId || "").trim();
+      const target = normalizeManualAgentReadableAlias(alias);
+      const ignored = String(ignoreSessionId || "").trim();
+      if (!pid || !target) return null;
+      const source = typeof conversationSessionsForProject === "function"
+        ? conversationSessionsForProject(pid)
+        : (Array.isArray(PCONV.sessions) ? PCONV.sessions : []);
+      const rows = Array.isArray(source) ? source : [];
+      return rows.find((row) => {
+        if (!manualAgentSessionOccupiesReadableName(row)) return false;
+        const sid = manualAgentSessionId(row);
+        if (ignored && sid && sid === ignored) return false;
+        return manualAgentReadableName(row) === target;
+      }) || null;
+    }
+
+    function manualAgentConflictLabel(conflict) {
+      const row = (conflict && typeof conflict === "object") ? conflict : {};
+      const name = manualAgentReadableName(row) || normalizeManualAgentReadableAlias(row.alias || row.display_name || row.agent_name);
+      const channel = manualAgentConflictChannel(row);
+      const sid = manualAgentSessionId(row);
+      const shortSid = typeof shortId === "function" ? shortId(sid) : sid;
+      return [
+        name ? ("可读名「" + name + "」") : "同名 Agent",
+        channel ? ("通道：" + channel) : "",
+        sid ? ("Session：" + shortSid) : "",
+      ].filter(Boolean).join(" / ");
+    }
+
+    function manualAgentAliasValidationMessage(projectId, alias, ignoreSessionId = "") {
+      const readable = normalizeManualAgentReadableAlias(alias);
+      if (!readable) {
+        return "Agent 可读名（alias）不能为空。发生什么：手动创建或接入 Agent 需要一个可寻址名称。影响什么：其他 Agent 无法按名联系它。怎么修：填写项目内唯一 alias，例如“前端-Agent”。";
+      }
+      const conflict = findManualAgentAliasConflict(projectId, readable, ignoreSessionId);
+      if (!conflict) return "";
+      return "Agent 可读名冲突：" + manualAgentConflictLabel(conflict) + " 已占用。发生什么：当前项目内 active Agent 可读名不唯一。影响什么：按名发送会产生歧义。怎么修：请改用唯一 alias，或先将冲突会话设为非 active/归档后再重试。";
+    }
+
+    function collectManualAgentErrorCodes(payload, out = new Set()) {
+      if (payload == null) return out;
+      if (typeof payload === "string") {
+        const text = payload.toLowerCase();
+        [
+          "identity_unresolved",
+          "missing_readable_identity",
+          "alias_required",
+          "alias_conflict",
+          "duplicate_alias",
+          "agent_ambiguous",
+          "multiple_active",
+          "degraded_runtime_index",
+          "ccr_degraded",
+          "runtime_index_degraded",
+        ].forEach((token) => {
+          if (text.includes(token)) out.add(token);
+        });
+        return out;
+      }
+      if (Array.isArray(payload)) {
+        payload.forEach((item) => collectManualAgentErrorCodes(item, out));
+        return out;
+      }
+      if (typeof payload !== "object") return out;
+      ["code", "error_code", "reason", "kind", "status", "state"].forEach((key) => {
+        const value = String(payload[key] || "").trim().toLowerCase();
+        if (value) out.add(value);
+      });
+      ["detail", "error", "message", "missing_items", "conflicts", "candidates", "degraded_reason"].forEach((key) => {
+        if (Object.prototype.hasOwnProperty.call(payload, key)) collectManualAgentErrorCodes(payload[key], out);
+      });
+      return out;
+    }
+
+    function manualAgentRawErrorText(payload, fallbackText = "") {
+      if (typeof payload === "string") return String(payload || fallbackText || "").trim();
+      const src = (payload && typeof payload === "object") ? payload : {};
+      const detail = src.detail || src.error || src.message || src.reason || "";
+      if (detail && typeof detail === "object") {
+        return String(detail.error || detail.message || detail.reason || JSON.stringify(detail) || fallbackText || "").trim();
+      }
+      return String(detail || fallbackText || "").trim();
+    }
+
+    function extractManualAgentConflict(payload) {
+      const src = (payload && typeof payload === "object") ? payload : {};
+      const detail = (src.detail && typeof src.detail === "object") ? src.detail : {};
+      const conflicts = []
+        .concat(Array.isArray(src.conflicts) ? src.conflicts : [])
+        .concat(Array.isArray(detail.conflicts) ? detail.conflicts : [])
+        .concat(Array.isArray(src.candidates) ? src.candidates : [])
+        .concat(Array.isArray(detail.candidates) ? detail.candidates : []);
+      return conflicts.find((item) => item && typeof item === "object") || detail.conflict || src.conflict || null;
+    }
+
+    function normalizeManualAgentAddressabilityError(payload, fallbackText = "") {
+      const codes = collectManualAgentErrorCodes(payload);
+      const raw = manualAgentRawErrorText(payload, fallbackText);
+      const rawSuffix = raw ? " 真实错误：" + raw : "";
+      const hasCode = (...tokens) => tokens.some((token) => codes.has(token));
+      if (hasCode("alias_required", "missing_readable_identity", "identity_unresolved", "name_missing")) {
+        return "Agent 可读名（alias）不能为空。发生什么：手动创建/接入 Agent 缺少可寻址名称。影响什么：其他 Agent 无法按名联系它。怎么修：补 alias，必要时补 purpose 或重新生成身份。" + rawSuffix;
+      }
+      if (hasCode("alias_conflict", "duplicate_alias", "name_conflict", "duplicate_agent_name")) {
+        const conflict = extractManualAgentConflict(payload);
+        const label = conflict ? manualAgentConflictLabel(conflict) : "同名 Agent";
+        return "Agent 可读名冲突：" + label + "。发生什么：项目内 active Agent 可读名不唯一。影响什么：按名发送会产生歧义。怎么修：换一个唯一 alias，或先归档/停用冲突 active 会话。" + rawSuffix;
+      }
+      if (hasCode("agent_ambiguous", "multiple_active", "channel_ambiguous", "ambiguous")) {
+        return "Agent 寻址存在歧义。发生什么：同一通道存在多个 active Agent 或候选无法唯一确定。影响什么：按通道/按名发送可能命中错误会话。怎么修：设置唯一 primary，并归档或停用冗余 active 会话。" + rawSuffix;
+      }
+      if (hasCode("degraded_runtime_index", "ccr_degraded", "runtime_index_degraded", "registry_degraded", "directory_degraded")) {
+        return "通讯录/CCR 同步降级。发生什么：SessionStore 已有会话信息，但通讯录或运行时索引刷新失败/降级。影响什么：可能能发送，但联系人名录、Agent Directory 或候选列表暂未完全同步。怎么修：重建通讯录/运行时索引，或联系治理位处理降级项。" + rawSuffix;
+      }
+      return raw || String(fallbackText || "");
+    }
+
     function buildExistingSessionAttachPayload(options) {
       const opts = options || {};
       return {
@@ -1695,6 +1875,7 @@
         session_id: String(opts.sessionId || "").trim(),
         cli_type: String(opts.cliType || "codex").trim() || "codex",
         model: normalizeSessionModel(opts.model || ""),
+        reasoning_effort: normalizeReasoningEffort(opts.reasoningEffort || opts.reasoning_effort || ""),
         alias: String(opts.alias || "").trim(),
         purpose: String(opts.purpose || "").trim(),
         session_role: String(opts.sessionRole || "child").trim() || "child",
@@ -1740,6 +1921,7 @@
       const sidInput = document.getElementById("newConvSessionId");
       const modelInput = document.getElementById("newConvModel");
       const codeBuddyModelSelect = document.getElementById("newConvCodeBuddyModel");
+      const reasoningEffortInput = document.getElementById("newConvReasoningEffort");
       const purposeInput = document.getElementById("newConvPurpose");
       const aliasInput = document.getElementById("newConvAlias");
       const sessionRoleInput = document.getElementById("newConvSessionRole");
@@ -1755,14 +1937,19 @@
       const cli = String((cliSelect && cliSelect.value) || "codex");
       const mode = normalizeNewConvMode(NEW_CONV_UI.mode);
       const sidFromInput = String((sidInput && sidInput.value) || "").trim();
+      const reuseStrategy = String((reuseStrategyInput && reuseStrategyInput.value) || "create_new").trim() || "create_new";
       const codeBuddyModel = String((codeBuddyModelSelect && codeBuddyModelSelect.value) || "").trim();
-      const model = String(cli || "").trim().toLowerCase() === "codebuddy"
-        ? (codeBuddyModel || normalizeSessionModel(modelInput && modelInput.value) || "deepseek-v4-pro")
-        : normalizeSessionModel(modelInput && modelInput.value);
+      const model = typeof selectedNewConvModelValue === "function"
+        ? selectedNewConvModelValue(cli, modelInput, codeBuddyModelSelect, { mode, reuseStrategy })
+        : (String(cli || "").trim().toLowerCase() === "codebuddy"
+          ? (codeBuddyModel || normalizeSessionModel(modelInput && modelInput.value) || "deepseek-v4-pro")
+          : normalizeSessionModel(modelInput && modelInput.value));
+      const reasoningEffort = typeof selectedNewConvReasoningEffortValue === "function"
+        ? selectedNewConvReasoningEffortValue(cli, reasoningEffortInput, { mode, reuseStrategy })
+        : (isCodexCliType(cli) ? normalizeReasoningEffort(reasoningEffortInput && reasoningEffortInput.value) : "");
       const purpose = String((purposeInput && purposeInput.value) || "").trim();
       const alias = String((aliasInput && aliasInput.value) || "").trim();
       const sessionRole = String((sessionRoleInput && sessionRoleInput.value) || "child").trim() || "child";
-      const reuseStrategy = String((reuseStrategyInput && reuseStrategyInput.value) || "create_new").trim() || "create_new";
       const environment = normalizeSessionEnvironmentValue((environmentInput && environmentInput.value) || "stable");
       const worktreeRoot = String((worktreeRootInput && worktreeRootInput.value) || "").trim();
       const workdir = String((workdirInput && workdirInput.value) || "").trim();
@@ -1775,6 +1962,17 @@
       }
       if (!ch) {
         newConvModalError("请选择通道");
+        return;
+      }
+      const aliasValidationMessage = typeof manualAgentAliasValidationMessage === "function"
+        ? manualAgentAliasValidationMessage(
+          pid,
+          alias,
+          mode === "attach" ? sidFromInput : ""
+        )
+        : (!alias ? "Agent 可读名（alias）不能为空。" : "");
+      if (aliasValidationMessage) {
+        newConvModalError(aliasValidationMessage);
         return;
       }
 
@@ -1809,6 +2007,7 @@
             sessionId: sidFromInput,
             cliType: cli,
             model,
+            reasoningEffort,
             alias,
             purpose,
             sessionRole,
@@ -1820,7 +2019,10 @@
           const { resp: r, json: j, retried: attachRetried } = await postSessionCreateWithChannelRetry(attachPayload);
           if (!r.ok) {
             const detail = j && (j.error || j.message || (j.detail && (j.detail.error || j.detail.message)));
-            newConvModalError("补登记失败：" + String(detail || "unknown"));
+            const normalizedDetail = typeof normalizeManualAgentAddressabilityError === "function"
+              ? normalizeManualAgentAddressabilityError(j, String(detail || "unknown"))
+              : String(detail || "unknown");
+            newConvModalError("补登记失败：" + normalizedDetail);
             return;
           }
           const session = j && j.session;
@@ -1847,6 +2049,10 @@
               const modelUpdated = await tryUpdateSessionModel(sid, model);
               if (modelUpdated) tip = "已绑定已有对话，并更新模型配置。";
             }
+            if (reasoningEffort) {
+              const reasoningUpdated = await tryUpdateSessionReasoningEffort(sid, reasoningEffort);
+              if (reasoningUpdated) tip = "已绑定已有对话，并更新模型与思考强度配置。";
+            }
             tip = appendContextHint(tip, probePayload);
             if (attachRetried) tip += " 已自动等待通道注册生效。";
           }
@@ -1857,6 +2063,7 @@
             channel_name: ch,
             cli_type: cli,
             model,
+            reasoning_effort: reasoningEffort,
             alias,
             purpose,
             session_role: sessionRole,
@@ -1891,7 +2098,10 @@
               detailStr = String(detail || "unknown");
             }
             if (!sid) {
-              newConvModalError("创建失败：" + detailStr);
+              const normalizedDetail = typeof normalizeManualAgentAddressabilityError === "function"
+                ? normalizeManualAgentAddressabilityError(j, detailStr)
+                : detailStr;
+              newConvModalError("创建失败：" + normalizedDetail);
               return;
             }
           }
@@ -1910,6 +2120,7 @@
               sessionId: sid,
               cliType: effectiveCli,
               model,
+              reasoningEffort,
               alias,
               purpose,
               sessionRole,
@@ -1919,7 +2130,10 @@
               branch,
             });
             if (!recovered.ok) {
-              newConvModalError("创建超时后补登记失败：" + String(recovered.error || "unknown"));
+              const normalizedDetail = typeof normalizeManualAgentAddressabilityError === "function"
+                ? normalizeManualAgentAddressabilityError(recovered.json || recovered.error, String(recovered.error || "unknown"))
+                : String(recovered.error || "unknown");
+              newConvModalError("创建超时后补登记失败：" + normalizedDetail);
               return;
             }
             sid = String(recovered.sid || sid).trim();
@@ -1943,9 +2157,9 @@
             const bootstrapMode = /^\s*--bootstrap-message\s*$/i.test(initMessage);
             if (bootstrapMode) {
               const msgs = buildBootstrapVisibleMessages(ch);
-              const sendA = await sendNewConversationInitMessage(pid, ch, sid, effectiveCli, msgs[0], model);
+              const sendA = await sendNewConversationInitMessage(pid, ch, sid, effectiveCli, msgs[0], model, reasoningEffort);
               const sendB = sendA.ok
-                ? await sendNewConversationInitMessage(pid, ch, sid, effectiveCli, msgs[1], model)
+                ? await sendNewConversationInitMessage(pid, ch, sid, effectiveCli, msgs[1], model, reasoningEffort)
                 : { ok: false };
               if (sendA.ok && sendB.ok) {
                 tip = (timeoutRecovered ? "已完成 timeout-recovered 补登记并绑定，" : "已创建并绑定新对话，") + "并发送两条标准首发消息。";
@@ -1953,7 +2167,7 @@
                 tip = (timeoutRecovered ? "已完成 timeout-recovered 补登记并绑定，" : "已创建并绑定新对话，") + "但标准首发消息发送不完整，请手动补发。";
               }
             } else {
-              const sendRet = await sendNewConversationInitMessage(pid, ch, sid, effectiveCli, initMessage, model);
+              const sendRet = await sendNewConversationInitMessage(pid, ch, sid, effectiveCli, initMessage, model, reasoningEffort);
               if (sendRet.ok) {
                 tip = (timeoutRecovered ? "已完成 timeout-recovered 补登记并绑定，" : "已创建并绑定新对话，") + "并发送一次性启动消息。";
               } else {
@@ -2038,10 +2252,30 @@
       }
     }
 
+    function optionalBoolLikeField(raw, keys) {
+      const src = (raw && typeof raw === "object") ? raw : {};
+      const list = Array.isArray(keys) ? keys : [];
+      for (const key of list) {
+        if (!Object.prototype.hasOwnProperty.call(src, key)) continue;
+        return boolLike(src[key]);
+      }
+      return null;
+    }
+
     function normalizeConversationSession(raw) {
       if (!raw) return null;
       const sid = String(raw.sessionId || raw.id || raw.session_id || "").trim();
       if (!looksLikeSessionId(sid)) return null;
+      const primaryFlag = (typeof optionalBoolLikeField === "function")
+        ? optionalBoolLikeField(raw, ["is_primary", "isPrimary"])
+        : (() => {
+          const src = (raw && typeof raw === "object") ? raw : {};
+          for (const key of ["is_primary", "isPrimary"]) {
+            if (!Object.prototype.hasOwnProperty.call(src, key)) continue;
+            return (typeof boolLike === "function") ? boolLike(src[key]) : !!src[key];
+          }
+          return null;
+        })();
       const rawStateSources = (raw._state_sources && typeof raw._state_sources === "object") ? raw._state_sources : null;
       const stateSources = rawStateSources ? {
         runtime_state: !!rawStateSources.runtime_state,
@@ -2148,7 +2382,8 @@
         status: String(raw.status || "active"),
         created_at: String(raw.created_at || ""),
         last_used_at: String(raw.last_used_at || ""),
-        is_primary: boolLike(raw.is_primary || raw.isPrimary),
+        is_primary: primaryFlag === null ? false : primaryFlag,
+        _is_primary_present: primaryFlag !== null,
         is_deleted: boolLike(raw.is_deleted || raw.isDeleted),
         deleted_at: String(raw.deleted_at || raw.deletedAt || ""),
         deleted_reason: String(raw.deleted_reason || raw.deletedReason || ""),
@@ -2465,10 +2700,11 @@
             prev.permissionMode,
           ]),
           reasoning_effort: normalizeReasoningEffort(n.reasoning_effort || prev.reasoning_effort),
-          // Prefer server-provided primary flag when present, avoid stale local cache elevating old sessions to primary.
-          is_primary: String(n.source || "").trim()
+          // Prefer explicit next primary flag, especially explicit false from SessionStore.
+          is_primary: n._is_primary_present === true
             ? boolLike(n.is_primary)
             : (boolLike(n.is_primary) || boolLike(prev.is_primary)),
+          _is_primary_present: n._is_primary_present === true || prev._is_primary_present === true,
           is_deleted: boolLike(n.is_deleted || prev.is_deleted),
           deleted_at: firstNonEmptyText([n.deleted_at, prev.deleted_at]),
           deleted_reason: firstNonEmptyText([n.deleted_reason, prev.deleted_reason]),

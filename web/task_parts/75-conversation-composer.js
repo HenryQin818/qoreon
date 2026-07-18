@@ -34,15 +34,12 @@
       });
       renderConversationRecentAgentsByKey(draftKey);
     }
-
     function currentProjectMentionSuggestMode() {
       return "project";
     }
-
     function globalProjectMentionSuggestMode() {
       return "global";
     }
-
     const CONV_MENTION_SUGGEST_RENDER_LIMIT = 48;
     const CONV_MENTION_GLOBAL_EMPTY_QUERY_LIMIT = 24;
     const CONV_MENTION_GLOBAL_REFRESH_DEBOUNCE_MS = 90;
@@ -67,7 +64,6 @@
         draftKey: "",
       };
     }
-
     function mentionProjectLabel(projectId, fallbackName = "") {
       const pid = String(projectId || "").trim();
       const project = pid ? projectById(pid) : null;
@@ -75,7 +71,6 @@
       if (display) return display;
       return String(fallbackName || pid || "").trim();
     }
-
     function mentionBaseLabel(raw) {
       const m = normalizeMentionTargetItem(raw);
       if (!m) return "";
@@ -86,11 +81,9 @@
       const fallback = display || channel || "协同对象";
       return fallback.replace(/\s+/g, "");
     }
-
     function sanitizeMentionLabelSegment(raw) {
       return String(raw || "").trim().replace(/[^\u4e00-\u9fa5A-Za-z0-9._-]+/g, "");
     }
-
     function globalMentionScopedLabel(raw) {
       const m = normalizeMentionTargetItem(raw);
       if (!m) return "";
@@ -102,7 +95,6 @@
       if (projectPart && agentPart) return projectPart + "/" + agentPart;
       return agentPart || projectPart || "协同对象";
     }
-
     function conversationMentionSessionsForProject(projectId) {
       const pid = String(projectId || STATE.project || "").trim();
       if (!pid || pid === "overview") return [];
@@ -112,7 +104,6 @@
       }
       return conversationSessionsForProject(pid);
     }
-
     function isConversationRecentAgentTargetDeleted(raw, projectId = "") {
       const target = normalizeMentionTargetItem(raw);
       if (!target) return false;
@@ -127,7 +118,6 @@
       if (!hit) return false;
       return typeof isDeletedSession === "function" ? isDeletedSession(hit) : false;
     }
-
     function filterConversationRecentAgentItems(items, projectId = "") {
       return (Array.isArray(items) ? items : []).filter((item) => {
         if (!item || typeof item !== "object") return false;
@@ -138,7 +128,6 @@
         return !isConversationRecentAgentTargetDeleted(item.target, projectId);
       });
     }
-
     function mentionTargetFromConversationSession(session, projectId, opts = {}) {
       const pid = String(projectId || "").trim();
       const target = normalizeMentionTargetItem({
@@ -155,14 +144,12 @@
       }
       return target;
     }
-
     function getConvComposerMentionsForCurrentSession() {
       const key = currentConvComposerDraftKey();
       if (!key) return [];
       const d = ensureConvComposerDraftByKey(key);
       return Array.isArray(d.mentions) ? d.mentions : [];
     }
-
     function appendConvComposerMentionByKey(key, mentionTarget) {
       const normalized = normalizeMentionTargetItem(mentionTarget);
       if (!normalized) return false;
@@ -180,7 +167,6 @@
       if (String(PCONV.composerBoundDraftKey || "") === String(key || "")) renderAttachments();
       return added;
     }
-
     function removeConvComposerMentionByKey(key, mentionTarget) {
       const k = mentionTargetKey(mentionTarget);
       if (!k) return;
@@ -205,7 +191,6 @@
       }
       renderConvComposerMentionsByKey(draftKey);
     }
-
     function conversationMentionDirectory(projectId) {
       const pid = String(projectId || STATE.project || "").trim();
       if (!pid || pid === "overview") return [];
@@ -223,7 +208,6 @@
       out.sort((a, b) => String(a.display_name || "").localeCompare(String(b.display_name || ""), "zh-Hans-CN"));
       return out;
     }
-
     function conversationGlobalMentionDirectorySignature(projectId) {
       const currentPid = String(projectId || STATE.project || "").trim();
       const projects = Array.isArray(DATA.projects) ? DATA.projects : [];
@@ -876,304 +860,6 @@
       renderConversationRecentAgentsByKey(draftKey);
     }
 
-    const CONVERSATION_AGENT_TRAINING_PREFIX = "[Agent培训]";
-    const LEGACY_CONVERSATION_AGENT_INIT_PREFIX = "[Qoreon]";
-    const CONVERSATION_AGENT_INIT_LEAD = "在开始当前协作前，你必须先完成以下初始化训练。未完成前，不要回复“已完成初始化”，也不要直接开始正式任务。";
-
-    function normalizeConversationInitChannelLabel(channelName) {
-      const label = String(channelName || "").trim();
-      return label || "当前通道";
-    }
-
-    function buildUnifiedAgentInitMessage(channelName) {
-      const channelLabel = normalizeConversationInitChannelLabel(channelName);
-      return [
-        CONVERSATION_AGENT_TRAINING_PREFIX + " " + channelLabel,
-        CONVERSATION_AGENT_INIT_LEAD,
-        "",
-        "1. 明确职责边界",
-        "- 只围绕当前通道和当前任务主线执行，不自行扩题。",
-        "- 默认处理后回原发送 Agent；若消息中有 callback_to.session_id，优先回该 session。",
-        "",
-        "2. 对齐项目真源",
-        "- 项目配置 = 真源默认上下文。",
-        "- Agent = 身份，session = 当前承载结果。",
-        "- 不清楚工作区、分支、真源时，先查项目内真源，不自行猜测。",
-        "",
-        "3. 阅读必读入口并学习项目技能",
-        "- README.md",
-        "- 活动任务/",
-        "- 活动反馈/",
-        "- 产出物/材料/",
-        "- 产出物/沉淀/",
-        "- 当前项目 skills 真源/索引文件",
-        "- 至少重点学习：agent-init-training-playbook、collab-message-send（或当前项目等效的正式消息技能）、当前通道自己的专项 skill。",
-        "",
-        "4. 学会怎么发正式消息",
-        "- 跨 Agent / 跨通道协作只能走 http://localhost:18770/api/codex/announce（announce_to_channel），不能把内部草稿、内部 spawn、非正式 resume 当成“已通知通道”。",
-        "- 正式消息默认用你当前执行 Agent 自己的身份发送，不借用项目主会话、总控或其他通道 Agent 身份。",
-        "- 没有 announce_run_id 时，不得写已发出 / 已送达 / 已通知通道。",
-        "- 正式通知成功至少分三层判断：已生成待发送正文 / 已提交发送，待验证 / 已完成证据闭环。",
-        "",
-        "5. 学会什么时候必须回执",
-        "- 收到任务先首回执，执行后再回结构化结论。",
-        "- 只有 notify_only 才可不回。",
-        "- 后续默认按 任务 / 反馈 / 产出物 推进；普通任务优先任务文件收口块，反馈文件仅用于增强验收包。",
-        "",
-        "6. 完成一次消息能力验证",
-        "- 去项目通讯录/CCR 中找到一个“不是你自己”的 Agent，发送 1 条最小初始化验证消息。",
-        "- 如果当前项目没有可用通讯录或找不到目标，再回唯一阻塞，不得跳过这一步。",
-        "",
-        "7. 学习完成后的固定回执格式",
-        "已完成初始化",
-        "当前职责边界: <一句话>",
-        "当前主线: <一句话>",
-        "已学习技能: <列出本轮已学习的关键 skills>",
-        "通讯录验证: 已向 <agent名称> 发送正式消息",
-        "验证证据: <run_id / 目标session_id>",
-        "唯一阻塞: <无/一句话>",
-        "首个动作: <一句话>",
-      ].join("\n");
-    }
-
-    function isUnifiedAgentInitMessageText(text) {
-      const raw = String(text || "").trim();
-      if (!raw) return false;
-      if (raw.startsWith(CONVERSATION_AGENT_TRAINING_PREFIX)) return true;
-      if (!raw.startsWith(LEGACY_CONVERSATION_AGENT_INIT_PREFIX)) return false;
-      return raw.includes(CONVERSATION_AGENT_INIT_LEAD);
-    }
-
-    function getConversationTrainingSentAtByKey(key) {
-      const draftKey = String(key || "").trim();
-      if (!draftKey) return "";
-      return String(PCONV.trainingSentBySessionKey[draftKey] || "").trim();
-    }
-
-    function setConversationTrainingSentByKey(key, sentAt) {
-      const draftKey = String(key || "").trim();
-      if (!draftKey) return;
-      const text = String(sentAt === true ? new Date().toISOString() : (sentAt || "")).trim();
-      if (!text) delete PCONV.trainingSentBySessionKey[draftKey];
-      else PCONV.trainingSentBySessionKey[draftKey] = text;
-      persistSessionScopedMap(CONV_TRAINING_SENT_KEY, PCONV.trainingSentBySessionKey);
-    }
-
-    function isConversationTrainingDismissedByKey(key) {
-      const draftKey = String(key || "").trim();
-      if (!draftKey) return false;
-      return !!PCONV.trainingDismissedBySessionKey[draftKey];
-    }
-
-    function setConversationTrainingDismissedByKey(key, dismissed) {
-      const draftKey = String(key || "").trim();
-      if (!draftKey) return;
-      if (dismissed) PCONV.trainingDismissedBySessionKey[draftKey] = true;
-      else delete PCONV.trainingDismissedBySessionKey[draftKey];
-    }
-
-    function isConversationTrainingManualOpenByKey(key) {
-      const draftKey = String(key || "").trim();
-      if (!draftKey) return false;
-      return !!PCONV.trainingManualOpenBySessionKey[draftKey];
-    }
-
-    function setConversationTrainingManualOpenByKey(key, open) {
-      const draftKey = String(key || "").trim();
-      if (!draftKey) return;
-      if (open) PCONV.trainingManualOpenBySessionKey[draftKey] = true;
-      else delete PCONV.trainingManualOpenBySessionKey[draftKey];
-    }
-
-    function conversationTrainingVisibleMessageCount(runs) {
-      return (Array.isArray(runs) ? runs : [])
-        .filter((run) => !!String((run && run.id) || "").trim())
-        .length;
-    }
-
-    function conversationTrainingRemainingCount(runs) {
-      return Math.max(0, 3 - conversationTrainingVisibleMessageCount(runs));
-    }
-
-    function conversationTrainingTextFromRun(run, detail) {
-      return String(firstNonEmptyText([
-        detail && detail.full && detail.full.message,
-        run && run.message,
-        run && run.messagePreview,
-        run && run.lastMessage,
-        run && run.partialMessage,
-      ]) || "").trim();
-    }
-
-    function findConversationTrainingMessageSentAt(runs) {
-      const list = Array.isArray(runs) ? runs : [];
-      for (let i = list.length - 1; i >= 0; i -= 1) {
-        const run = list[i] || {};
-        const rid = String(run.id || "").trim();
-        const detail = rid ? (PCONV.detailMap[rid] || null) : null;
-        const text = conversationTrainingTextFromRun(run, detail);
-        if (!isUnifiedAgentInitMessageText(text)) continue;
-        return String(firstNonEmptyText([
-          run.createdAt,
-          detail && detail.full && detail.full.run && detail.full.run.createdAt,
-        ]) || "history").trim();
-      }
-      return "";
-    }
-
-    function buildConversationTrainingMessage(channelName) {
-      return buildUnifiedAgentInitMessage(channelName);
-    }
-
-    function currentConversationTrainingRuns(ctx) {
-      const context = (ctx && typeof ctx === "object") ? ctx : currentConversationCtx();
-      if (!context) return [];
-      const timelineKey = String(context.projectId || STATE.project || "") + "::" + String(context.sessionId || "").trim();
-      return resolveConversationRunsBySessionKey(timelineKey, context.sessionId).slice();
-    }
-
-    function renderConversationTrainingReopenButtonState(button, opts = {}) {
-      if (!button) return;
-      const visible = !!opts.visible;
-      const dismissed = !!opts.dismissed;
-      const showing = !!opts.showing;
-      const sending = !!opts.sending;
-      const completed = !!opts.completed;
-      button.style.display = visible ? "" : "none";
-      button.disabled = !visible || !!sending;
-      button.classList.toggle("active", visible && (showing || dismissed));
-      button.setAttribute("aria-hidden", visible ? "false" : "true");
-      let label = "查看 Agent 培训";
-      if (showing) label = "Agent 培训已显示";
-      else if (completed) label = "查看已发送的 Agent 培训";
-      else if (dismissed) label = "重新显示 Agent 培训";
-      button.title = label;
-      button.setAttribute("aria-label", label);
-    }
-
-    function renderConversationTrainingPrompt(ctx, runs, opts = {}) {
-      const {
-        trainingContainer,
-        trainingCount,
-        trainingDesc,
-        trainingSendBtn,
-        trainingCloseBtn,
-        trainingReopenBtn,
-      } = convComposerUiElements();
-      const timeline = document.getElementById("convTimeline");
-      const trainingDock = document.getElementById("convTrainingDock");
-      const convWrap = document.getElementById("convWrap");
-      const composer = convWrap ? convWrap.querySelector(".convcomposer") : null;
-      const timelineReady = opts && Object.prototype.hasOwnProperty.call(opts, "timelineReady")
-        ? !!opts.timelineReady
-        : true;
-      if (!trainingContainer) {
-        renderConversationTrainingReopenButtonState(trainingReopenBtn, { visible: false });
-        return;
-      }
-      const draftKey = ctx ? convComposerDraftKey(ctx.projectId, ctx.sessionId) : "";
-      if (!draftKey) {
-        renderConversationTrainingReopenButtonState(trainingReopenBtn, { visible: false });
-        trainingContainer.style.display = "none";
-        if (trainingDock) trainingDock.classList.remove("show");
-        if (convWrap) convWrap.style.removeProperty("--conv-training-offset");
-        if (timeline) timeline.classList.remove("has-training-banner");
-        return;
-      }
-      if (!timelineReady) {
-        renderConversationTrainingReopenButtonState(trainingReopenBtn, { visible: false });
-        trainingContainer.style.display = "none";
-        if (trainingDock) trainingDock.classList.remove("show");
-        if (convWrap) convWrap.style.removeProperty("--conv-training-offset");
-        if (timeline) timeline.classList.remove("has-training-banner");
-        return;
-      }
-      const historySentAt = findConversationTrainingMessageSentAt(runs);
-      if (historySentAt && !getConversationTrainingSentAtByKey(draftKey)) {
-        setConversationTrainingSentByKey(draftKey, historySentAt);
-      }
-      const alreadySent = !!getConversationTrainingSentAtByKey(draftKey);
-      const remaining = conversationTrainingRemainingCount(runs);
-      const manualOpen = isConversationTrainingManualOpenByKey(draftKey);
-      if (alreadySent && !manualOpen) setConversationTrainingDismissedByKey(draftKey, false);
-      if (!alreadySent && remaining <= 0 && !manualOpen) setConversationTrainingDismissedByKey(draftKey, false);
-      const dismissed = isConversationTrainingDismissedByKey(draftKey);
-      const shouldShow = manualOpen || (!alreadySent && !dismissed && remaining > 0);
-      renderConversationTrainingReopenButtonState(trainingReopenBtn, {
-        visible: true,
-        dismissed,
-        showing: shouldShow,
-        completed: alreadySent,
-        sending: !!PCONV.sending,
-      });
-      trainingContainer.style.display = shouldShow ? "flex" : "none";
-      if (trainingDock) trainingDock.classList.toggle("show", shouldShow);
-      if (convWrap) {
-        if (shouldShow && composer) {
-          const composerHeight = Math.ceil(composer.getBoundingClientRect().height || composer.offsetHeight || 0);
-          convWrap.style.setProperty("--conv-training-offset", Math.max(composerHeight + 4, 126) + "px");
-        } else {
-          convWrap.style.removeProperty("--conv-training-offset");
-        }
-      }
-      if (timeline) timeline.classList.toggle("has-training-banner", shouldShow);
-      if (!shouldShow) return;
-      if (trainingCount) {
-        if (alreadySent) trainingCount.textContent = "已发送";
-        else if (remaining > 0) trainingCount.textContent = "再 " + remaining + " 条消息后自动消失";
-        else trainingCount.textContent = "已手动显示";
-      }
-      if (trainingDesc) {
-        trainingDesc.textContent = alreadySent
-          ? "Agent 培训已发送，可在上方消息记录中查看执行结果。"
-          : "新 Agent 开始协作前，先完成初始化：对齐项目真源、阅读入口、确认正式消息门禁与回执口径。";
-      }
-      if (trainingSendBtn) {
-        trainingSendBtn.disabled = alreadySent || !!PCONV.sending;
-        trainingSendBtn.textContent = alreadySent ? "已发送" : (PCONV.sending ? "发送中..." : "发送培训");
-      }
-      if (trainingCloseBtn) {
-        trainingCloseBtn.disabled = !!PCONV.sending;
-      }
-    }
-
-    function dismissConversationTrainingPrompt() {
-      const ctx = currentConversationCtx();
-      const draftKey = ctx ? convComposerDraftKey(ctx.projectId, ctx.sessionId) : "";
-      if (!ctx || !draftKey) return;
-      setConversationTrainingManualOpenByKey(draftKey, false);
-      setConversationTrainingDismissedByKey(draftKey, true);
-      renderConversationTrainingPrompt(ctx, currentConversationTrainingRuns(ctx), { timelineReady: true });
-    }
-
-    function reopenConversationTrainingPrompt() {
-      const ctx = currentConversationCtx();
-      const draftKey = ctx ? convComposerDraftKey(ctx.projectId, ctx.sessionId) : "";
-      if (!ctx || !draftKey) return;
-      const runs = currentConversationTrainingRuns(ctx);
-      setConversationTrainingManualOpenByKey(draftKey, true);
-      setConversationTrainingDismissedByKey(draftKey, false);
-      renderConversationTrainingPrompt(ctx, runs, { timelineReady: true });
-    }
-
-    async function sendConversationTrainingMessage() {
-      const ctx = currentConversationCtx();
-      const draftKey = ctx ? convComposerDraftKey(ctx.projectId, ctx.sessionId) : "";
-      if (!ctx || !draftKey || PCONV.sending) return false;
-      if (getConversationTrainingSentAtByKey(draftKey)) return false;
-      const sentOk = await sendConversationQuickMessage(buildConversationTrainingMessage(ctx.channelName), {
-        pendingHint: "发送中（Agent培训）…",
-        successHint: "已发送 Agent 培训，等待执行回溯刷新…",
-        onSuccess: () => {
-          setConversationTrainingManualOpenByKey(draftKey, false);
-          setConversationTrainingDismissedByKey(draftKey, false);
-          setConversationTrainingSentByKey(draftKey, true);
-        },
-      });
-      if (sentOk) renderConversationTrainingPrompt(ctx, currentConversationTrainingRuns(ctx), { timelineReady: true });
-      return sentOk;
-    }
-
     function mentionLabelCandidates(rawMention) {
       const m = normalizeMentionTargetItem(rawMention);
       if (!m) return [];
@@ -1762,1076 +1448,6 @@
       applyConvComposerDraftToUiByKey(nextKey, opts);
     }
 
-    function conversationComposerCliType(ctx, session = null) {
-      const context = (ctx && typeof ctx === "object") ? ctx : null;
-      const row = (session && typeof session === "object") ? session : null;
-      return String(firstNonEmptyText([
-        context && context.cliType,
-        context && context.cli_type,
-        row && row.cli_type,
-        row && row.cliType,
-      ]) || "").trim().toLowerCase();
-    }
-
-    function conversationComposerSupportsModelSwitch(cliTypeRaw) {
-      const cliType = String(cliTypeRaw || "").trim();
-      return isCodeBuddyCliType(cliType) || (typeof isClaudeCliType === "function" && isClaudeCliType(cliType));
-    }
-
-    function conversationComposerDefaultModelForCli(cliTypeRaw) {
-      const cliType = String(cliTypeRaw || "").trim();
-      if (isCodeBuddyCliType(cliType)) return codeBuddyDefaultModel();
-      if (typeof isClaudeCliType === "function" && isClaudeCliType(cliType)) {
-        return typeof claudeDefaultModel === "function" ? claudeDefaultModel() : "claude-opus-4-8";
-      }
-      return "";
-    }
-
-    function conversationComposerModelSelectForCli(cliTypeRaw) {
-      const cliType = String(cliTypeRaw || "").trim();
-      if (isCodeBuddyCliType(cliType)) return document.getElementById("convCodeBuddyModelSelect");
-      if (typeof isClaudeCliType === "function" && isClaudeCliType(cliType)) return document.getElementById("convClaudeModelSelect");
-      return null;
-    }
-
-    function conversationComposerCachedModelForCli(sessionId, cliTypeRaw) {
-      const sid = String(sessionId || "").trim();
-      const cliType = String(cliTypeRaw || "").trim();
-      if (!sid) return "";
-      if (
-        isCodeBuddyCliType(cliType)
-        && PCONV.codeBuddyModelBySessionId
-        && typeof PCONV.codeBuddyModelBySessionId === "object"
-      ) {
-        return normalizeSessionModel(PCONV.codeBuddyModelBySessionId[sid]);
-      }
-      if (
-        typeof isClaudeCliType === "function"
-        && isClaudeCliType(cliType)
-        && PCONV.claudeModelBySessionId
-        && typeof PCONV.claudeModelBySessionId === "object"
-      ) {
-        return normalizeSessionModel(PCONV.claudeModelBySessionId[sid]);
-      }
-      return "";
-    }
-
-    function conversationComposerSessionDetailLoadedForModel(sessionId) {
-      const sid = String(sessionId || "").trim();
-      if (!sid) return false;
-      if (PCONV.sessionDetailLoadedAtById && typeof PCONV.sessionDetailLoadedAtById === "object") {
-        const loadedAt = Number(PCONV.sessionDetailLoadedAtById[sid] || 0);
-        if (loadedAt > 0) return true;
-      }
-      return false;
-    }
-
-    function conversationComposerModelReadiness(ctx, sessionModel = "") {
-      const context = (ctx && typeof ctx === "object") ? ctx : null;
-      const sid = String((context && context.sessionId) || STATE.selectedSessionId || "").trim();
-      const session = sid && typeof findConversationSessionById === "function"
-        ? findConversationSessionById(sid)
-        : null;
-      const cliType = conversationComposerCliType(context, session);
-      if (!context || !conversationComposerSupportsModelSwitch(cliType)) {
-        return { state: "ready", statusText: "", canUseDefault: false };
-      }
-      if (normalizeSessionModel(sessionModel)) {
-        return { state: "ready", statusText: "", canUseDefault: true };
-      }
-      if (!sid) {
-        return { state: "ready", statusText: "", canUseDefault: true };
-      }
-      if (conversationComposerSessionDetailLoadedForModel(sid)) {
-        return { state: "ready", statusText: "", canUseDefault: true };
-      }
-      if (typeof isConversationSessionDetailLoading === "function" && isConversationSessionDetailLoading(sid)) {
-        return { state: "loading", statusText: "读取中", canUseDefault: false };
-      }
-      const errorText = typeof getConversationSessionDetailError === "function"
-        ? getConversationSessionDetailError(sid)
-        : "";
-      if (errorText) {
-        return { state: "error", statusText: "读取失败", canUseDefault: false, errorText };
-      }
-      return { state: "missing", statusText: "读取中", canUseDefault: false };
-    }
-
-    function conversationComposerModelCanUseDefault(ctx, sessionModel = "") {
-      const readiness = conversationComposerModelReadiness(ctx, sessionModel);
-      return !!(readiness && readiness.canUseDefault);
-    }
-
-    function renderConversationComposerModelLoadingOption(select, text) {
-      if (!select) return;
-      select.innerHTML = "";
-      let option = null;
-      if (typeof el === "function") {
-        option = el("option", { value: "", text: String(text || "读取模型配置中...") });
-      } else if (typeof document !== "undefined" && document.createElement) {
-        option = document.createElement("option");
-        option.value = "";
-        option.textContent = String(text || "读取模型配置中...");
-      }
-      if (option) select.appendChild(option);
-      select.value = "";
-    }
-
-    function hydrateConversationComposerModelIfNeeded(ctx, sessionModel = "") {
-      const context = (ctx && typeof ctx === "object") ? ctx : null;
-      const sid = String((context && context.sessionId) || STATE.selectedSessionId || "").trim();
-      const readiness = conversationComposerModelReadiness(context, sessionModel);
-      if (!sid || !readiness || readiness.state !== "missing") return;
-      if (typeof ensureConversationSessionDetailLoaded !== "function") return;
-      ensureConversationSessionDetailLoaded(sid, { force: true, maxAgeMs: 60_000, reason: "composer-model" })
-        .then((merged) => {
-          if (merged && typeof conversationStoreUpsertSession === "function") {
-            conversationStoreUpsertSession(merged, {
-              projectId: String((context && context.projectId) || STATE.project || ""),
-              source: "session-detail",
-            });
-          }
-          const current = typeof currentConversationCtx === "function" ? currentConversationCtx() : null;
-          if (current && String(current.sessionId || "").trim() === sid) {
-            if (typeof renderConversationComposerCodeBuddyModel === "function") renderConversationComposerCodeBuddyModel(current);
-            if (typeof renderConversationComposerClaudeModel === "function") renderConversationComposerClaudeModel(current);
-          }
-        })
-        .catch(() => {
-          const current = typeof currentConversationCtx === "function" ? currentConversationCtx() : null;
-          if (current && String(current.sessionId || "").trim() === sid) {
-            if (typeof renderConversationComposerCodeBuddyModel === "function") renderConversationComposerCodeBuddyModel(current);
-            if (typeof renderConversationComposerClaudeModel === "function") renderConversationComposerClaudeModel(current);
-          }
-        });
-    }
-
-    function conversationComposerSessionModel(ctx) {
-      const context = (ctx && typeof ctx === "object") ? ctx : null;
-      const sid = String((context && context.sessionId) || STATE.selectedSessionId || "").trim();
-      const session = sid && typeof findConversationSessionById === "function"
-        ? findConversationSessionById(sid)
-        : null;
-      const cliType = conversationComposerCliType(context, session);
-      const cachedModel = conversationComposerCachedModelForCli(sid, cliType);
-      return normalizeSessionModel(firstNonEmptyText([
-        cachedModel,
-        session && session.model,
-        context && context.model,
-      ]));
-    }
-
-    function conversationComposerSelectedModel(ctx, sessionModel = "") {
-      const context = (ctx && typeof ctx === "object") ? ctx : null;
-      const sid = String((context && context.sessionId) || STATE.selectedSessionId || "").trim();
-      const cliType = conversationComposerCliType(context);
-      const select = conversationComposerModelSelectForCli(cliType);
-      if (!sid || !select || select.hidden) return "";
-      if (String(select.dataset.sessionId || "").trim() !== sid) return "";
-      if (select.dataset.saving === "1") return "";
-      const saved = normalizeSessionModel(select.dataset.model);
-      const selected = normalizeSessionModel(select.value);
-      const canonicalSessionModel = normalizeSessionModel(sessionModel);
-      if (!selected) return "";
-      if (canonicalSessionModel && saved && saved !== canonicalSessionModel) return "";
-      if (canonicalSessionModel && selected === canonicalSessionModel) return selected;
-      if (saved && selected === saved) return selected;
-      return "";
-    }
-
-    function resolveConversationComposerModel(ctx, opts = {}) {
-      const context = (ctx && typeof ctx === "object")
-        ? ctx
-        : (currentConversationCtx() || resolveConversationSendCtx());
-      const cliType = context ? conversationComposerCliType(context) : "";
-      if (!context || !conversationComposerSupportsModelSwitch(cliType)) return "";
-      const sessionModel = conversationComposerSessionModel(context);
-      const selectedModel = opts.preferSelected === false
-        ? ""
-        : conversationComposerSelectedModel(context, sessionModel);
-      const fallback = opts.includeDefault === false || !conversationComposerModelCanUseDefault(context, sessionModel)
-        ? ""
-        : conversationComposerDefaultModelForCli(cliType);
-      return selectedModel || sessionModel || fallback;
-    }
-
-    function resolveConversationComposerPayloadModel(ctx) {
-      const context = (ctx && typeof ctx === "object")
-        ? ctx
-        : (currentConversationCtx() || resolveConversationSendCtx());
-      const cliType = context ? conversationComposerCliType(context) : "";
-      if (!context || !conversationComposerSupportsModelSwitch(cliType)) return "";
-      const sessionModel = conversationComposerSessionModel(context);
-      const selectedModel = conversationComposerSelectedModel(context, sessionModel);
-      if (typeof isClaudeCliType === "function" && isClaudeCliType(cliType)) {
-        return selectedModel || sessionModel || (
-          conversationComposerModelCanUseDefault(context, sessionModel)
-            ? conversationComposerDefaultModelForCli(cliType)
-            : ""
-        );
-      }
-      return selectedModel || sessionModel || "";
-    }
-
-    function syncConversationComposerCodeBuddyModelToLocal(sessionId, model, projectId = "") {
-      const sid = String(sessionId || "").trim();
-      const normalized = normalizeSessionModel(model);
-      if (!sid || !normalized) return false;
-      const pid = String(projectId || STATE.project || "").trim();
-      if (!PCONV.codeBuddyModelBySessionId || typeof PCONV.codeBuddyModelBySessionId !== "object") {
-        PCONV.codeBuddyModelBySessionId = Object.create(null);
-      }
-      PCONV.codeBuddyModelBySessionId[sid] = normalized;
-      const patchRow = (row) => {
-        if (!row || typeof row !== "object") return row;
-        row.model = normalized;
-        row.model_source = "composer-model-switch";
-        row.modelSource = "composer-model-switch";
-        if (!row.cli_type) row.cli_type = "codebuddy";
-        return row;
-      };
-      const updateList = (list) => {
-        if (!Array.isArray(list)) return false;
-        let changed = false;
-        list.forEach((row) => {
-          if (String(getSessionId(row) || "").trim() !== sid) return;
-          patchRow(row);
-          changed = true;
-        });
-        return changed;
-      };
-      let changed = updateList(PCONV.sessions);
-      if (PCONV.sessionDirectoryByProject && typeof PCONV.sessionDirectoryByProject === "object") {
-        const projectIds = pid && PCONV.sessionDirectoryByProject[pid]
-          ? [pid]
-          : Object.keys(PCONV.sessionDirectoryByProject);
-        projectIds.forEach((itemProjectId) => {
-          if (updateList(PCONV.sessionDirectoryByProject[itemProjectId])) changed = true;
-        });
-      }
-      if (typeof mergeConversationSessionDetailIntoStore === "function") {
-        mergeConversationSessionDetailIntoStore({
-          id: sid,
-          sessionId: sid,
-          project_id: pid,
-          cli_type: "codebuddy",
-          model: normalized,
-          source: "composer-model-switch",
-          model_source: "composer-model-switch",
-        }, sid);
-      }
-      if (typeof conversationStoreUpsertSession === "function") {
-        conversationStoreUpsertSession({
-          id: sid,
-          sessionId: sid,
-          project_id: pid,
-          cli_type: "codebuddy",
-          model: normalized,
-          source: "composer-model-switch",
-          model_source: "composer-model-switch",
-        }, { projectId: pid, source: "composer-model-switch" });
-      }
-      if (
-        typeof SESSION_INFO_UI === "object"
-        && SESSION_INFO_UI
-        && SESSION_INFO_UI.open
-        && String(SESSION_INFO_UI.sessionId || "").trim() === sid
-      ) {
-        SESSION_INFO_UI.base = { ...(SESSION_INFO_UI.base || {}), model: normalized };
-        SESSION_INFO_UI.form = { ...(SESSION_INFO_UI.form || {}), model: normalized };
-        if (typeof renderConversationSessionInfoModal === "function") renderConversationSessionInfoModal();
-      }
-      return changed;
-    }
-
-    function hideConversationComposerCodeBuddyModel() {
-      const control = document.getElementById("convCodeBuddyModelControl");
-      const select = document.getElementById("convCodeBuddyModelSelect");
-      const status = document.getElementById("convCodeBuddyModelStatus");
-      if (control) control.hidden = true;
-      if (select) {
-        select.value = "";
-        select.disabled = false;
-        select.dataset.sessionId = "";
-        select.dataset.projectId = "";
-        select.dataset.model = "";
-        select.dataset.modelSource = "";
-      }
-      if (status) status.textContent = "";
-    }
-
-    async function handleConversationComposerCodeBuddyModelChange() {
-      const select = document.getElementById("convCodeBuddyModelSelect");
-      const status = document.getElementById("convCodeBuddyModelStatus");
-      if (!select || select.dataset.saving === "1") return;
-      const sid = String(select.dataset.sessionId || "").trim();
-      const pid = String(select.dataset.projectId || STATE.project || "").trim();
-      const previous = normalizeSessionModel(select.dataset.model) || codeBuddyDefaultModel();
-      const next = normalizeSessionModel(select.value) || codeBuddyDefaultModel();
-      if (!sid || next === previous) {
-        select.value = next;
-        return;
-      }
-      select.dataset.saving = "1";
-      select.disabled = true;
-      if (status) status.textContent = "保存中...";
-      const ok = typeof tryUpdateSessionModel === "function"
-        ? await tryUpdateSessionModel(sid, next)
-        : false;
-      if (!ok) {
-        select.value = previous;
-        select.dataset.saving = "";
-        select.disabled = false;
-        if (status) status.textContent = "保存失败，已保留原值";
-        setHintText("conv", "CodeBuddy 模型切换失败，已保留原值。");
-        return;
-      }
-      syncConversationComposerCodeBuddyModelToLocal(sid, next, pid);
-      select.dataset.model = next;
-      select.dataset.saving = "";
-      select.disabled = false;
-      if (status) status.textContent = "下一次发送将使用";
-      const displayName = typeof codeBuddyModelDisplayName === "function" ? codeBuddyModelDisplayName(next) : next;
-      setHintText("conv", "CodeBuddy 模型已切换为 " + displayName + "，下一次发送将使用。");
-      renderConversationComposerCodeBuddyModel(currentConversationCtx());
-    }
-
-    function renderConversationComposerCodeBuddyModel(ctx) {
-      const control = document.getElementById("convCodeBuddyModelControl");
-      const select = document.getElementById("convCodeBuddyModelSelect");
-      const status = document.getElementById("convCodeBuddyModelStatus");
-      if (!control || !select) return;
-      const context = (ctx && typeof ctx === "object") ? ctx : null;
-      if (!context || !isCodeBuddyCliType(context.cliType)) {
-        hideConversationComposerCodeBuddyModel();
-        return;
-      }
-      const sessionModel = conversationComposerSessionModel(context);
-      const readiness = conversationComposerModelReadiness(context, sessionModel);
-      if (readiness && readiness.state !== "ready") {
-        hydrateConversationComposerModelIfNeeded(context, sessionModel);
-        control.hidden = false;
-        control.title = readiness.state === "error"
-          ? "暂未读取到当前 session.model，避免误显示默认模型。"
-          : "正在读取当前 session.model，读取完成前不显示默认模型。";
-        renderConversationComposerModelLoadingOption(
-          select,
-          readiness.state === "error" ? "模型配置读取失败" : "读取模型配置中..."
-        );
-        select.dataset.sessionId = String(context.sessionId || "").trim();
-        select.dataset.projectId = String(context.projectId || STATE.project || "").trim();
-        select.dataset.model = "";
-        select.dataset.modelSource = readiness.state;
-        select.disabled = true;
-        if (status && select.dataset.saving !== "1") status.textContent = readiness.statusText || "";
-        return;
-      }
-      const selected = resolveConversationComposerModel(context, { preferSelected: false });
-      control.hidden = false;
-      control.title = "界面展示可读名，实际保存值为模型 ID；默认值仅为创建预设，可改选。";
-      populateCodeBuddyModelSelect(select, selected);
-      select.dataset.sessionId = String(context.sessionId || "").trim();
-      select.dataset.projectId = String(context.projectId || STATE.project || "").trim();
-      select.dataset.model = String(sessionModel || "");
-      select.dataset.modelSource = sessionModel ? "session" : "default";
-      select.disabled = !!PCONV.sending || select.dataset.saving === "1";
-      if (status && select.dataset.saving !== "1") status.textContent = "";
-      if (!select.__codeBuddyComposerBound) {
-        select.__codeBuddyComposerBound = true;
-        select.addEventListener("change", handleConversationComposerCodeBuddyModelChange);
-      }
-    }
-
-    function syncConversationComposerClaudeModelToLocal(sessionId, model, projectId = "") {
-      const sid = String(sessionId || "").trim();
-      const normalized = normalizeSessionModel(model);
-      if (!sid || !normalized) return false;
-      const pid = String(projectId || STATE.project || "").trim();
-      if (!PCONV.claudeModelBySessionId || typeof PCONV.claudeModelBySessionId !== "object") {
-        PCONV.claudeModelBySessionId = Object.create(null);
-      }
-      PCONV.claudeModelBySessionId[sid] = normalized;
-      const patchRow = (row) => {
-        if (!row || typeof row !== "object") return row;
-        row.model = normalized;
-        row.model_source = "composer-model-switch";
-        row.modelSource = "composer-model-switch";
-        if (!row.cli_type) row.cli_type = "claude";
-        return row;
-      };
-      const updateList = (list) => {
-        if (!Array.isArray(list)) return false;
-        let changed = false;
-        list.forEach((row) => {
-          if (String(getSessionId(row) || "").trim() !== sid) return;
-          patchRow(row);
-          changed = true;
-        });
-        return changed;
-      };
-      let changed = updateList(PCONV.sessions);
-      if (PCONV.sessionDirectoryByProject && typeof PCONV.sessionDirectoryByProject === "object") {
-        const projectIds = pid && PCONV.sessionDirectoryByProject[pid]
-          ? [pid]
-          : Object.keys(PCONV.sessionDirectoryByProject);
-        projectIds.forEach((itemProjectId) => {
-          if (updateList(PCONV.sessionDirectoryByProject[itemProjectId])) changed = true;
-        });
-      }
-      if (typeof mergeConversationSessionDetailIntoStore === "function") {
-        mergeConversationSessionDetailIntoStore({
-          id: sid,
-          sessionId: sid,
-          project_id: pid,
-          cli_type: "claude",
-          model: normalized,
-          source: "composer-model-switch",
-          model_source: "composer-model-switch",
-        }, sid);
-      }
-      if (typeof conversationStoreUpsertSession === "function") {
-        conversationStoreUpsertSession({
-          id: sid,
-          sessionId: sid,
-          project_id: pid,
-          cli_type: "claude",
-          model: normalized,
-          source: "composer-model-switch",
-          model_source: "composer-model-switch",
-        }, { projectId: pid, source: "composer-model-switch" });
-      }
-      if (
-        typeof SESSION_INFO_UI === "object"
-        && SESSION_INFO_UI
-        && SESSION_INFO_UI.open
-        && String(SESSION_INFO_UI.sessionId || "").trim() === sid
-      ) {
-        SESSION_INFO_UI.base = { ...(SESSION_INFO_UI.base || {}), model: normalized };
-        SESSION_INFO_UI.form = { ...(SESSION_INFO_UI.form || {}), model: normalized };
-        if (typeof renderConversationSessionInfoModal === "function") renderConversationSessionInfoModal();
-      }
-      return changed;
-    }
-
-    function hideConversationComposerClaudeModel() {
-      const control = document.getElementById("convClaudeModelControl");
-      const select = document.getElementById("convClaudeModelSelect");
-      const status = document.getElementById("convClaudeModelStatus");
-      if (control) control.hidden = true;
-      if (select) {
-        select.value = "";
-        select.disabled = false;
-        select.dataset.sessionId = "";
-        select.dataset.projectId = "";
-        select.dataset.model = "";
-        select.dataset.modelSource = "";
-        select.dataset.saving = "";
-      }
-      if (status) status.textContent = "";
-    }
-
-    async function handleConversationComposerClaudeModelChange() {
-      const select = document.getElementById("convClaudeModelSelect");
-      const status = document.getElementById("convClaudeModelStatus");
-      if (!select || select.dataset.saving === "1") return;
-      const sid = String(select.dataset.sessionId || "").trim();
-      const pid = String(select.dataset.projectId || STATE.project || "").trim();
-      const previous = normalizeSessionModel(select.dataset.model) || conversationComposerDefaultModelForCli("claude");
-      const next = normalizeSessionModel(select.value) || conversationComposerDefaultModelForCli("claude");
-      if (!sid || next === previous) {
-        select.value = next;
-        return;
-      }
-      select.dataset.saving = "1";
-      select.disabled = true;
-      if (status) status.textContent = "保存中...";
-      const ok = typeof tryUpdateSessionModel === "function"
-        ? await tryUpdateSessionModel(sid, next)
-        : false;
-      if (!ok) {
-        select.value = previous;
-        select.dataset.saving = "";
-        select.disabled = false;
-        if (status) status.textContent = "保存失败，已保留原值";
-        setHintText("conv", "ClaudeCode 模型切换失败，已保留原值。");
-        return;
-      }
-      syncConversationComposerClaudeModelToLocal(sid, next, pid);
-      select.dataset.model = next;
-      select.dataset.saving = "";
-      select.disabled = false;
-      if (status) status.textContent = "下一次发送将使用";
-      const displayName = typeof claudeModelDisplayName === "function" ? claudeModelDisplayName(next) : next;
-      setHintText("conv", "ClaudeCode 模型已切换为 " + displayName + "，下一次发送将使用。");
-      renderConversationComposerClaudeModel(currentConversationCtx());
-    }
-
-    function renderConversationComposerClaudeModel(ctx) {
-      const control = document.getElementById("convClaudeModelControl");
-      const select = document.getElementById("convClaudeModelSelect");
-      const status = document.getElementById("convClaudeModelStatus");
-      if (!control || !select) return;
-      const context = (ctx && typeof ctx === "object") ? ctx : null;
-      if (!context || !(typeof isClaudeCliType === "function" && isClaudeCliType(context.cliType))) {
-        hideConversationComposerClaudeModel();
-        return;
-      }
-      const sessionModel = conversationComposerSessionModel(context);
-      const readiness = conversationComposerModelReadiness(context, sessionModel);
-      if (readiness && readiness.state !== "ready") {
-        hydrateConversationComposerModelIfNeeded(context, sessionModel);
-        control.hidden = false;
-        control.title = readiness.state === "error"
-          ? "暂未读取到当前 session.model，避免误显示默认 ClaudeCode 模型。"
-          : "正在读取当前 session.model，读取完成前不显示默认 ClaudeCode 模型。";
-        renderConversationComposerModelLoadingOption(
-          select,
-          readiness.state === "error" ? "模型配置读取失败" : "读取模型配置中..."
-        );
-        select.dataset.sessionId = String(context.sessionId || "").trim();
-        select.dataset.projectId = String(context.projectId || STATE.project || "").trim();
-        select.dataset.model = "";
-        select.dataset.modelSource = readiness.state;
-        select.disabled = true;
-        if (status && select.dataset.saving !== "1") status.textContent = readiness.statusText || "";
-        return;
-      }
-      const selected = resolveConversationComposerModel(context, { preferSelected: false });
-      control.hidden = false;
-      control.title = "ClaudeCode 模型会保存到当前 session.model，下一次发送透传给 runner --model。";
-      if (typeof populateClaudeModelSelect === "function") {
-        populateClaudeModelSelect(select, selected);
-      } else {
-        select.value = selected || conversationComposerDefaultModelForCli("claude");
-      }
-      select.dataset.sessionId = String(context.sessionId || "").trim();
-      select.dataset.projectId = String(context.projectId || STATE.project || "").trim();
-      select.dataset.model = String(sessionModel || "");
-      select.dataset.modelSource = sessionModel ? "session" : "default";
-      select.disabled = !!PCONV.sending || select.dataset.saving === "1";
-      if (status && select.dataset.saving !== "1") status.textContent = "";
-      if (!select.__claudeComposerBound) {
-        select.__claudeComposerBound = true;
-        select.addEventListener("change", handleConversationComposerClaudeModelChange);
-      }
-    }
-
-    function conversationComposerSessionPermissionMode(ctx) {
-      const context = (ctx && typeof ctx === "object") ? ctx : null;
-      const sid = String((context && context.sessionId) || STATE.selectedSessionId || "").trim();
-      const session = sid && typeof findConversationSessionById === "function"
-        ? findConversationSessionById(sid)
-        : null;
-      const cliType = firstNonEmptyText([
-        context && context.cliType,
-        context && context.cli_type,
-        session && session.cli_type,
-        session && session.cliType,
-      ]);
-      const hasCachedMode = sid
-        && isCodeBuddyCliType(cliType)
-        && PCONV.codeBuddyPermissionModeBySessionId
-        && typeof PCONV.codeBuddyPermissionModeBySessionId === "object"
-        && Object.prototype.hasOwnProperty.call(PCONV.codeBuddyPermissionModeBySessionId, sid);
-      const cachedMode = hasCachedMode
-        ? normalizeCodeBuddyPermissionMode(PCONV.codeBuddyPermissionModeBySessionId[sid])
-        : "";
-      const raw = firstNonEmptyText([
-        cachedMode,
-        session && session.codebuddy_permission_mode,
-        session && session.codebuddyPermissionMode,
-        context && context.codebuddy_permission_mode,
-        context && context.codebuddyPermissionMode,
-      ]);
-      return typeof normalizeCodeBuddyPermissionMode === "function"
-        ? normalizeCodeBuddyPermissionMode(raw)
-        : String(raw || "default").trim();
-    }
-
-    function conversationComposerSelectedPermissionMode(ctx, sessionMode = "") {
-      const context = (ctx && typeof ctx === "object") ? ctx : null;
-      const sid = String((context && context.sessionId) || STATE.selectedSessionId || "").trim();
-      const select = document.getElementById("convCodeBuddyPermissionSelect");
-      if (!sid || !select || select.hidden) return "";
-      if (String(select.dataset.sessionId || "").trim() !== sid) return "";
-      if (select.dataset.saving === "1") return "";
-      const saved = normalizeCodeBuddyPermissionMode(select.dataset.mode);
-      const selected = normalizeCodeBuddyPermissionMode(select.value);
-      const canonicalSessionMode = normalizeCodeBuddyPermissionMode(sessionMode);
-      if (!selected) return "";
-      if (canonicalSessionMode && saved && saved !== canonicalSessionMode) return "";
-      if (canonicalSessionMode && selected === canonicalSessionMode) return selected;
-      if (saved && selected === saved) return selected;
-      return "";
-    }
-
-    function resolveConversationComposerCodeBuddyPermissionMode(ctx) {
-      const context = (ctx && typeof ctx === "object")
-        ? ctx
-        : (currentConversationCtx() || resolveConversationSendCtx());
-      if (!context || !isCodeBuddyCliType(context.cliType)) return "";
-      const sessionMode = conversationComposerSessionPermissionMode(context);
-      const selectedMode = conversationComposerSelectedPermissionMode(context, sessionMode);
-      return selectedMode || sessionMode || (
-        typeof codeBuddyDefaultPermissionMode === "function" ? codeBuddyDefaultPermissionMode() : "default"
-      );
-    }
-
-    function syncConversationComposerCodeBuddyPermissionModeToLocal(sessionId, mode, projectId = "") {
-      const sid = String(sessionId || "").trim();
-      const normalized = typeof normalizeCodeBuddyPermissionMode === "function"
-        ? normalizeCodeBuddyPermissionMode(mode)
-        : String(mode || "default").trim();
-      if (!sid || !normalized) return false;
-      const pid = String(projectId || STATE.project || "").trim();
-      if (!PCONV.codeBuddyPermissionModeBySessionId || typeof PCONV.codeBuddyPermissionModeBySessionId !== "object") {
-        PCONV.codeBuddyPermissionModeBySessionId = Object.create(null);
-      }
-      PCONV.codeBuddyPermissionModeBySessionId[sid] = normalized;
-      const patchRow = (row) => {
-        if (!row || typeof row !== "object") return row;
-        row.codebuddy_permission_mode = normalized;
-        row.codebuddyPermissionMode = normalized;
-        row.codebuddy_permission_mode_source = "composer-permission-switch";
-        row.codebuddyPermissionModeSource = "composer-permission-switch";
-        row._codebuddy_permission_mode_present = true;
-        if (!row.cli_type) row.cli_type = "codebuddy";
-        return row;
-      };
-      const updateList = (list) => {
-        if (!Array.isArray(list)) return false;
-        let changed = false;
-        list.forEach((row) => {
-          if (String(getSessionId(row) || "").trim() !== sid) return;
-          patchRow(row);
-          changed = true;
-        });
-        return changed;
-      };
-      let changed = updateList(PCONV.sessions);
-      if (PCONV.sessionDirectoryByProject && typeof PCONV.sessionDirectoryByProject === "object") {
-        const projectIds = pid && PCONV.sessionDirectoryByProject[pid]
-          ? [pid]
-          : Object.keys(PCONV.sessionDirectoryByProject);
-        projectIds.forEach((itemProjectId) => {
-          if (updateList(PCONV.sessionDirectoryByProject[itemProjectId])) changed = true;
-        });
-      }
-      if (typeof mergeConversationSessionDetailIntoStore === "function") {
-        mergeConversationSessionDetailIntoStore({
-          id: sid,
-          sessionId: sid,
-          project_id: pid,
-          cli_type: "codebuddy",
-          codebuddy_permission_mode: normalized,
-          codebuddyPermissionMode: normalized,
-          codebuddy_permission_mode_source: "composer-permission-switch",
-          codebuddyPermissionModeSource: "composer-permission-switch",
-          _codebuddy_permission_mode_present: true,
-          source: "composer-permission-switch",
-        }, sid);
-      }
-      if (typeof conversationStoreUpsertSession === "function") {
-        conversationStoreUpsertSession({
-          id: sid,
-          sessionId: sid,
-          project_id: pid,
-          cli_type: "codebuddy",
-          codebuddy_permission_mode: normalized,
-          codebuddyPermissionMode: normalized,
-          codebuddy_permission_mode_source: "composer-permission-switch",
-          codebuddyPermissionModeSource: "composer-permission-switch",
-          _codebuddy_permission_mode_present: true,
-          source: "composer-permission-switch",
-        }, { projectId: pid, source: "composer-permission-switch" });
-      }
-      if (
-        typeof SESSION_INFO_UI === "object"
-        && SESSION_INFO_UI
-        && SESSION_INFO_UI.open
-        && String(SESSION_INFO_UI.sessionId || "").trim() === sid
-      ) {
-        SESSION_INFO_UI.base = { ...(SESSION_INFO_UI.base || {}), codebuddy_permission_mode: normalized };
-        SESSION_INFO_UI.form = { ...(SESSION_INFO_UI.form || {}), codebuddy_permission_mode: normalized };
-        if (typeof renderConversationSessionInfoModal === "function") renderConversationSessionInfoModal();
-      }
-      return changed;
-    }
-
-    function hideConversationComposerCodeBuddyPermissionMode() {
-      const control = document.getElementById("convCodeBuddyPermissionControl");
-      const select = document.getElementById("convCodeBuddyPermissionSelect");
-      const status = document.getElementById("convCodeBuddyPermissionStatus");
-      if (control) {
-        control.hidden = true;
-        control.classList.remove("is-danger");
-      }
-      if (select) {
-        select.value = "";
-        select.disabled = false;
-        select.dataset.sessionId = "";
-        select.dataset.projectId = "";
-        select.dataset.mode = "";
-        select.dataset.saving = "";
-      }
-      if (status) status.textContent = "";
-    }
-
-    async function handleConversationComposerCodeBuddyPermissionModeChange() {
-      const control = document.getElementById("convCodeBuddyPermissionControl");
-      const select = document.getElementById("convCodeBuddyPermissionSelect");
-      const status = document.getElementById("convCodeBuddyPermissionStatus");
-      if (!select || select.dataset.saving === "1") return;
-      const sid = String(select.dataset.sessionId || "").trim();
-      const pid = String(select.dataset.projectId || STATE.project || "").trim();
-      const previous = typeof normalizeCodeBuddyPermissionMode === "function"
-        ? normalizeCodeBuddyPermissionMode(select.dataset.mode)
-        : String(select.dataset.mode || "default").trim();
-      const next = typeof normalizeCodeBuddyPermissionMode === "function"
-        ? normalizeCodeBuddyPermissionMode(select.value)
-        : String(select.value || "default").trim();
-      if (!sid || next === previous) {
-        select.value = next;
-        if (control) control.classList.toggle("is-danger", next === "bypassPermissions");
-        if (status) status.textContent = next === "bypassPermissions" ? "高风险" : "";
-        return;
-      }
-      select.dataset.saving = "1";
-      select.disabled = true;
-      if (status) status.textContent = "保存中...";
-      const ok = typeof tryUpdateSessionCodeBuddyPermissionMode === "function"
-        ? await tryUpdateSessionCodeBuddyPermissionMode(sid, next)
-        : false;
-      if (!ok) {
-        select.value = previous;
-        select.dataset.saving = "";
-        select.disabled = false;
-        if (control) control.classList.toggle("is-danger", previous === "bypassPermissions");
-        if (status) status.textContent = "保存失败，已保留原值";
-        setHintText("conv", "CodeBuddy 授权模式切换失败，已保留原值。");
-        return;
-      }
-      syncConversationComposerCodeBuddyPermissionModeToLocal(sid, next, pid);
-      select.dataset.mode = next;
-      select.dataset.saving = "";
-      select.disabled = false;
-      if (control) control.classList.toggle("is-danger", next === "bypassPermissions");
-      if (status) status.textContent = next === "bypassPermissions" ? "高风险" : "";
-      const displayName = typeof codeBuddyPermissionModeDisplayName === "function"
-        ? codeBuddyPermissionModeDisplayName(next)
-        : next;
-      const riskText = next === "bypassPermissions"
-        ? "全部授权会绕过 CodeBuddy 权限确认，可能执行文件修改和命令。"
-        : "默认授权已启用。";
-      setHintText("conv", "CodeBuddy 授权模式已切换为 " + displayName + "。" + riskText);
-      renderConversationComposerCodeBuddyPermissionMode(currentConversationCtx());
-    }
-
-    function renderConversationComposerCodeBuddyPermissionMode(ctx) {
-      const control = document.getElementById("convCodeBuddyPermissionControl");
-      const select = document.getElementById("convCodeBuddyPermissionSelect");
-      const status = document.getElementById("convCodeBuddyPermissionStatus");
-      if (!control || !select) return;
-      const context = (ctx && typeof ctx === "object") ? ctx : null;
-      if (!context || !isCodeBuddyCliType(context.cliType)) {
-        hideConversationComposerCodeBuddyPermissionMode();
-        return;
-      }
-      const selected = resolveConversationComposerCodeBuddyPermissionMode(context);
-      control.hidden = false;
-      control.title = selected === "bypassPermissions"
-        ? "全部授权会绕过 CodeBuddy 权限确认，可能执行文件修改和命令。"
-        : "默认授权：保留 CodeBuddy 权限确认。";
-      if (typeof populateCodeBuddyPermissionModeSelect === "function") {
-        populateCodeBuddyPermissionModeSelect(select, selected);
-      } else {
-        select.value = selected || "default";
-      }
-      control.classList.toggle("is-danger", select.value === "bypassPermissions");
-      select.dataset.sessionId = String(context.sessionId || "").trim();
-      select.dataset.projectId = String(context.projectId || STATE.project || "").trim();
-      select.dataset.mode = String(select.value || selected || "default");
-      select.disabled = !!PCONV.sending || select.dataset.saving === "1";
-      if (status && select.dataset.saving !== "1") {
-        status.textContent = select.value === "bypassPermissions" ? "高风险" : "";
-      }
-      if (!select.__codeBuddyPermissionComposerBound) {
-        select.__codeBuddyPermissionComposerBound = true;
-        select.addEventListener("change", handleConversationComposerCodeBuddyPermissionModeChange);
-      }
-    }
-
-    function conversationComposerSessionClaudePermissionMode(ctx) {
-      const context = (ctx && typeof ctx === "object") ? ctx : null;
-      const sid = String((context && context.sessionId) || STATE.selectedSessionId || "").trim();
-      const session = sid && typeof findConversationSessionById === "function"
-        ? findConversationSessionById(sid)
-        : null;
-      const cliType = conversationComposerCliType(context, session);
-      const hasCachedMode = sid
-        && typeof isClaudeCliType === "function"
-        && isClaudeCliType(cliType)
-        && PCONV.claudePermissionModeBySessionId
-        && typeof PCONV.claudePermissionModeBySessionId === "object"
-        && Object.prototype.hasOwnProperty.call(PCONV.claudePermissionModeBySessionId, sid);
-      const cachedMode = hasCachedMode
-        ? normalizeClaudePermissionMode(PCONV.claudePermissionModeBySessionId[sid])
-        : "";
-      const raw = firstNonEmptyText([
-        cachedMode,
-        session && session.claude_permission_mode,
-        session && session.claudePermissionMode,
-        session && session.permission_mode,
-        session && session.permissionMode,
-        context && context.claude_permission_mode,
-        context && context.claudePermissionMode,
-        context && context.permission_mode,
-        context && context.permissionMode,
-      ]);
-      return typeof normalizeClaudePermissionMode === "function"
-        ? normalizeClaudePermissionMode(raw)
-        : String(raw || "bypassPermissions").trim();
-    }
-
-    function conversationComposerSelectedClaudePermissionMode(ctx, sessionMode = "") {
-      const context = (ctx && typeof ctx === "object") ? ctx : null;
-      const sid = String((context && context.sessionId) || STATE.selectedSessionId || "").trim();
-      const select = document.getElementById("convClaudePermissionSelect");
-      if (!sid || !select || select.hidden) return "";
-      if (String(select.dataset.sessionId || "").trim() !== sid) return "";
-      if (select.dataset.saving === "1") return "";
-      const saved = normalizeClaudePermissionMode(select.dataset.mode);
-      const selected = normalizeClaudePermissionMode(select.value);
-      const canonicalSessionMode = normalizeClaudePermissionMode(sessionMode);
-      if (!selected) return "";
-      if (canonicalSessionMode && saved && saved !== canonicalSessionMode) return "";
-      if (canonicalSessionMode && selected === canonicalSessionMode) return selected;
-      if (saved && selected === saved) return selected;
-      return "";
-    }
-
-    function resolveConversationComposerClaudePermissionMode(ctx) {
-      const context = (ctx && typeof ctx === "object")
-        ? ctx
-        : (currentConversationCtx() || resolveConversationSendCtx());
-      if (!context || !(typeof isClaudeCliType === "function" && isClaudeCliType(context.cliType))) return "";
-      const sessionMode = conversationComposerSessionClaudePermissionMode(context);
-      const selectedMode = conversationComposerSelectedClaudePermissionMode(context, sessionMode);
-      return selectedMode || sessionMode || (
-        typeof claudeDefaultPermissionMode === "function" ? claudeDefaultPermissionMode() : "bypassPermissions"
-      );
-    }
-
-    function resolveConversationComposerPermissionPayload(ctx) {
-      const context = (ctx && typeof ctx === "object")
-        ? ctx
-        : (currentConversationCtx() || resolveConversationSendCtx());
-      if (!context) return {};
-      if (isCodeBuddyCliType(context.cliType)) {
-        const mode = resolveConversationComposerCodeBuddyPermissionMode(context);
-        return mode ? {
-          codebuddy_permission_mode: mode,
-          codebuddyPermissionMode: mode,
-        } : {};
-      }
-      if (typeof isClaudeCliType === "function" && isClaudeCliType(context.cliType)) {
-        const mode = resolveConversationComposerClaudePermissionMode(context);
-        return mode ? {
-          permission_mode: mode,
-          permissionMode: mode,
-          claude_permission_mode: mode,
-          claudePermissionMode: mode,
-        } : {};
-      }
-      return {};
-    }
-
-    function syncConversationComposerClaudePermissionModeToLocal(sessionId, mode, projectId = "") {
-      const sid = String(sessionId || "").trim();
-      const normalized = typeof normalizeClaudePermissionMode === "function"
-        ? normalizeClaudePermissionMode(mode)
-        : String(mode || "bypassPermissions").trim();
-      if (!sid || !normalized) return false;
-      const pid = String(projectId || STATE.project || "").trim();
-      if (!PCONV.claudePermissionModeBySessionId || typeof PCONV.claudePermissionModeBySessionId !== "object") {
-        PCONV.claudePermissionModeBySessionId = Object.create(null);
-      }
-      PCONV.claudePermissionModeBySessionId[sid] = normalized;
-      const patchRow = (row) => {
-        if (!row || typeof row !== "object") return row;
-        row.claude_permission_mode = normalized;
-        row.claudePermissionMode = normalized;
-        row.permission_mode = normalized;
-        row.permissionMode = normalized;
-        row.claude_permission_mode_source = "composer-permission-switch";
-        row.claudePermissionModeSource = "composer-permission-switch";
-        if (!row.cli_type) row.cli_type = "claude";
-        return row;
-      };
-      const updateList = (list) => {
-        if (!Array.isArray(list)) return false;
-        let changed = false;
-        list.forEach((row) => {
-          if (String(getSessionId(row) || "").trim() !== sid) return;
-          patchRow(row);
-          changed = true;
-        });
-        return changed;
-      };
-      let changed = updateList(PCONV.sessions);
-      if (PCONV.sessionDirectoryByProject && typeof PCONV.sessionDirectoryByProject === "object") {
-        const projectIds = pid && PCONV.sessionDirectoryByProject[pid]
-          ? [pid]
-          : Object.keys(PCONV.sessionDirectoryByProject);
-        projectIds.forEach((itemProjectId) => {
-          if (updateList(PCONV.sessionDirectoryByProject[itemProjectId])) changed = true;
-        });
-      }
-      if (typeof mergeConversationSessionDetailIntoStore === "function") {
-        mergeConversationSessionDetailIntoStore({
-          id: sid,
-          sessionId: sid,
-          project_id: pid,
-          cli_type: "claude",
-          claude_permission_mode: normalized,
-          claudePermissionMode: normalized,
-          permission_mode: normalized,
-          permissionMode: normalized,
-          claude_permission_mode_source: "composer-permission-switch",
-          claudePermissionModeSource: "composer-permission-switch",
-          source: "composer-permission-switch",
-        }, sid);
-      }
-      if (typeof conversationStoreUpsertSession === "function") {
-        conversationStoreUpsertSession({
-          id: sid,
-          sessionId: sid,
-          project_id: pid,
-          cli_type: "claude",
-          claude_permission_mode: normalized,
-          claudePermissionMode: normalized,
-          permission_mode: normalized,
-          permissionMode: normalized,
-          claude_permission_mode_source: "composer-permission-switch",
-          claudePermissionModeSource: "composer-permission-switch",
-          source: "composer-permission-switch",
-        }, { projectId: pid, source: "composer-permission-switch" });
-      }
-      if (
-        typeof SESSION_INFO_UI === "object"
-        && SESSION_INFO_UI
-        && SESSION_INFO_UI.open
-        && String(SESSION_INFO_UI.sessionId || "").trim() === sid
-      ) {
-        SESSION_INFO_UI.base = { ...(SESSION_INFO_UI.base || {}), claude_permission_mode: normalized };
-        SESSION_INFO_UI.form = { ...(SESSION_INFO_UI.form || {}), claude_permission_mode: normalized };
-        if (typeof renderConversationSessionInfoModal === "function") renderConversationSessionInfoModal();
-      }
-      return changed;
-    }
-
-    function hideConversationComposerClaudePermissionMode() {
-      const control = document.getElementById("convClaudePermissionControl");
-      const select = document.getElementById("convClaudePermissionSelect");
-      const status = document.getElementById("convClaudePermissionStatus");
-      if (control) {
-        control.hidden = true;
-        control.classList.remove("is-danger");
-      }
-      if (select) {
-        select.value = "";
-        select.disabled = false;
-        select.dataset.sessionId = "";
-        select.dataset.projectId = "";
-        select.dataset.mode = "";
-        select.dataset.saving = "";
-      }
-      if (status) status.textContent = "";
-    }
-
-    async function handleConversationComposerClaudePermissionModeChange() {
-      const control = document.getElementById("convClaudePermissionControl");
-      const select = document.getElementById("convClaudePermissionSelect");
-      const status = document.getElementById("convClaudePermissionStatus");
-      if (!select || select.dataset.saving === "1") return;
-      const sid = String(select.dataset.sessionId || "").trim();
-      const pid = String(select.dataset.projectId || STATE.project || "").trim();
-      const previous = typeof normalizeClaudePermissionMode === "function"
-        ? normalizeClaudePermissionMode(select.dataset.mode)
-        : String(select.dataset.mode || "bypassPermissions").trim();
-      const next = typeof normalizeClaudePermissionMode === "function"
-        ? normalizeClaudePermissionMode(select.value)
-        : String(select.value || "bypassPermissions").trim();
-      if (!sid || next === previous) {
-        select.value = next;
-        if (control) control.classList.toggle("is-danger", next === "bypassPermissions");
-        if (status) status.textContent = next === "bypassPermissions" ? "高风险" : "";
-        return;
-      }
-      select.dataset.saving = "1";
-      select.disabled = true;
-      if (status) status.textContent = "保存中...";
-      const ok = typeof tryUpdateSessionClaudePermissionMode === "function"
-        ? await tryUpdateSessionClaudePermissionMode(sid, next)
-        : false;
-      if (!ok) {
-        select.value = previous;
-        select.dataset.saving = "";
-        select.disabled = false;
-        if (control) control.classList.toggle("is-danger", previous === "bypassPermissions");
-        if (status) status.textContent = "保存失败，已保留原值";
-        setHintText("conv", "ClaudeCode 授权模式切换失败，已保留原值；可能需要后端先支持 Claude 授权字段回显。");
-        return;
-      }
-      syncConversationComposerClaudePermissionModeToLocal(sid, next, pid);
-      select.dataset.mode = next;
-      select.dataset.saving = "";
-      select.disabled = false;
-      if (control) control.classList.toggle("is-danger", next === "bypassPermissions");
-      if (status) status.textContent = next === "bypassPermissions" ? "高风险" : "";
-      const displayName = typeof claudePermissionModeDisplayName === "function"
-        ? claudePermissionModeDisplayName(next)
-        : next;
-      const riskText = next === "bypassPermissions"
-        ? "最大授权会追加 --dangerously-skip-permissions，不会收紧当前默认体验。"
-        : "已切换为更严格授权模式。";
-      setHintText("conv", "ClaudeCode 授权模式已切换为 " + displayName + "。" + riskText);
-      renderConversationComposerClaudePermissionMode(currentConversationCtx());
-    }
-
-    function renderConversationComposerClaudePermissionMode(ctx) {
-      const control = document.getElementById("convClaudePermissionControl");
-      const select = document.getElementById("convClaudePermissionSelect");
-      const status = document.getElementById("convClaudePermissionStatus");
-      if (!control || !select) return;
-      const context = (ctx && typeof ctx === "object") ? ctx : null;
-      if (!context || !(typeof isClaudeCliType === "function" && isClaudeCliType(context.cliType))) {
-        hideConversationComposerClaudePermissionMode();
-        return;
-      }
-      const selected = resolveConversationComposerClaudePermissionMode(context);
-      control.hidden = false;
-      control.title = selected === "bypassPermissions"
-        ? "最大授权：发送时对应 --dangerously-skip-permissions。"
-        : "更严格授权：default / acceptEdits / plan 会收紧 ClaudeCode 权限。";
-      if (typeof populateClaudePermissionModeSelect === "function") {
-        populateClaudePermissionModeSelect(select, selected);
-      } else {
-        select.value = selected || "bypassPermissions";
-      }
-      control.classList.toggle("is-danger", select.value === "bypassPermissions");
-      select.dataset.sessionId = String(context.sessionId || "").trim();
-      select.dataset.projectId = String(context.projectId || STATE.project || "").trim();
-      select.dataset.mode = String(select.value || selected || "bypassPermissions");
-      select.disabled = !!PCONV.sending || select.dataset.saving === "1";
-      if (status && select.dataset.saving !== "1") {
-        status.textContent = select.value === "bypassPermissions" ? "高风险" : "";
-      }
-      if (!select.__claudePermissionComposerBound) {
-        select.__claudePermissionComposerBound = true;
-        select.addEventListener("change", handleConversationComposerClaudePermissionModeChange);
-      }
-    }
 
     function setConvComposerTextForCurrentSession(text) {
       const key = currentConvComposerDraftKey();
@@ -3335,12 +1951,15 @@
       const src = String(raw.url || raw.dataUrl || "").trim();
       const filename = String(raw.filename || "").trim();
       const originalName = String(raw.originalName || raw.filename || "").trim();
+      const mimeType = String(raw.mimeType || raw.mime_type || "").trim();
       if (!src && !filename) return null;
       return {
         filename,
         originalName: originalName || filename || "attachment",
         url: src,
         dataUrl: src || "",
+        mimeType,
+        isImage: raw.isImage === true,
       };
     }
 
@@ -3398,6 +2017,177 @@
       });
       if (!r.ok) throw new Error((await parseResponseDetail(r)) || ("HTTP " + r.status));
       return await r.json();
+    }
+
+    async function reorderConversationMemos(payload) {
+      const r = await fetch("/api/conversation-memos/reorder", {
+        method: "POST",
+        headers: authHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify(payload || {}),
+      });
+      if (!r.ok) throw new Error((await parseResponseDetail(r)) || ("HTTP " + r.status));
+      return await r.json();
+    }
+
+    function conversationMemoAttachmentUrl(att) {
+      if (!att || typeof att !== "object") return "";
+      if (typeof resolveAttachmentUrl === "function") {
+        const resolved = String(resolveAttachmentUrl(att) || "").trim();
+        if (resolved) return resolved;
+      }
+      return String(att.url || att.dataUrl || att.href || "").trim();
+    }
+
+    function isConversationMemoImageAttachment(att) {
+      if (!att || typeof att !== "object") return false;
+      if (typeof isImageAttachment === "function" && isImageAttachment(att)) return true;
+      if (att.isImage === true) return true;
+      const mime = String(att.mimeType || att.mime_type || "").toLowerCase();
+      if (mime.startsWith("image/")) return true;
+      const name = String(att.originalName || att.filename || conversationMemoAttachmentUrl(att) || "").toLowerCase();
+      return /\.(png|jpe?g|gif|webp|bmp|svg)(?:[?#].*)?$/.test(name);
+    }
+
+    function conversationMemoImagePreviewItems(attachments) {
+      const out = [];
+      const seen = new Set();
+      (Array.isArray(attachments) ? attachments : []).forEach((att, idx) => {
+        if (!isConversationMemoImageAttachment(att)) return;
+        const src = conversationMemoAttachmentUrl(att);
+        if (!src || seen.has(src)) return;
+        seen.add(src);
+        out.push({
+          src,
+          caption: String(att.originalName || att.filename || ("图片 " + (idx + 1))).trim(),
+        });
+      });
+      return out;
+    }
+
+    function renderConversationMemoAttachments(item) {
+      const attachments = Array.isArray(item && item.attachments) ? item.attachments : [];
+      if (!attachments.length) return null;
+      const wrap = el("div", { class: "memo-item-files" });
+      const images = conversationMemoImagePreviewItems(attachments);
+      if (images.length) {
+        const grid = el("div", { class: "memo-image-grid" });
+        images.forEach((image, index) => {
+          const caption = String(image.caption || ("图片 " + (index + 1))).trim();
+          const btn = el("button", {
+            class: "memo-image-thumb-btn",
+            type: "button",
+            title: "点击查看大图",
+          });
+          btn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            if (typeof openImagePreview === "function") {
+              openImagePreview(image.src, caption, images, index);
+            } else {
+              window.open(image.src, "_blank", "noopener,noreferrer");
+            }
+          });
+          btn.appendChild(el("img", {
+            class: "memo-image-thumb",
+            src: image.src,
+            alt: caption,
+            loading: "lazy",
+          }));
+          btn.appendChild(el("span", { class: "memo-image-name", text: caption }));
+          grid.appendChild(btn);
+        });
+        wrap.appendChild(grid);
+      }
+      const nonImages = attachments.filter((att) => !isConversationMemoImageAttachment(att));
+      if (nonImages.length) {
+        const chips = el("div", { class: "memo-file-chip-row" });
+        nonImages.forEach((att, idx) => {
+          const name = String(att.originalName || att.filename || ("附件" + (idx + 1)));
+          chips.appendChild(el("span", { class: "memo-file-chip", text: name }));
+        });
+        wrap.appendChild(chips);
+      }
+      return wrap;
+    }
+
+    function getConversationMemoDraggingIdByKey(key) {
+      const k = String(key || "").trim();
+      if (!k || !PCONV.memoDraggingIdBySessionKey) return "";
+      return String(PCONV.memoDraggingIdBySessionKey[k] || "").trim();
+    }
+
+    function setConversationMemoDraggingIdByKey(key, memoId) {
+      const k = String(key || "").trim();
+      if (!k) return;
+      if (!PCONV.memoDraggingIdBySessionKey || typeof PCONV.memoDraggingIdBySessionKey !== "object") {
+        PCONV.memoDraggingIdBySessionKey = Object.create(null);
+      }
+      const id = String(memoId || "").trim();
+      if (id) PCONV.memoDraggingIdBySessionKey[k] = id;
+      else delete PCONV.memoDraggingIdBySessionKey[k];
+    }
+
+    function clearConversationMemoDropClasses(root) {
+      const target = root && root.querySelectorAll ? root : document;
+      Array.from(target.querySelectorAll(".memo-drop-before,.memo-drop-after")).forEach((node) => {
+        node.classList.remove("memo-drop-before", "memo-drop-after");
+      });
+    }
+
+    function moveConversationMemoItem(items, draggedId, targetId, placement) {
+      const rows = Array.isArray(items) ? items.slice() : [];
+      const from = rows.findIndex((it) => String(it && it.id || "") === String(draggedId || ""));
+      if (from < 0) return rows;
+      const moving = rows.splice(from, 1)[0];
+      let to = rows.findIndex((it) => String(it && it.id || "") === String(targetId || ""));
+      if (to < 0) {
+        rows.splice(from, 0, moving);
+        return rows;
+      }
+      if (placement === "after") to += 1;
+      rows.splice(Math.max(0, Math.min(rows.length, to)), 0, moving);
+      return rows;
+    }
+
+    async function reorderConversationMemoByDrop(key, draggedId, targetId, placement) {
+      const draftKey = String(key || "").trim();
+      const fromId = String(draggedId || "").trim();
+      const toId = String(targetId || "").trim();
+      if (!draftKey || !fromId || !toId || fromId === toId) return;
+      const parsed = parseConversationMemoKey(draftKey);
+      if (!parsed.projectId || !parsed.sessionId) return;
+      const state = getConversationMemoStateByKey(draftKey);
+      const oldItems = Array.isArray(state.items) ? state.items.slice() : [];
+      const nextItems = moveConversationMemoItem(oldItems, fromId, toId, placement);
+      const oldOrder = oldItems.map((it) => String(it && it.id || "")).join("|");
+      const nextOrder = nextItems.map((it) => String(it && it.id || "")).join("|");
+      if (!nextItems.length || oldOrder === nextOrder) return;
+
+      PCONV.memoBySessionKey[draftKey] = {
+        ...state,
+        items: nextItems,
+        count: Math.max(Number(state.count || 0), nextItems.length),
+        fetchedAt: Date.now(),
+      };
+      PCONV.memoActionBusyBySessionKey[draftKey] = "reorder";
+      setConversationMemoHintByKey(draftKey, "正在保存备忘顺序...");
+      renderConversationMemoDrawer();
+      try {
+        await reorderConversationMemos({
+          projectId: parsed.projectId,
+          sessionId: parsed.sessionId,
+          orderedIds: nextItems.map((it) => String(it && it.id || "")).filter(Boolean),
+        });
+        await ensureConversationMemosLoaded(parsed.projectId, parsed.sessionId, { force: true });
+        setConversationMemoHintByKey(draftKey, "已更新备忘顺序。");
+      } catch (e) {
+        PCONV.memoBySessionKey[draftKey] = { ...state, items: oldItems, fetchedAt: Date.now() };
+        const msg = String((e && e.message) || e || "未知错误");
+        setConversationMemoHintByKey(draftKey, "排序保存失败，已恢复原顺序：" + msg);
+      } finally {
+        delete PCONV.memoActionBusyBySessionKey[draftKey];
+        setConversationMemoDraggingIdByKey(draftKey, "");
+        renderConversationMemoDrawer();
+      }
     }
 
     async function ensureConversationMemosLoaded(projectId, sessionId, opts = {}) {
@@ -3583,6 +2373,7 @@
       } else {
         for (const item of items) {
           const row = el("div", { class: "memo-item" });
+          row.dataset.memoId = String(item.id || "");
           const head = el("div", { class: "memo-item-head" });
           const ckWrap = el("label", { class: "memo-item-check" });
           const ck = document.createElement("input");
@@ -3596,34 +2387,79 @@
           ckWrap.appendChild(ck);
           ckWrap.appendChild(el("span", { text: item.text ? "含文本" : "仅附件" }));
           head.appendChild(ckWrap);
+          const headMeta = el("div", { class: "memo-item-head-meta" });
           const ts = compactDateTime(item.updatedAt || item.createdAt || "") || "-";
-          head.appendChild(el("span", { text: ts }));
+          headMeta.appendChild(el("span", { text: ts }));
+          const dragHandle = el("button", {
+            class: "memo-drag-handle",
+            type: "button",
+            title: "拖动调整备忘顺序",
+            text: "排序",
+          });
+          dragHandle.draggable = !busyAction;
+          dragHandle.disabled = !!busyAction;
+          dragHandle.addEventListener("dragstart", (e) => {
+            if (busyAction) {
+              e.preventDefault();
+              return;
+            }
+            setConversationMemoDraggingIdByKey(key, item.id);
+            row.classList.add("memo-dragging");
+            if (e.dataTransfer) {
+              e.dataTransfer.effectAllowed = "move";
+              e.dataTransfer.setData("text/plain", String(item.id || ""));
+            }
+          });
+          dragHandle.addEventListener("dragend", () => {
+            clearConversationMemoDropClasses(list);
+            row.classList.remove("memo-dragging");
+            setConversationMemoDraggingIdByKey(key, "");
+          });
+          headMeta.appendChild(dragHandle);
+          head.appendChild(headMeta);
           row.appendChild(head);
-          row.appendChild(el("div", { class: "memo-item-text", text: item.text || "(空文本)" }));
-          if (Array.isArray(item.attachments) && item.attachments.length) {
-            const files = el("div", { class: "memo-item-files" });
-            item.attachments.forEach((att, idx) => {
-              const name = String(att.originalName || att.filename || ("图片" + (idx + 1)));
-              const safeName = name.replace(/^图片(\d+)$/, "附件$1");
-              files.appendChild(el("span", { class: "memo-file-chip", text: safeName }));
-            });
-            row.appendChild(files);
-          }
+          const memoText = String(item.text || "").trim();
+          if (memoText) row.appendChild(el("div", { class: "memo-item-text", text: memoText }));
+          const attachmentsNode = renderConversationMemoAttachments(item);
+          if (attachmentsNode) row.appendChild(attachmentsNode);
+          row.addEventListener("dragover", (e) => {
+            const draggingId = getConversationMemoDraggingIdByKey(key);
+            if (!draggingId || draggingId === String(item.id || "") || busyAction) return;
+            e.preventDefault();
+            const rect = row.getBoundingClientRect();
+            const placement = Number(e.clientY || 0) > rect.top + rect.height / 2 ? "after" : "before";
+            clearConversationMemoDropClasses(list);
+            row.classList.add(placement === "after" ? "memo-drop-after" : "memo-drop-before");
+            if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+          });
+          row.addEventListener("dragleave", (e) => {
+            if (row.contains(e.relatedTarget)) return;
+            row.classList.remove("memo-drop-before", "memo-drop-after");
+          });
+          row.addEventListener("drop", (e) => {
+            const draggingId = getConversationMemoDraggingIdByKey(key) || (e.dataTransfer ? e.dataTransfer.getData("text/plain") : "");
+            if (!draggingId || draggingId === String(item.id || "") || busyAction) return;
+            e.preventDefault();
+            const rect = row.getBoundingClientRect();
+            const placement = Number(e.clientY || 0) > rect.top + rect.height / 2 ? "after" : "before";
+            clearConversationMemoDropClasses(list);
+            reorderConversationMemoByDrop(key, draggingId, item.id, placement);
+          });
           const rowOps = el("div", { class: "memo-item-row" });
-          const quickBtn = el("button", { class: "btn", text: "单条放入" });
+          const quickBtn = el("button", { class: "memo-text-action", text: "放入", title: "单条放入" });
           quickBtn.disabled = !!busyAction;
           quickBtn.addEventListener("click", () => {
             selectedMap[item.id] = true;
             applyConversationMemosToComposer([item], key);
           });
           rowOps.appendChild(quickBtn);
-          const quickApplyDeleteBtn = el("button", { class: "btn danger", text: "单条放入并删除" });
+          const quickApplyDeleteBtn = el("button", { class: "memo-text-action danger", text: "放入并删", title: "单条放入并删除" });
           quickApplyDeleteBtn.disabled = !!busyAction;
           quickApplyDeleteBtn.addEventListener("click", () => {
             applyAndDeleteConversationMemosByRows(key, [item]);
           });
           rowOps.appendChild(quickApplyDeleteBtn);
-          const quickSendDeleteBtn = el("button", { class: "btn primary", text: "单条发送并删除" });
+          const quickSendDeleteBtn = el("button", { class: "memo-text-action primary", text: "发送并删", title: "单条发送并删除" });
           quickSendDeleteBtn.disabled = !!busyAction;
           quickSendDeleteBtn.addEventListener("click", () => {
             sendAndDeleteConversationMemosByRows(key, [item]);
@@ -4305,6 +3141,7 @@
         return false;
       }
       const conversationModel = resolveConversationComposerPayloadModel(ctx);
+      const conversationReasoningPayload = resolveConversationComposerReasoningPayload(ctx);
       const conversationPermissionPayload = resolveConversationComposerPermissionPayload(ctx);
       const message = String(composeDraft.text || "").trim();
       if (!message && composeAttachments.length === 0) return false;
@@ -4349,6 +3186,7 @@
             sessionId: ctx.sessionId,
             cliType: ctx.cliType || "codex",
             ...(conversationModel ? { model: conversationModel } : {}),
+            ...conversationReasoningPayload,
             ...conversationPermissionPayload,
             message: outboundMessage,
             ...buildUiUserSenderFields(),
@@ -4415,7 +3253,6 @@
       const draftKey = String(key || currentConvComposerDraftKey() || "").trim();
       if (!draftKey) return;
       const rows = Array.isArray(items) ? items.slice() : [];
-      rows.sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
       updateConvComposerDraftByKey(draftKey, (d) => {
         const parts = [];
         const baseText = String(d.text || "").trim();

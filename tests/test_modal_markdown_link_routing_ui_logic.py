@@ -7,8 +7,9 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-OPS_JS = REPO_ROOT / "web" / "task_entry_parts" / "80-project-ops.js"
+OPS_JS = REPO_ROOT / "web" / "task_parts" / "07-message-content-and-viewer.js"
 CONVERSATION_JS = REPO_ROOT / "web" / "task_parts" / "60-conversation.js"
+TASK_CSS = REPO_ROOT / "web" / "task.css"
 
 
 class ModalMarkdownLinkRoutingUiLogicTests(unittest.TestCase):
@@ -28,7 +29,7 @@ class ModalMarkdownLinkRoutingUiLogicTests(unittest.TestCase):
             const path = require("node:path");
 
             const repoRoot = process.argv[1];
-            const file = "web/task_entry_parts/80-project-ops.js";
+            const file = "web/task_parts/07-message-content-and-viewer.js";
             const text = fs.readFileSync(path.join(repoRoot, file), "utf8");
             const start = text.indexOf("const MESSAGE_OBJECT_TOKEN_RE");
             const end = text.indexOf("function ensureMessageObjectViewer()");
@@ -73,7 +74,7 @@ class ModalMarkdownLinkRoutingUiLogicTests(unittest.TestCase):
             const path = require("node:path");
 
             const repoRoot = process.argv[1];
-            const file = "web/task_entry_parts/80-project-ops.js";
+            const file = "web/task_parts/07-message-content-and-viewer.js";
             const text = fs.readFileSync(path.join(repoRoot, file), "utf8");
             const start = text.indexOf("const MESSAGE_OBJECT_TOKEN_RE");
             const end = text.indexOf("function ensureMessageObjectViewer()");
@@ -119,7 +120,7 @@ class ModalMarkdownLinkRoutingUiLogicTests(unittest.TestCase):
             const path = require("node:path");
 
             const repoRoot = process.argv[1];
-            const file = "web/task_entry_parts/80-project-ops.js";
+            const file = "web/task_parts/07-message-content-and-viewer.js";
             const text = fs.readFileSync(path.join(repoRoot, file), "utf8");
             const start = text.indexOf("const MESSAGE_OBJECT_TOKEN_RE");
             const end = text.indexOf("function ensureMessageObjectViewer()");
@@ -185,7 +186,7 @@ class ModalMarkdownLinkRoutingUiLogicTests(unittest.TestCase):
             const path = require("node:path");
 
             const repoRoot = process.argv[1];
-            const file = "web/task_entry_parts/80-project-ops.js";
+            const file = "web/task_parts/07-message-content-and-viewer.js";
             const text = fs.readFileSync(path.join(repoRoot, file), "utf8");
             const start = text.indexOf("const MESSAGE_OBJECT_TOKEN_RE");
             const end = text.indexOf("function ensureMessageObjectViewer()");
@@ -237,6 +238,127 @@ class ModalMarkdownLinkRoutingUiLogicTests(unittest.TestCase):
         if proc.returncode != 0:
             self.fail(proc.stderr or proc.stdout or "node slash-channel relative path regression script failed")
 
+    @unittest.skipUnless(shutil.which("node"), "node is required for UI logic regression checks")
+    def test_workspace_task_plan_paths_resolve_against_current_project_root(self) -> None:
+        script = textwrap.dedent(
+            r"""
+            const assert = require("node:assert/strict");
+            const fs = require("node:fs");
+            const path = require("node:path");
+
+            const repoRoot = process.argv[1];
+            const file = "web/task_parts/07-message-content-and-viewer.js";
+            const text = fs.readFileSync(path.join(repoRoot, file), "utf8");
+            const start = text.indexOf("const MESSAGE_OBJECT_TOKEN_RE");
+            const end = text.indexOf("function ensureMessageObjectViewer()");
+            if (start < 0 || end < 0 || end <= start) {
+              throw new Error("missing message object parser section");
+            }
+
+            const currentProjectRoot = "/workspace/projects/image-tools";
+            const dashboardRoot = "/workspace/qoreon";
+            global.DATA = {
+              projects: [
+                { id: "clitools", execution_context: { worktree_root: currentProjectRoot } },
+                { id: "task_dashboard", execution_context: { worktree_root: dashboardRoot } },
+              ],
+            };
+            global.STATE = { project: "clitools", channel: "图片生成服务平台", selectedSessionId: "session-1" };
+            global.location = { origin: "http://127.0.0.1:18770" };
+            global.isHttpUrl = (value) => /^https?:\/\//i.test(String(value || ""));
+            global.currentConversationCtx = () => ({ projectId: "clitools", channelName: "图片生成服务平台" });
+            global.resolveProjectRootPath = (pid) => pid === "task_dashboard" ? dashboardRoot : (pid === "clitools" ? currentProjectRoot : "");
+            global.firstNonEmptyText = (values) => {
+              const arr = Array.isArray(values) ? values : [];
+              for (const value of arr) {
+                const text = String(value == null ? "" : value).trim();
+                if (text) return text;
+              }
+              return "";
+            };
+
+            eval(text.slice(start, end) + `
+              const relPath = "任务规划/图片生成服务平台/产出物/材料/20260703-无限画布设计工作台-理念知识文档-v1.md";
+              global.__object = classifyMessageObjectToken(relPath);
+            `);
+
+            const expectedPath = currentProjectRoot + "/任务规划/图片生成服务平台/产出物/材料/20260703-无限画布设计工作台-理念知识文档-v1.md";
+            assert.equal(global.__object.path, expectedPath);
+            assert.equal(global.__object.path.startsWith(dashboardRoot), false);
+            """
+        )
+        proc = subprocess.run(
+            ["node", "-e", script, str(REPO_ROOT)],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+        )
+        if proc.returncode != 0:
+            self.fail(proc.stderr or proc.stdout or "node current-project task path regression script failed")
+
+    @unittest.skipUnless(shutil.which("node"), "node is required for UI logic regression checks")
+    def test_project_channel_prefixed_paths_are_clickable_and_resolve_to_channel_root(self) -> None:
+        script = textwrap.dedent(
+            r"""
+            const assert = require("node:assert/strict");
+            const fs = require("node:fs");
+            const path = require("node:path");
+
+            const repoRoot = process.argv[1];
+            const file = "web/task_parts/07-message-content-and-viewer.js";
+            const text = fs.readFileSync(path.join(repoRoot, file), "utf8");
+            const start = text.indexOf("const MESSAGE_OBJECT_TOKEN_RE");
+            const end = text.indexOf("function ensureMessageObjectViewer()");
+            if (start < 0 || end < 0 || end <= start) {
+              throw new Error("missing message object parser section");
+            }
+
+            const projectRoot = "/workspace/projects/sample-app";
+            const channelName = "业务02-业务承接";
+            global.DATA = {
+              projects: [{
+                id: "mias",
+                execution_context: { worktree_root: projectRoot },
+                channels: [{ name: channelName }],
+              }],
+            };
+            global.STATE = { project: "mias", channel: "业务专家", selectedSessionId: "session-1" };
+            global.location = { origin: "http://127.0.0.1:18770" };
+            global.isHttpUrl = (value) => /^https?:\/\//i.test(String(value || ""));
+            global.currentConversationCtx = () => ({ projectId: "mias", channelName: "业务专家" });
+            global.firstNonEmptyText = (values) => {
+              const arr = Array.isArray(values) ? values : [];
+              for (const value of arr) {
+                const text = String(value == null ? "" : value).trim();
+                if (text) return text;
+              }
+              return "";
+            };
+
+            eval(text.slice(start, end) + `
+              const relPath = "业务02-业务承接/产出物/沉淀/20260703-MIAS自主看板协同工作方式-知识沉淀.md";
+              const segments = splitTextByMessageObjects("知识文档：" + relPath);
+              global.__messageObjectSegments = segments;
+              global.__object = classifyMessageObjectToken(relPath);
+            `);
+
+            const expectedPath = projectRoot + "/任务规划/业务02-业务承接/产出物/沉淀/20260703-MIAS自主看板协同工作方式-知识沉淀.md";
+            const objects = global.__messageObjectSegments.filter((seg) => seg.type === "object");
+            assert.equal(objects.length, 1);
+            assert.equal(objects[0].object.path, expectedPath);
+            assert.equal(global.__object.path, expectedPath);
+            assert.equal(global.__object.label, "业务02-业务承接/产出物/沉淀/20260703-MIAS自主看板协同工作方式-知识沉淀.md");
+            """
+        )
+        proc = subprocess.run(
+            ["node", "-e", script, str(REPO_ROOT)],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+        )
+        if proc.returncode != 0:
+            self.fail(proc.stderr or proc.stdout or "node project-channel prefixed path regression script failed")
+
     def test_markdown_rendering_forces_message_object_binding(self) -> None:
         text = OPS_JS.read_text(encoding="utf-8")
 
@@ -276,7 +398,7 @@ class ModalMarkdownLinkRoutingUiLogicTests(unittest.TestCase):
             const path = require("node:path");
 
             const repoRoot = process.argv[1];
-            const file = "web/task_entry_parts/80-project-ops.js";
+            const file = "web/task_parts/07-message-content-and-viewer.js";
             const text = fs.readFileSync(path.join(repoRoot, file), "utf8");
             const start = text.indexOf("function escapeHtml(s)");
             const end = text.indexOf("const MESSAGE_OBJECT_TOKEN_RE");
@@ -314,7 +436,7 @@ class ModalMarkdownLinkRoutingUiLogicTests(unittest.TestCase):
             const path = require("node:path");
 
             const repoRoot = process.argv[1];
-            const file = "web/task_entry_parts/80-project-ops.js";
+            const file = "web/task_parts/07-message-content-and-viewer.js";
             const text = fs.readFileSync(path.join(repoRoot, file), "utf8");
             const start = text.indexOf("function escapeHtml(s)");
             const end = text.indexOf("const MESSAGE_OBJECT_TOKEN_RE");
@@ -352,7 +474,7 @@ class ModalMarkdownLinkRoutingUiLogicTests(unittest.TestCase):
             const path = require("node:path");
 
             const repoRoot = process.argv[1];
-            const file = "web/task_entry_parts/80-project-ops.js";
+            const file = "web/task_parts/07-message-content-and-viewer.js";
             const text = fs.readFileSync(path.join(repoRoot, file), "utf8");
             const start = text.indexOf("function escapeHtml(s)");
             const end = text.indexOf("function ensureMessageObjectViewer()");
@@ -397,7 +519,7 @@ class ModalMarkdownLinkRoutingUiLogicTests(unittest.TestCase):
             const path = require("node:path");
 
             const repoRoot = process.argv[1];
-            const file = "web/task_entry_parts/80-project-ops.js";
+            const file = "web/task_parts/07-message-content-and-viewer.js";
             const text = fs.readFileSync(path.join(repoRoot, file), "utf8");
             const start = text.indexOf("function escapeHtml(s)");
             const end = text.indexOf("function ensureMessageObjectViewer()");
@@ -467,8 +589,10 @@ class ModalMarkdownLinkRoutingUiLogicTests(unittest.TestCase):
 
         self.assertIn("function renderMessageObjectViewerImageStage(entry, opts = {})", text)
         self.assertIn("openImagePreview(src, caption);", text)
-        self.assertIn("function renderMessageObjectViewerImageGrid(entries)", text)
-        self.assertIn("const imageGrid = renderMessageObjectViewerImageGrid(messageObjectViewerImageEntries(item));", text)
+        self.assertIn("function renderMessageObjectViewerImageGrid(entries, opts = {})", text)
+        self.assertIn("const imageGrid = renderMessageObjectViewerImageGrid(messageObjectViewerImageEntries(item), { openInViewer: true });", text)
+        self.assertIn("function messageObjectViewerReadErrorText(err, target)", text)
+        self.assertIn("对象预览失败：文件不存在或尚未落盘", text)
 
         body = self._slice_between(
             text,
@@ -478,6 +602,31 @@ class ModalMarkdownLinkRoutingUiLogicTests(unittest.TestCase):
         self.assertIn("if (item.is_image) {", body)
         self.assertIn("const imageStage = renderMessageObjectViewerImageStage(item, { target: MESSAGE_OBJECT_VIEWER.target, item });", body)
         self.assertIn("if (imageGrid) body.appendChild(imageGrid);", body)
+
+    def test_file_viewer_directory_entries_open_nested_with_breadcrumb(self) -> None:
+        text = OPS_JS.read_text(encoding="utf-8")
+        css = TASK_CSS.read_text(encoding="utf-8")
+
+        self.assertIn("history: []", text)
+        self.assertIn("requestSeq: 0", text)
+        self.assertIn("function messageObjectViewerEntryTarget(entry)", text)
+        self.assertIn("function renderMessageObjectViewerNav()", text)
+        self.assertIn("function restoreMessageObjectViewerSnapshot(index)", text)
+        self.assertIn("function goBackMessageObjectViewer()", text)
+        self.assertIn("if (MESSAGE_OBJECT_VIEWER.requestSeq !== requestSeq) return;", text)
+        self.assertIn("const nav = renderMessageObjectViewerNav();", text)
+        self.assertIn("if (nav) body.appendChild(nav);", text)
+        self.assertIn("openMessageObjectViewer(rowTarget, { keepHistory: true, pushCurrent: true });", text)
+        self.assertIn("const nested = !!(MESSAGE_OBJECT_VIEWER.open && messageObjectViewerCurrentSnapshot());", text)
+        self.assertIn("openMessageObjectViewer(target, nested ? { keepHistory: true, pushCurrent: true } : {});", text)
+        self.assertIn('const itemNode = el("button", {', text)
+        self.assertIn("class: \"msgobj-dir-item\" + (kind === \"dir\" ? \" is-dir\" : \" is-file\")", text)
+
+        self.assertIn(".msgobj-nav {", css)
+        self.assertIn(".msgobj-crumbs {", css)
+        self.assertIn(".msgobj-crumb.current", css)
+        self.assertIn(".msgobj-dir-item:hover", css)
+        self.assertIn(".msgobj-dir-item:focus-visible", css)
 
     def _slice_between(self, text: str, start: str, end: str) -> str:
         pattern = re.compile(re.escape(start) + r"(?P<body>.*?)" + re.escape(end), re.DOTALL)

@@ -296,6 +296,16 @@ def _resolve_session_work_context_bundle(
             resolve_project_workdir=resolve_project_workdir,
             load_project_execution_context=load_project_execution_context,
         )
+        if stored_context and context_source == "server_default":
+            stored_source = stored_context.get("source") if isinstance(stored_context.get("source"), dict) else {}
+            source_context, _source_fields, _source_override = merge_work_context_overrides(
+                source_context,
+                stored_source,
+            )
+            context_source = infer_project_execution_context_source(
+                project_context=stored_source,
+                stored_context_source=stored_context.get("context_source"),
+            )
     if stored_context:
         session_override_values, override_fields = build_context_override_values(
             stored_context,

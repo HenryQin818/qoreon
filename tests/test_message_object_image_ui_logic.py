@@ -266,7 +266,7 @@ class MessageObjectImageUiLogicTests(unittest.TestCase):
               throw new Error(`unterminated function ${name} in ${file}`);
             }
 
-            const file = "web/task_entry_parts/80-project-ops.js";
+            const file = "web/task_parts/07-message-content-and-viewer.js";
             eval(extractFunction(file, "isMessageObjectViewerImageEntry"));
             eval(extractFunction(file, "messageObjectViewerImageEntries"));
 

@@ -227,6 +227,7 @@
       memoSelectedBySessionKey: Object.create(null), // projectId::sessionId -> { memoId: true }
       memoHintBySessionKey: Object.create(null),
       memoRequestSeqBySessionKey: Object.create(null),
+      memoDraggingIdBySessionKey: Object.create(null),
       memoDrawerOpen: false,
       memoDrawerSessionKey: "",
       taskDrawerOpen: false,
@@ -245,9 +246,6 @@
       recentAgentExpandedBySessionKey: Object.create(null), // projectId::sessionId -> bool
       filesBySessionKey: Object.create(null), // projectId::sessionId -> { count, items, updatedAt, fetchedAt }
       fileStarredBySessionKey: loadSessionScopedMap(CONV_FILE_STARRED_KEY), // projectId::sessionId -> { fileKey:true }
-      trainingSentBySessionKey: loadSessionScopedMap(CONV_TRAINING_SENT_KEY), // projectId::sessionId -> sentAt
-      trainingDismissedBySessionKey: Object.create(null), // projectId::sessionId -> true
-      trainingManualOpenBySessionKey: Object.create(null), // projectId::sessionId -> true
       fileOnlyStarredBySessionKey: Object.create(null),
       fileSortBySessionKey: Object.create(null),
       fileTypeFilterBySessionKey: Object.create(null),
@@ -698,42 +696,11 @@
       const attachmentContainer = document.getElementById("convAttachments");
       const composer = document.querySelector(".convcomposer");
       const senderRow = document.getElementById("convSenderRow");
-      const trainingContainer = document.getElementById("convTraining");
-      const trainingCount = document.getElementById("convTrainingCount");
-      const trainingDesc = document.getElementById("convTrainingDesc");
-      const trainingSendBtn = document.getElementById("convTrainingSendBtn");
-      const trainingCloseBtn = document.getElementById("convTrainingCloseBtn");
-      let trainingReopenBtn = document.getElementById("convTrainingReopenBtn");
-      const senderActions = senderRow ? senderRow.querySelector(".convsenderactions") : null;
       let recentAgentContainer = document.getElementById("convRecentAgents");
       let recentAgentToggle = document.getElementById("convRecentAgentsGlobalToggle");
       let mentionContainer = document.getElementById("convMentions");
       let replyContainer = document.getElementById("convReplyContext");
       let mentionSuggest = document.getElementById("convMentionSuggest");
-      if (senderActions && !trainingReopenBtn) {
-        trainingReopenBtn = document.createElement("button");
-        trainingReopenBtn.id = "convTrainingReopenBtn";
-        trainingReopenBtn.className = "conv-training-toggle";
-        trainingReopenBtn.type = "button";
-        trainingReopenBtn.title = "重新显示 Agent 培训";
-        trainingReopenBtn.setAttribute("aria-label", "重新显示 Agent 培训");
-        trainingReopenBtn.style.display = "none";
-        trainingReopenBtn.innerHTML = [
-          '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true">',
-          '<path d="M4 8.8 12 5l8 3.8-8 3.8L4 8.8Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>',
-          '<path d="M7 11.4V15c0 .9 2 2.4 5 2.4s5-1.5 5-2.4v-3.6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>',
-          '</svg>',
-        ].join("");
-        senderActions.insertBefore(trainingReopenBtn, senderActions.firstChild || null);
-      }
-      if (trainingReopenBtn && !trainingReopenBtn.__convTrainingReopenBound) {
-        trainingReopenBtn.__convTrainingReopenBound = true;
-        trainingReopenBtn.addEventListener("click", (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          if (typeof reopenConversationTrainingPrompt === "function") reopenConversationTrainingPrompt();
-        });
-      }
       if (composer && !mentionContainer) {
         mentionContainer = document.createElement("div");
         mentionContainer.id = "convMentions";
@@ -819,12 +786,6 @@
         container: attachmentContainer,
         recentAgentContainer,
         recentAgentToggle,
-        trainingContainer,
-        trainingCount,
-        trainingDesc,
-        trainingSendBtn,
-        trainingCloseBtn,
-        trainingReopenBtn,
         mentionContainer,
         replyContainer,
         mentionSuggest,
@@ -1329,22 +1290,6 @@
 
       const csb = document.getElementById("convSendBtn");
       if (csb) csb.addEventListener("click", (e) => { e.preventDefault(); sendConversationMessage(); });
-      const ctb = document.getElementById("convTrainingSendBtn");
-      if (ctb && !ctb.__convTrainingBound) {
-        ctb.__convTrainingBound = true;
-        ctb.addEventListener("click", (e) => {
-          e.preventDefault();
-          sendConversationTrainingMessage();
-        });
-      }
-      const ccb = document.getElementById("convTrainingCloseBtn");
-      if (ccb && !ccb.__convTrainingCloseBound) {
-        ccb.__convTrainingCloseBound = true;
-        ccb.addEventListener("click", (e) => {
-          e.preventDefault();
-          dismissConversationTrainingPrompt();
-        });
-      }
       const cms = document.getElementById("convMemoSaveBtn");
       if (cms) cms.addEventListener("click", (e) => { e.preventDefault(); saveCurrentComposerAsMemo(); });
       const cet = document.getElementById("convEnterSendToggle");

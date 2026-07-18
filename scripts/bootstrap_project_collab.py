@@ -578,6 +578,12 @@ def _agent_dispatch_profile(channel_name: str, display_name: str, *, is_primary:
         scope = "负责图片生成服务平台跨通道协调、任务收口、验收材料和总控/统一入口协同，不替代专项开发执行。"
         policy = "跨通道协调、服务注册知会、验收收口优先派给该 Agent；具体实现派给开发 Agent。"
         tags.extend(["image_platform", "coordination", "acceptance_owner"])
+    elif channel == "图片生成服务平台" and _has_any(agent, ["前端-无限画布", "无限画布"]):
+        add("图片生成服务平台", "无限画布", "Canvas前端", "/canvas", "canvas.js/css", "DOM transform", "composer", "节点工具条")
+        role = "无限画布前端专项执行位"
+        scope = "负责 image-platform 无限画布前端专项，包括 /canvas 页面、canvas.js/css、画布 DOM+transform 交互、底部 composer、节点选中浮动工具条、回填/覆盖版本、套件操作迁移与截图自验。"
+        policy = "无限画布前端任务优先派给该 Agent；不承接后端契约、provider、发布重启、密钥或真实计费；改 JS 后必须执行 node --check。"
+        tags.extend(["image_platform", "infinite_canvas", "frontend", "canvas", "node_check_required"])
     elif channel == "图片生成服务平台" and _has_any(agent, ["前端-生成大厅", "生成大厅"]):
         add("图片生成服务平台", "生成大厅", "前端UI", "模板交互", "CSS/JS", "作品墙", "图片详情页")
         role = "生成大厅前端/UI/模板/CSS/JS/交互专项执行位"
@@ -1679,7 +1685,7 @@ def _build_communication_playbook() -> dict[str, Any]:
     }
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="生成项目协作通讯录（CCR v1）")
     ap.add_argument("--project-id", required=True, help="config.toml 中的项目 id")
     ap.add_argument("--config", default="config.toml", help="配置文件路径（默认: config.toml）")
@@ -1690,7 +1696,7 @@ def main() -> int:
     ap.add_argument("--dispatch-output", default="", help="输出按分工查询 Markdown 视图路径（可选）")
     ap.add_argument("--html-output", default="", help="输出 HTML 视图路径（可选）")
     ap.add_argument("--dry-run", action="store_true", help="仅打印，不落盘")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     workspace_root = Path(args.workspace_root).expanduser().resolve()
     config_path = _resolve_path(args.config, workspace_root)

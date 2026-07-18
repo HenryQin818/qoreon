@@ -9,7 +9,7 @@ class _FakeSessionStore:
     def __init__(self) -> None:
         self.created_payload = {}
 
-    def list_sessions(self, project_id: str, channel_name: str, include_deleted: bool = True):
+    def list_sessions(self, project_id: str, channel_name: str = "", include_deleted: bool = True):
         return []
 
     def create_session(self, **kwargs):
@@ -34,6 +34,7 @@ class PublicSessionAdminTests(unittest.TestCase):
                     "project_id": "standard_project",
                     "channel_name": "主体-总控",
                     "cli_type": "codex",
+                    "alias": "标准项目总控",
                     "create_timeout_s": 240,
                 },
                 session_store=store,
@@ -57,11 +58,11 @@ class PublicSessionAdminTests(unittest.TestCase):
             )
 
         self.assertTrue(response["created"])
-        self.assertTrue(response["timeoutRecovered"])
+        self.assertTrue(response["timeout_recovered"])
         self.assertEqual(response["session"]["id"], "019d1083-83bc-7631-8de2-34f5ca97edd5")
         self.assertEqual(
             store.created_payload.get("created_via"),
-            "api.create_session_v2.timeout_recovered",
+            "api.create_session_v2",
         )
 
 
