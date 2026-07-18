@@ -115,6 +115,33 @@ class TestCodexAdapter(unittest.TestCase):
         self.assertIn("-m", cmd)
         self.assertIn("codex-spark", cmd)
 
+    def test_codex_adapter_passes_current_model_catalog_ids_through(self) -> None:
+        model_ids = (
+            "gpt-5.6-sol",
+            "gpt-5.6-terra",
+            "gpt-5.6-luna",
+            "gpt-5.5",
+            "gpt-5.4",
+            "gpt-5.4-mini",
+            "gpt-5.3-codex-spark",
+        )
+        for model_id in model_ids:
+            with self.subTest(command="resume", model=model_id):
+                cmd = CodexAdapter.build_resume_command(
+                    session_id="019bde9b-4793-70e0-b18a-a437279b2d18",
+                    message="hi",
+                    output_path=Path("/tmp/output.json"),
+                    model=model_id,
+                )
+                self.assertEqual(cmd[cmd.index("-m") + 1], model_id)
+            with self.subTest(command="create", model=model_id):
+                cmd = CodexAdapter.build_create_command(
+                    seed_prompt="Please reply with OK",
+                    output_path=Path("/tmp/output.json"),
+                    model=model_id,
+                )
+                self.assertEqual(cmd[cmd.index("-m") + 1], model_id)
+
     def test_codex_adapter_build_resume_command_with_reasoning_effort(self) -> None:
         """Verify dashboard extra_high is mapped to the CLI-compatible xhigh value."""
         cmd = CodexAdapter.build_resume_command(
@@ -125,6 +152,17 @@ class TestCodexAdapter(unittest.TestCase):
         )
         self.assertIn("-c", cmd)
         self.assertIn('model_reasoning_effort="xhigh"', cmd)
+
+    def test_codex_adapter_passes_supported_reasoning_efforts_through(self) -> None:
+        for effort in ("low", "medium", "high", "xhigh"):
+            with self.subTest(effort=effort):
+                cmd = CodexAdapter.build_resume_command(
+                    session_id="019bde9b-4793-70e0-b18a-a437279b2d18",
+                    message="hi",
+                    output_path=Path("/tmp/output.json"),
+                    reasoning_effort=effort,
+                )
+                self.assertIn(f'model_reasoning_effort="{effort}"', cmd)
 
     def test_codex_adapter_uses_ccb_http_provider_by_default(self) -> None:
         """Verify CCB Codex turns avoid WebSocket transport and app preload by default."""
@@ -218,7 +256,7 @@ class TestCodexAdapter(unittest.TestCase):
 
     def test_resolve_cli_executable_prefers_local_config_over_env(self) -> None:
         with tempfile.TemporaryDirectory() as td:
-            local_cfg = Path(td) / "config.local.toml"
+            local_cfg = Path(td) / "config.test.toml"
             local_cfg.write_text(
                 """
 [runtime.cli_bins]

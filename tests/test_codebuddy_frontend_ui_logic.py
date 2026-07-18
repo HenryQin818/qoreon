@@ -29,17 +29,17 @@ class CodeBuddyFrontendUiLogicTests(unittest.TestCase):
         self.assertIn("deepseek-v4-pro", html)
 
     def test_codebuddy_has_guidance_labels_and_terminal_text_rule(self) -> None:
-        ops_js = (REPO_ROOT / "web" / "task_entry_parts" / "80-project-ops.js").read_text(encoding="utf-8")
+        options_js = (REPO_ROOT / "web" / "task_parts" / "08-cli-model-options.js").read_text(encoding="utf-8")
         session_js = (REPO_ROOT / "web" / "task_entry_parts" / "81-session-info-and-bindings.js").read_text(encoding="utf-8")
         bootstrap_js = (REPO_ROOT / "web" / "task_parts" / "74-session-bootstrap-and-sessions.js").read_text(encoding="utf-8")
         runs_js = (REPO_ROOT / "web" / "task_parts" / "76-runs-and-drawer.js").read_text(encoding="utf-8")
         task_css = (REPO_ROOT / "web" / "task.css").read_text(encoding="utf-8")
         timeline_css = (REPO_ROOT / "web" / "task_parts" / "70-conversation-timeline.css").read_text(encoding="utf-8")
 
-        self.assertIn('if (t === "codebuddy") return "CodeBuddy";', ops_js)
-        self.assertIn('const CODEBUDDY_DEFAULT_MODEL = "deepseek-v4-pro";', ops_js)
-        self.assertIn("仅为创建预设，可改选", ops_js)
-        self.assertIn("实际保存模型 ID", ops_js)
+        self.assertIn('if (t === "codebuddy") return "CodeBuddy";', options_js)
+        self.assertIn('const CODEBUDDY_DEFAULT_MODEL = "deepseek-v4-pro";', options_js)
+        self.assertIn("仅为创建预设，可改选", session_js)
+        self.assertIn("实际保存值为模型 ID", session_js)
         self.assertIn("不代表所有环境已验收", session_js)
         self.assertIn("界面可读名如 DeepSeek V4 Pro", session_js)
         self.assertIn("实际保存值为模型 ID：deepseek-v4-pro", session_js)
@@ -54,35 +54,41 @@ class CodeBuddyFrontendUiLogicTests(unittest.TestCase):
         self.assertIn(".mdebug-cli.cli-codebuddy", timeline_css)
 
     def test_codebuddy_model_dropdown_contains_supported_models(self) -> None:
-        ops_js = (REPO_ROOT / "web" / "task_entry_parts" / "80-project-ops.js").read_text(encoding="utf-8")
+        options_js = (REPO_ROOT / "web" / "task_parts" / "08-cli-model-options.js").read_text(encoding="utf-8")
         html = (REPO_ROOT / "web" / "task.html.tpl").read_text(encoding="utf-8")
         session_js = (REPO_ROOT / "web" / "task_entry_parts" / "81-session-info-and-bindings.js").read_text(encoding="utf-8")
 
         for model in (
-            "deepseek-v4-pro",
-            "deepseek-v4-flash",
-            "deepseek-v3-2-volc",
+            "hy3",
+            "glm-5.2",
             "glm-5.1",
             "glm-5.0",
             "glm-5.0-turbo",
             "glm-5v-turbo",
             "glm-4.7",
-            "minimax-m3",
+            "minimax-m3-pay",
             "minimax-m2.7",
+            "kimi-k2.7",
             "kimi-k2.6",
-            "kimi-k2.5",
-            "hy3-preview",
+            "deepseek-v4-pro",
+            "deepseek-v4-flash",
+            "deepseek-v3-2-volc",
         ):
-            self.assertIn(model, ops_js)
+            self.assertIn(model, options_js)
             self.assertIn(model, html)
 
+        for retired_model in ("minimax-m3", "kimi-k2.5", "hy3-preview"):
+            self.assertNotIn(f'"{retired_model}"', options_js)
+            self.assertNotIn(f'value="{retired_model}"', html)
+
         self.assertIn("populateCodeBuddyModelSelect", session_js)
-        self.assertIn("历史模型：", ops_js)
-        self.assertIn("当前不在账号支持快照中，保留原值，可改选", ops_js)
+        self.assertIn("历史模型：", options_js)
+        self.assertIn("当前不在账号支持快照中，保留原值，可改选", options_js)
 
     def test_codebuddy_composer_model_switch_precedes_sender_and_sends_model(self) -> None:
         html = (REPO_ROOT / "web" / "task.html.tpl").read_text(encoding="utf-8")
         composer_js = (REPO_ROOT / "web" / "task_parts" / "75-conversation-composer.js").read_text(encoding="utf-8")
+        controls_js = (REPO_ROOT / "web" / "task_parts" / "75-00-conversation-cli-controls.js").read_text(encoding="utf-8")
         conversation_js = (REPO_ROOT / "web" / "task_parts" / "60-conversation.js").read_text(encoding="utf-8")
         runs_js = (REPO_ROOT / "web" / "task_parts" / "76-runs-and-drawer.js").read_text(encoding="utf-8")
 
@@ -99,31 +105,31 @@ class CodeBuddyFrontendUiLogicTests(unittest.TestCase):
         self.assertIn('value="default">默认授权', sender_meta)
         self.assertIn('value="bypassPermissions">全部授权', sender_meta)
 
-        self.assertIn("function renderConversationComposerCodeBuddyModel", composer_js)
-        self.assertIn("function resolveConversationComposerModel", composer_js)
-        self.assertIn("function conversationComposerSelectedModel", composer_js)
-        self.assertIn("function resolveConversationComposerPayloadModel", composer_js)
-        self.assertIn('document.getElementById("convCodeBuddyModelSelect")', composer_js)
-        self.assertIn('String(select.dataset.sessionId || "").trim() !== sid', composer_js)
-        self.assertIn("if (canonicalSessionModel && saved && saved !== canonicalSessionModel) return \"\";", composer_js)
-        self.assertIn("return selectedModel || sessionModel || fallback;", composer_js)
-        self.assertIn("return selectedModel || sessionModel || \"\";", composer_js)
-        self.assertIn("resolveConversationComposerModel(context, { preferSelected: false })", composer_js)
-        self.assertIn('select.dataset.model = String(sessionModel || "");', composer_js)
-        self.assertIn('select.dataset.modelSource = sessionModel ? "session" : "default";', composer_js)
-        self.assertIn("tryUpdateSessionModel(sid, next)", composer_js)
-        self.assertIn("syncConversationComposerCodeBuddyModelToLocal", composer_js)
-        self.assertIn("下一次发送将使用", composer_js)
+        self.assertIn("function renderConversationComposerCodeBuddyModel", controls_js)
+        self.assertIn("function resolveConversationComposerModel", controls_js)
+        self.assertIn("function conversationComposerSelectedModel", controls_js)
+        self.assertIn("function resolveConversationComposerPayloadModel", controls_js)
+        self.assertIn('document.getElementById("convCodeBuddyModelSelect")', controls_js)
+        self.assertIn('String(select.dataset.sessionId || "").trim() !== sid', controls_js)
+        self.assertIn("if (canonicalSessionModel && saved && saved !== canonicalSessionModel) return \"\";", controls_js)
+        self.assertIn("return selectedModel || sessionModel || fallback;", controls_js)
+        self.assertIn("return selectedModel || sessionModel || \"\";", controls_js)
+        self.assertIn("resolveConversationComposerModel(context, { preferSelected: false })", controls_js)
+        self.assertIn('select.dataset.model = String(sessionModel || "");', controls_js)
+        self.assertIn('select.dataset.modelSource = sessionModel ? "session" : "default";', controls_js)
+        self.assertIn("tryUpdateSessionModel(sid, next)", controls_js)
+        self.assertIn("syncConversationComposerCodeBuddyModelToLocal", controls_js)
+        self.assertIn("下一次发送将使用", controls_js)
         self.assertIn("const conversationModel = resolveConversationComposerPayloadModel(ctx);", composer_js)
         self.assertIn("...(conversationModel ? { model: conversationModel } : {})", composer_js)
-        self.assertIn("function renderConversationComposerCodeBuddyPermissionMode", composer_js)
-        self.assertIn("function resolveConversationComposerCodeBuddyPermissionMode", composer_js)
-        self.assertIn("tryUpdateSessionCodeBuddyPermissionMode(sid, next)", composer_js)
-        self.assertIn("syncConversationComposerCodeBuddyPermissionModeToLocal", composer_js)
-        self.assertIn("全部授权会绕过 CodeBuddy 权限确认，可能执行文件修改和命令。", composer_js)
-        self.assertIn("保存失败，已保留原值", composer_js)
-        self.assertIn("codebuddy_permission_mode: mode", composer_js)
-        self.assertIn("codebuddyPermissionMode: mode", composer_js)
+        self.assertIn("function renderConversationComposerCodeBuddyPermissionMode", controls_js)
+        self.assertIn("function resolveConversationComposerCodeBuddyPermissionMode", controls_js)
+        self.assertIn("tryUpdateSessionCodeBuddyPermissionMode(sid, next)", controls_js)
+        self.assertIn("syncConversationComposerCodeBuddyPermissionModeToLocal", controls_js)
+        self.assertIn("全部授权会绕过 CodeBuddy 权限确认，可能执行文件修改和命令。", controls_js)
+        self.assertIn("保存失败，已保留原值", controls_js)
+        self.assertIn("codebuddy_permission_mode: mode", controls_js)
+        self.assertIn("codebuddyPermissionMode: mode", controls_js)
         self.assertIn("const conversationPermissionPayload = resolveConversationComposerPermissionPayload(ctx);", composer_js)
         self.assertIn("renderConversationComposerCodeBuddyModel(null)", conversation_js)
         self.assertIn("renderConversationComposerCodeBuddyModel(ctx)", conversation_js)
@@ -228,7 +234,9 @@ class CodeBuddyFrontendUiLogicTests(unittest.TestCase):
               return String(fallback || "");
             }
             function normalizeSessionModel(raw) { return String(raw || "").trim(); }
+            function isCodexCliType(raw) { return String(raw || "").trim().toLowerCase() === "codex"; }
             function isCodeBuddyCliType(raw) { return String(raw || "").trim().toLowerCase() === "codebuddy"; }
+            function codexDefaultModel() { return ""; }
             function codeBuddyDefaultModel() { return "deepseek-v4-pro"; }
             function normalizeCodeBuddyPermissionMode(raw) {
               const text = String(raw || "").trim();
@@ -255,14 +263,14 @@ class CodeBuddyFrontendUiLogicTests(unittest.TestCase):
             assert.equal(
               mergeConversationSessionModelValue(
                 { cli_type: "codebuddy", model: "deepseek-v4-pro", source: "run-summary" },
-                { cli_type: "codebuddy", model: "minimax-m3" }
+                { cli_type: "codebuddy", model: "minimax-m3-pay" }
               ),
-              "minimax-m3"
+              "minimax-m3-pay"
             );
             assert.equal(
               mergeConversationSessionModelValue(
                 { cli_type: "codebuddy", model: "deepseek-v4-pro", source: "composer-model-switch" },
-                { cli_type: "codebuddy", model: "minimax-m3" }
+                { cli_type: "codebuddy", model: "minimax-m3-pay" }
               ),
               "deepseek-v4-pro"
             );
@@ -290,7 +298,7 @@ class CodeBuddyFrontendUiLogicTests(unittest.TestCase):
                 model: "deepseek-v4-pro",
                 codebuddy_permission_mode: "default",
               }],
-              codeBuddyModelBySessionId: { "session-a": "minimax-m3" },
+              codeBuddyModelBySessionId: { "session-a": "minimax-m3-pay" },
               codeBuddyPermissionModeBySessionId: { "session-a": "bypassPermissions" },
             };
             global.document = {
@@ -305,8 +313,8 @@ class CodeBuddyFrontendUiLogicTests(unittest.TestCase):
                 if (id !== "convCodeBuddyModelSelect") return null;
                 return {
                   hidden: false,
-                  value: "minimax-m3",
-                  dataset: { sessionId: "session-a", saving: "", model: "minimax-m3" },
+                  value: "minimax-m3-pay",
+                  dataset: { sessionId: "session-a", saving: "", model: "minimax-m3-pay" },
                 };
               },
             };
@@ -314,21 +322,22 @@ class CodeBuddyFrontendUiLogicTests(unittest.TestCase):
               return PCONV.sessions.find((row) => getSessionId(row) === sid) || null;
             }
 
-            eval(extractFunction("web/task_parts/75-conversation-composer.js", "conversationComposerCliType"));
-            eval(extractFunction("web/task_parts/75-conversation-composer.js", "conversationComposerSupportsModelSwitch"));
-            eval(extractFunction("web/task_parts/75-conversation-composer.js", "conversationComposerDefaultModelForCli"));
-            eval(extractFunction("web/task_parts/75-conversation-composer.js", "conversationComposerModelSelectForCli"));
-            eval(extractFunction("web/task_parts/75-conversation-composer.js", "conversationComposerCachedModelForCli"));
-            eval(extractFunction("web/task_parts/75-conversation-composer.js", "conversationComposerSessionModel"));
-            eval(extractFunction("web/task_parts/75-conversation-composer.js", "conversationComposerSelectedModel"));
-            eval(extractFunction("web/task_parts/75-conversation-composer.js", "resolveConversationComposerPayloadModel"));
-            eval(extractFunction("web/task_parts/75-conversation-composer.js", "conversationComposerSessionPermissionMode"));
-            eval(extractFunction("web/task_parts/75-conversation-composer.js", "conversationComposerSelectedPermissionMode"));
-            eval(extractFunction("web/task_parts/75-conversation-composer.js", "resolveConversationComposerCodeBuddyPermissionMode"));
+            eval(extractFunction("web/task_parts/75-00-conversation-cli-controls.js", "conversationComposerCliType"));
+            eval(extractFunction("web/task_parts/75-00-conversation-cli-controls.js", "conversationComposerSupportsModelSwitch"));
+            eval(extractFunction("web/task_parts/75-00-conversation-cli-controls.js", "conversationComposerCliTypesMatch"));
+            eval(extractFunction("web/task_parts/75-00-conversation-cli-controls.js", "conversationComposerDefaultModelForCli"));
+            eval(extractFunction("web/task_parts/75-00-conversation-cli-controls.js", "conversationComposerModelSelectForCli"));
+            eval(extractFunction("web/task_parts/75-00-conversation-cli-controls.js", "conversationComposerCachedModelForCli"));
+            eval(extractFunction("web/task_parts/75-00-conversation-cli-controls.js", "conversationComposerSessionModel"));
+            eval(extractFunction("web/task_parts/75-00-conversation-cli-controls.js", "conversationComposerSelectedModel"));
+            eval(extractFunction("web/task_parts/75-00-conversation-cli-controls.js", "resolveConversationComposerPayloadModel"));
+            eval(extractFunction("web/task_parts/75-00-conversation-cli-controls.js", "conversationComposerSessionPermissionMode"));
+            eval(extractFunction("web/task_parts/75-00-conversation-cli-controls.js", "conversationComposerSelectedPermissionMode"));
+            eval(extractFunction("web/task_parts/75-00-conversation-cli-controls.js", "resolveConversationComposerCodeBuddyPermissionMode"));
 
             const ctx = { sessionId: "session-a", cliType: "codebuddy", model: "deepseek-v4-pro" };
-            assert.equal(conversationComposerSessionModel(ctx), "minimax-m3");
-            assert.equal(resolveConversationComposerPayloadModel(ctx), "minimax-m3");
+            assert.equal(conversationComposerSessionModel(ctx), "minimax-m3-pay");
+            assert.equal(resolveConversationComposerPayloadModel(ctx), "minimax-m3-pay");
             assert.equal(conversationComposerSessionPermissionMode(ctx), "bypassPermissions");
             assert.equal(resolveConversationComposerCodeBuddyPermissionMode(ctx), "bypassPermissions");
             """
@@ -343,21 +352,21 @@ class CodeBuddyFrontendUiLogicTests(unittest.TestCase):
             self.fail(proc.stderr or proc.stdout or "node regression script failed")
 
     def test_codebuddy_composer_permission_mode_has_fixed_options_and_session_save(self) -> None:
-        ops_js = (REPO_ROOT / "web" / "task_entry_parts" / "80-project-ops.js").read_text(encoding="utf-8")
+        options_js = (REPO_ROOT / "web" / "task_parts" / "08-cli-model-options.js").read_text(encoding="utf-8")
         bootstrap_js = (REPO_ROOT / "web" / "task_parts" / "74-session-bootstrap-and-sessions.js").read_text(encoding="utf-8")
-        composer_js = (REPO_ROOT / "web" / "task_parts" / "75-conversation-composer.js").read_text(encoding="utf-8")
+        controls_js = (REPO_ROOT / "web" / "task_parts" / "75-00-conversation-cli-controls.js").read_text(encoding="utf-8")
         runs_js = (REPO_ROOT / "web" / "task_parts" / "76-runs-and-drawer.js").read_text(encoding="utf-8")
         conversation_css = (REPO_ROOT / "web" / "task_parts" / "60-conversation.css").read_text(encoding="utf-8")
         session_js = (REPO_ROOT / "web" / "task_entry_parts" / "81-session-info-and-bindings.js").read_text(encoding="utf-8")
 
-        self.assertIn('const CODEBUDDY_PERMISSION_MODE_DEFAULT = "default";', ops_js)
-        self.assertIn('{ value: "default", label: "默认授权" }', ops_js)
-        self.assertIn('{ value: "bypassPermissions", label: "全部授权" }', ops_js)
-        self.assertIn("function normalizeCodeBuddyPermissionMode", ops_js)
-        self.assertIn("function populateCodeBuddyPermissionModeSelect", ops_js)
+        self.assertIn('const CODEBUDDY_PERMISSION_MODE_DEFAULT = "default";', options_js)
+        self.assertIn('{ value: "default", label: "默认授权" }', options_js)
+        self.assertIn('{ value: "bypassPermissions", label: "全部授权" }', options_js)
+        self.assertIn("function normalizeCodeBuddyPermissionMode", options_js)
+        self.assertIn("function populateCodeBuddyPermissionModeSelect", options_js)
         codebuddy_options = re.search(
             r"const CODEBUDDY_PERMISSION_MODE_OPTIONS = \[([\s\S]*?)\];",
-            ops_js,
+            options_js,
         )
         self.assertIsNotNone(codebuddy_options)
         self.assertNotIn("acceptEdits", codebuddy_options.group(1))
@@ -373,11 +382,11 @@ class CodeBuddyFrontendUiLogicTests(unittest.TestCase):
         self.assertIn("syncConversationComposerCodeBuddyModelToLocal(", session_js)
         self.assertIn("codebuddyPermissionMode", runs_js)
 
-        self.assertIn("hideConversationComposerCodeBuddyPermissionMode()", composer_js)
-        self.assertIn('if (!context || !isCodeBuddyCliType(context.cliType))', composer_js)
-        self.assertIn('control.classList.toggle("is-danger", select.value === "bypassPermissions")', composer_js)
-        self.assertIn('setHintText("conv", "CodeBuddy 授权模式切换失败，已保留原值。")', composer_js)
-        self.assertIn("CodeBuddy 授权模式已切换为 ", composer_js)
+        self.assertIn("hideConversationComposerCodeBuddyPermissionMode()", controls_js)
+        self.assertIn('if (!context || !isCodeBuddyCliType(context.cliType))', controls_js)
+        self.assertIn('control.classList.toggle("is-danger", select.value === "bypassPermissions")', controls_js)
+        self.assertIn('setHintText("conv", "CodeBuddy 授权模式切换失败，已保留原值。")', controls_js)
+        self.assertIn("CodeBuddy 授权模式已切换为 ", controls_js)
         self.assertIn(".conv-permission-switch.is-danger", conversation_css)
         self.assertIn(".conv-permission-switch-select", conversation_css)
 

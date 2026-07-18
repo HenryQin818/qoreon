@@ -43,6 +43,122 @@ def _safe_text(value: Any, max_len: int) -> str:
     return text
 
 
+def _run_detail_process_item_limit() -> int:
+    raw = str(os.environ.get("CCB_RUN_DETAIL_PROCESS_ITEM_LIMIT") or "").strip()
+    if raw:
+        try:
+            return max(20, min(int(raw), 500))
+        except Exception:
+            pass
+    return 120
+
+
+def _run_detail_process_text_limit() -> int:
+    raw = str(os.environ.get("CCB_RUN_DETAIL_PROCESS_TEXT_LIMIT") or "").strip()
+    if raw:
+        try:
+            return max(200, min(int(raw), 8000))
+        except Exception:
+            pass
+    return 1000
+
+
+def _run_detail_log_tail_limit() -> int:
+    raw = str(os.environ.get("CCB_RUN_DETAIL_LOG_TAIL_LIMIT") or "").strip()
+    if raw:
+        try:
+            return max(4000, min(int(raw), 160000))
+        except Exception:
+            pass
+    return 24000
+
+
+def _compact_run_detail_log_tail(log_tail: Any) -> tuple[str, dict[str, Any]]:
+    text = "" if log_tail is None else str(log_tail)
+    total = len(text)
+    limit = _run_detail_log_tail_limit()
+    if total > limit:
+        return text[-limit:], {
+            "total": total,
+            "returned": limit,
+            "truncated": True,
+            "limit": limit,
+        }
+    return text, {
+        "total": total,
+        "returned": total,
+        "truncated": False,
+        "limit": limit,
+    }
+
+
+def _compact_run_detail_value(value: Any, *, max_text_len: int, stats: dict[str, int], depth: int = 0) -> Any:
+    if isinstance(value, str):
+        if len(value) > max_text_len:
+            stats["truncated_strings"] = int(stats.get("truncated_strings") or 0) + 1
+            return _safe_text(value, max_text_len)
+        return value
+    if isinstance(value, dict):
+        if depth >= 8:
+            stats["truncated_values"] = int(stats.get("truncated_values") or 0) + 1
+            return {"truncated": True}
+        return {
+            key: _compact_run_detail_value(val, max_text_len=max_text_len, stats=stats, depth=depth + 1)
+            for key, val in value.items()
+        }
+    if isinstance(value, list):
+        if depth >= 8:
+            stats["truncated_values"] = int(stats.get("truncated_values") or 0) + 1
+            return []
+        return [
+            _compact_run_detail_value(item, max_text_len=max_text_len, stats=stats, depth=depth + 1)
+            for item in value
+        ]
+    return value
+
+
+def _compact_run_detail_process_list(rows: Any) -> tuple[list[Any], dict[str, Any]]:
+    src = rows if isinstance(rows, list) else []
+    total = len(src)
+    max_items = _run_detail_process_item_limit()
+    max_text_len = _run_detail_process_text_limit()
+    selected = src[-max_items:] if total > max_items else src
+    stats = {"truncated_strings": 0, "truncated_values": 0}
+    compacted = [
+        _compact_run_detail_value(item, max_text_len=max_text_len, stats=stats)
+        for item in selected
+    ]
+    truncated = total > len(compacted) or bool(stats.get("truncated_strings") or stats.get("truncated_values"))
+    return compacted, {
+        "total": total,
+        "returned": len(compacted),
+        "truncated": truncated,
+        "item_limit": max_items,
+        "text_limit": max_text_len,
+        "truncated_strings": int(stats.get("truncated_strings") or 0),
+        "truncated_values": int(stats.get("truncated_values") or 0),
+    }
+
+
+def _compact_run_detail_payload_run(meta: dict[str, Any], process_rows: list[Any], process_events: list[Any]) -> tuple[dict[str, Any], list[Any], list[Any], dict[str, Any], dict[str, Any]]:
+    payload_run = copy.deepcopy(meta)
+    compact_rows, rows_meta = _compact_run_detail_process_list(process_rows)
+    compact_events, events_meta = _compact_run_detail_process_list(process_events)
+    for key in ("processRows", "process_rows"):
+        if key in payload_run:
+            payload_run[key] = copy.deepcopy(compact_rows)
+    for key in ("processEvents", "process_events"):
+        if key in payload_run:
+            payload_run[key] = copy.deepcopy(compact_events)
+    payload_run["processRowsTotal"] = rows_meta["total"]
+    payload_run["processRowsReturned"] = rows_meta["returned"]
+    payload_run["processRowsTruncated"] = rows_meta["truncated"]
+    payload_run["processEventsTotal"] = events_meta["total"]
+    payload_run["processEventsReturned"] = events_meta["returned"]
+    payload_run["processEventsTruncated"] = events_meta["truncated"]
+    return payload_run, compact_rows, compact_events, rows_meta, events_meta
+
+
 def _runs_list_cache_ttl_s() -> float:
     raw = str(os.environ.get("CCB_RUNS_LIST_CACHE_TTL_MS") or "").strip()
     if raw:
@@ -982,17 +1098,30 @@ def get_run_detail_response(
             store.save_meta(run_id, meta)
         except Exception:
             pass
+    payload_run, payload_process_rows, payload_process_events, process_rows_meta, process_events_meta = (
+        _compact_run_detail_payload_run(meta, process_rows, process_events)
+    )
+    payload_log_tail, log_tail_meta = _compact_run_detail_log_tail(log_tail)
     payload = {
-        "run": meta,
+        "run": payload_run,
         "message": message,
         "lastMessage": last,
-        "logTail": log_tail,
+        "logTail": payload_log_tail,
+        "logTailChars": log_tail_meta["total"],
+        "logTailReturnedChars": log_tail_meta["returned"],
+        "logTailTruncated": log_tail_meta["truncated"],
         "logPreview": log_preview,
-        "process": log_tail,
+        "process": payload_log_tail,
         "partialMessage": partial,
         "agentMessages": agent_msgs,
-        "processRows": process_rows,
-        "processEvents": process_events,
+        "processRows": payload_process_rows,
+        "processRowsTotal": process_rows_meta["total"],
+        "processRowsReturned": process_rows_meta["returned"],
+        "processRowsTruncated": process_rows_meta["truncated"],
+        "processEvents": payload_process_events,
+        "processEventsTotal": process_events_meta["total"],
+        "processEventsReturned": process_events_meta["returned"],
+        "processEventsTruncated": process_events_meta["truncated"],
         "errorHint": hint,
     }
     if _is_terminal_run_meta(meta):

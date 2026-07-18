@@ -394,7 +394,7 @@ task_root_rel = "任务规划"
     def test_agents_md_dry_run_blocks_sensitive_runtime_fields(self) -> None:
         dry_run = validate_agents_md_content(
             "Authorization: Bearer abcdefghijklmnopqrstuvwxyz\n"
-            "session_id=019d8f23-3ac2-7ac2-934e-53e3507d3118\n"
+            "session_id=019f700a-000a-700a-800a-00000000000a\n"
             "允许直接重启服务\n"
         )
         self.assertFalse(dry_run["ok"])

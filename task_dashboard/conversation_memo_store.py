@@ -197,6 +197,34 @@ class ConversationMemoStore:
                 self._save_state(project_id, session_id, state)
             return deleted, len(new_items)
 
+    def reorder(self, project_id: str, session_id: str, ordered_ids: list[str]) -> tuple[int, int]:
+        seen: set[str] = set()
+        order: list[str] = []
+        for raw_id in ordered_ids or []:
+            memo_id = str(raw_id).strip()
+            if not memo_id or memo_id in seen:
+                continue
+            seen.add(memo_id)
+            order.append(memo_id)
+        if not order:
+            return 0, self.list(project_id, session_id).get("count", 0)
+
+        with self._lock:
+            state = self._load_state(project_id, session_id)
+            old_items = list(state.get("items") or [])
+            by_id = {str(it.get("id") or ""): it for it in old_items if str(it.get("id") or "")}
+            matched = [by_id[memo_id] for memo_id in order if memo_id in by_id]
+            if not matched:
+                return 0, len(old_items)
+            matched_ids = {str(it.get("id") or "") for it in matched}
+            tail = [it for it in old_items if str(it.get("id") or "") not in matched_ids]
+            new_items = matched + tail
+            if [str(it.get("id") or "") for it in new_items] != [str(it.get("id") or "") for it in old_items]:
+                state["items"] = new_items
+                state["updatedAt"] = _now_iso()
+                self._save_state(project_id, session_id, state)
+            return len(matched), len(new_items)
+
     def clear(self, project_id: str, session_id: str) -> int:
         with self._lock:
             state = self._load_state(project_id, session_id)

@@ -544,6 +544,94 @@ class TestRunRoutes(unittest.TestCase):
                 ],
             )
 
+    def test_get_run_detail_response_compacts_large_process_payload_for_display(self) -> None:
+        with tempfile.TemporaryDirectory() as td, mock.patch.dict(
+            "os.environ",
+            {
+                "CCB_RUN_DETAIL_PROCESS_ITEM_LIMIT": "20",
+                "CCB_RUN_DETAIL_PROCESS_TEXT_LIMIT": "240",
+                "CCB_RUN_DETAIL_LOG_TAIL_LIMIT": "4000",
+            },
+            clear=False,
+        ):
+            store = server.RunStore(Path(td))
+            created = store.create_run(
+                project_id="task_dashboard",
+                channel_name="辅助06-项目运维（运行巡检-异常告警-会话修复）",
+                session_id="session-1",
+                message="ping",
+            )
+            run_id = str(created.get("id") or "").strip()
+            long_text = "x" * 800
+            long_output = "y" * 900
+            process_rows = [
+                *[
+                    {"text": f"旧过程 {idx}", "at": "2026-07-01T17:00:00+0800"}
+                    for idx in range(19)
+                ],
+                {
+                    "text": long_text,
+                    "item": {
+                        "type": "command_execution",
+                        "aggregated_output": long_output,
+                    },
+                    "at": "2026-07-01T17:01:00+0800",
+                },
+                {"text": "最后过程", "at": "2026-07-01T17:02:00+0800"},
+            ]
+            meta = store.load_meta(run_id) or {}
+            meta["status"] = "done"
+            meta["processRows"] = process_rows
+            meta["process_events"] = process_rows
+            meta["processEvents"] = process_rows
+            store.save_meta(run_id, meta)
+            store._paths(run_id)["log"].write_text("LOGSTART\n" + ("z" * 6000) + "\nLOGEND", encoding="utf-8")
+
+            code, payload = get_run_detail_response(
+                run_id=run_id,
+                store=store,
+                scheduler=None,
+                maybe_trigger_restart_recovery_lazy=lambda *_args, **_kwargs: 0,
+                maybe_trigger_queued_recovery_lazy=lambda *_args, **_kwargs: 0,
+                build_run_observability_fields=lambda *_args, **_kwargs: {},
+                error_hint=lambda _err: "",
+            )
+
+            self.assertEqual(code, 200)
+            self.assertEqual(payload.get("processRowsTotal"), 21)
+            self.assertEqual(payload.get("processRowsReturned"), 20)
+            self.assertTrue(payload.get("processRowsTruncated"))
+            self.assertEqual(payload.get("processEventsTotal"), 21)
+            self.assertEqual(payload.get("processEventsReturned"), 20)
+            self.assertTrue(payload.get("processEventsTruncated"))
+            self.assertEqual(payload.get("logTailChars"), 6016)
+            self.assertEqual(payload.get("logTailReturnedChars"), 4000)
+            self.assertTrue(payload.get("logTailTruncated"))
+            self.assertLessEqual(len(payload.get("logTail") or ""), 4000)
+            self.assertEqual(payload.get("logTail"), payload.get("process"))
+            self.assertTrue(str(payload.get("logTail") or "").endswith("LOGEND"))
+
+            compact_rows = payload.get("processRows") or []
+            self.assertEqual(len(compact_rows), 20)
+            self.assertEqual(compact_rows[0]["text"], "旧过程 1")
+            self.assertNotEqual(compact_rows[-2]["text"], long_text)
+            self.assertLessEqual(len(compact_rows[-2]["text"]), 240)
+            self.assertLessEqual(len(compact_rows[-2]["item"]["aggregated_output"]), 240)
+            self.assertEqual(compact_rows[-1]["text"], "最后过程")
+
+            detail_run = payload.get("run") or {}
+            self.assertTrue(detail_run.get("processRowsTruncated"))
+            self.assertEqual(len(detail_run.get("processRows") or []), 20)
+            self.assertLessEqual(
+                len((detail_run.get("processEvents") or [])[-2]["item"]["aggregated_output"]),
+                240,
+            )
+
+            persisted = store.load_meta(run_id) or {}
+            self.assertEqual(persisted.get("processRows"), process_rows)
+            self.assertEqual(len(persisted["processRows"][-2]["text"]), 800)
+            self.assertEqual(len(persisted["processRows"][-2]["item"]["aggregated_output"]), 900)
+
     def test_get_run_detail_response_backfills_previews_from_process_rows(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             store = server.RunStore(Path(td))

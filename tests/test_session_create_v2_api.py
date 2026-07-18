@@ -6,13 +6,14 @@ import unittest
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from unittest import mock
+from urllib.error import HTTPError
 from urllib import request as url_request
 
 import server
 from task_dashboard.adapters import SessionInfo
 from task_dashboard.runtime.request_parsing import parse_session_create_request, parse_session_update_fields
 from task_dashboard.runtime.session_context import apply_session_work_context
-from task_dashboard.runtime.session_admin import create_session_response
+from task_dashboard.runtime.session_admin import SessionIdentityError, create_session_response
 
 
 class SessionCreateV2Tests(unittest.TestCase):
@@ -46,6 +47,7 @@ class SessionCreateV2Tests(unittest.TestCase):
                 "model": "gpt-5.3-codex",
                 "reasoningEffort": "high",
                 "alias": "服务开发-通讯能力",
+                "agentName": "服务开发-通讯能力",
                 "environmentName": "refactor",
                 "worktreeRoot": "/tmp/worktree",
                 "workdir": "/tmp/worktree",
@@ -61,10 +63,43 @@ class SessionCreateV2Tests(unittest.TestCase):
         self.assertEqual(payload["worktree_root"], "/tmp/worktree")
         self.assertEqual(payload["branch"], "feature/v2")
         self.assertEqual(payload["alias"], "服务开发-通讯能力")
+        self.assertEqual(payload["agent_name"], "服务开发-通讯能力")
         self.assertEqual(payload["session_role"], "child")
         self.assertEqual(payload["purpose"], "验证创建")
         self.assertEqual(payload["reuse_strategy"], "reuse_active")
         self.assertIs(payload["set_as_primary"], False)
+
+        agent_name_only = parse_session_create_request(
+            {
+                "project_id": "task_dashboard",
+                "channel_name": "子级07",
+                "agentName": "只传 AgentName",
+            }
+        )
+        self.assertEqual(agent_name_only["agent_name"], "只传 AgentName")
+        self.assertEqual(agent_name_only["alias"], "只传 AgentName")
+
+    def test_codex_model_and_reasoning_empty_values_preserve_inheritance(self) -> None:
+        create_payload = parse_session_create_request(
+            {
+                "project_id": "task_dashboard",
+                "channel_name": "子级03",
+                "cli_type": "codex",
+                "model": "  ",
+                "reasoningEffort": "",
+            }
+        )
+        update_fields = parse_session_update_fields(
+            {
+                "model": "",
+                "reasoningEffort": "",
+            }
+        )
+
+        self.assertEqual(create_payload["model"], "")
+        self.assertEqual(create_payload["reasoning_effort"], "")
+        self.assertEqual(update_fields["model"], "")
+        self.assertEqual(update_fields["reasoning_effort"], "")
 
     def test_parse_session_create_request_tracks_codebuddy_permission_explicitness(self) -> None:
         missing_payload = parse_session_create_request(
@@ -149,10 +184,12 @@ class SessionCreateV2Tests(unittest.TestCase):
             {
                 "cliType": "claude",
                 "model": "claude-haiku",
+                "agentName": "Claude 子会话",
             }
         )
 
         self.assertEqual(fields["model"], "claude-haiku-4-5")
+        self.assertEqual(fields["agent_name"], "Claude 子会话")
 
     def test_session_store_normalizes_existing_claude_model_on_update(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -214,6 +251,231 @@ class SessionCreateV2Tests(unittest.TestCase):
             self.assertEqual(session.get("reuse_strategy"), "copy")
             self.assertEqual(session.get("purpose"), "session_copy_clone")
 
+    def test_create_session_response_requires_alias_for_new_agent(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            with self.assertRaises(SessionIdentityError) as ctx:
+                create_session_response(
+                    payload={
+                        "project_id": "task_dashboard",
+                        "channel_name": "子级07",
+                        "cli_type": "codex",
+                    },
+                    session_store=server.SessionStore(base),
+                    environment_name="refactor",
+                    worktree_root=str(base),
+                    create_cli_session=lambda **_kwargs: {"ok": True},
+                    resolve_project_workdir=lambda _pid: base,
+                    detect_git_branch=lambda _root: "main",
+                    build_session_seed_prompt=lambda **_kwargs: "seed",
+                    decorate_session_display_fields=lambda row: row,
+                    apply_session_work_context=lambda row, **_kwargs: row,
+                    load_project_execution_context=lambda *_args, **_kwargs: {},
+                    project_exists=lambda _pid: True,
+                    channel_exists=lambda _pid, _channel: True,
+                )
+
+            self.assertEqual(ctx.exception.error_code, "alias_required")
+
+    def test_create_session_response_rejects_active_alias_conflict(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            store = server.SessionStore(base)
+            store.create_session(
+                "task_dashboard",
+                "子级07",
+                session_id="019c0000-0000-7000-8000-000000000011",
+                alias="重名 Agent",
+            )
+            with self.assertRaises(SessionIdentityError) as ctx:
+                create_session_response(
+                    payload={
+                        "project_id": "task_dashboard",
+                        "channel_name": "子级08",
+                        "cli_type": "codex",
+                        "alias": "重名 Agent",
+                    },
+                    session_store=store,
+                    environment_name="refactor",
+                    worktree_root=str(base),
+                    create_cli_session=lambda **_kwargs: {"ok": True},
+                    resolve_project_workdir=lambda _pid: base,
+                    detect_git_branch=lambda _root: "main",
+                    build_session_seed_prompt=lambda **_kwargs: "seed",
+                    decorate_session_display_fields=lambda row: row,
+                    apply_session_work_context=lambda row, **_kwargs: row,
+                    load_project_execution_context=lambda *_args, **_kwargs: {},
+                    project_exists=lambda _pid: True,
+                    channel_exists=lambda _pid, _channel: True,
+                )
+
+            self.assertEqual(ctx.exception.error_code, "alias_conflict")
+            self.assertEqual((ctx.exception.payload.get("conflict") or {}).get("session_id"), "019c0000-0000-7000-8000-000000000011")
+
+    def test_create_session_response_ignores_inactive_alias_for_identity_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            workdir = base / "wt"
+            workdir.mkdir(parents=True, exist_ok=True)
+            store = server.SessionStore(base)
+            old = store.create_session(
+                "task_dashboard",
+                "子级07",
+                session_id="019c0000-0000-7000-8000-000000000012",
+                alias="可复用 Agent 名",
+            )
+            store.update_session(str(old.get("id") or ""), status="inactive")
+
+            result = create_session_response(
+                payload={
+                    "project_id": "task_dashboard",
+                    "channel_name": "子级08",
+                    "cli_type": "codex",
+                    "alias": "可复用 Agent 名",
+                },
+                session_store=store,
+                environment_name="refactor",
+                worktree_root=str(workdir),
+                create_cli_session=lambda **_kwargs: {
+                    "ok": True,
+                    "sessionId": "019c0000-0000-7000-8000-000000000013",
+                    "sessionPath": "/tmp/fake-session.json",
+                    "workdir": str(workdir),
+                },
+                resolve_project_workdir=lambda _pid: workdir,
+                detect_git_branch=lambda _root: "main",
+                build_session_seed_prompt=lambda **_kwargs: "seed",
+                decorate_session_display_fields=lambda row: row,
+                apply_session_work_context=lambda row, **_kwargs: row,
+                load_project_execution_context=lambda *_args, **_kwargs: {},
+                project_exists=lambda _pid: True,
+                channel_exists=lambda _pid, _channel: True,
+            )
+
+            self.assertTrue(bool(result.get("created")))
+            self.assertEqual((result.get("session") or {}).get("alias"), "可复用 Agent 名")
+
+    def test_create_session_response_rotate_replaces_same_channel_alias(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            workdir = base / "wt"
+            workdir.mkdir(parents=True, exist_ok=True)
+            store = server.SessionStore(base)
+            old = store.create_session(
+                "task_dashboard",
+                "子级02",
+                cli_type="codex",
+                session_id="019c0000-0000-7000-8000-000000000021",
+                alias="后端-任务业务",
+                agent_name="后端-任务业务",
+                purpose="旧主会话",
+                session_role="primary",
+                is_primary=True,
+            )
+
+            result = create_session_response(
+                payload={
+                    "project_id": "task_dashboard",
+                    "channel_name": "子级02",
+                    "cli_type": "codex",
+                    "alias": "后端-任务业务",
+                    "agent_name": "后端-任务业务",
+                    "purpose": "轮替后主会话",
+                    "reuse_strategy": "rotate",
+                    "environment": "refactor",
+                    "worktree_root": str(workdir),
+                    "workdir": str(workdir),
+                },
+                session_store=store,
+                environment_name="refactor",
+                worktree_root=str(workdir),
+                create_cli_session=lambda **_kwargs: {
+                    "ok": True,
+                    "sessionId": "019c0000-0000-7000-8000-000000000022",
+                    "sessionPath": "/tmp/fake-session.json",
+                    "workdir": str(workdir),
+                },
+                resolve_project_workdir=lambda _pid: workdir,
+                detect_git_branch=lambda _root: "main",
+                build_session_seed_prompt=lambda **_kwargs: "seed",
+                decorate_session_display_fields=lambda row: row,
+                apply_session_work_context=lambda row, **_kwargs: row,
+                load_project_execution_context=lambda *_args, **_kwargs: {},
+                project_exists=lambda _pid: True,
+                channel_exists=lambda _pid, _channel: True,
+            )
+
+            session = result.get("session") or {}
+            old_after = store.get_session(str(old.get("id") or "")) or {}
+            new_after = store.get_session(str(session.get("id") or "")) or {}
+            self.assertTrue(bool(result.get("rotated")))
+            self.assertEqual(result.get("replaced_session_ids"), [old["id"]])
+            self.assertEqual(session.get("alias"), "后端-任务业务")
+            self.assertEqual(session.get("purpose"), "轮替后主会话")
+            self.assertTrue(bool(session.get("is_primary")))
+            self.assertTrue(bool(new_after.get("is_primary")))
+            self.assertTrue(bool(old_after.get("is_deleted")))
+            self.assertEqual(old_after.get("deleted_reason"), "session_rotate_alias_takeover")
+            self.assertFalse(bool(old_after.get("is_primary")))
+
+    def test_create_session_response_rotate_follows_context_exhausted_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            workdir = base / "wt"
+            workdir.mkdir(parents=True, exist_ok=True)
+            store = server.SessionStore(base)
+            old = store.create_session(
+                "task_dashboard",
+                "子级02",
+                cli_type="codex",
+                session_id="019c0000-0000-7000-8000-000000000023",
+                alias="任务维度运行时",
+                agent_name="后端-任务业务",
+                purpose="CCB 运行时主会话",
+                session_role="primary",
+                is_primary=True,
+                context_binding_state="context_exhausted",
+            )
+
+            result = create_session_response(
+                payload={
+                    "project_id": "task_dashboard",
+                    "channel_name": "子级02",
+                    "cli_type": "codex",
+                    "reuse_strategy": "rotate",
+                    "environment": "refactor",
+                    "worktree_root": str(workdir),
+                    "workdir": str(workdir),
+                },
+                session_store=store,
+                environment_name="refactor",
+                worktree_root=str(workdir),
+                create_cli_session=lambda **_kwargs: {
+                    "ok": True,
+                    "sessionId": "019c0000-0000-7000-8000-000000000024",
+                    "sessionPath": "/tmp/fake-session.json",
+                    "workdir": str(workdir),
+                },
+                resolve_project_workdir=lambda _pid: workdir,
+                detect_git_branch=lambda _root: "main",
+                build_session_seed_prompt=lambda **_kwargs: "seed",
+                decorate_session_display_fields=lambda row: row,
+                apply_session_work_context=lambda row, **_kwargs: row,
+                load_project_execution_context=lambda *_args, **_kwargs: {},
+                project_exists=lambda _pid: True,
+                channel_exists=lambda _pid, _channel: True,
+            )
+
+            session = result.get("session") or {}
+            old_after = store.get_session(str(old.get("id") or "")) or {}
+            self.assertTrue(bool(result.get("rotated")))
+            self.assertEqual(session.get("alias"), "任务维度运行时")
+            self.assertEqual(session.get("agent_name"), "后端-任务业务")
+            self.assertEqual(session.get("purpose"), "CCB 运行时主会话")
+            self.assertTrue(bool(session.get("is_primary")))
+            self.assertTrue(bool(old_after.get("is_deleted")))
+            self.assertFalse(bool(old_after.get("is_primary")))
+
     def test_create_session_response_defaults_workdir_to_channel_root(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)
@@ -236,6 +498,7 @@ class SessionCreateV2Tests(unittest.TestCase):
                     "project_id": "task_dashboard",
                     "channel_name": "业务03-规划样本",
                     "cli_type": "codex",
+                    "alias": "业务03-规划样本主会话",
                     "environment": "refactor",
                     "worktree_root": str(project_root),
                     "branch": "feature/channel-workdir",
@@ -417,6 +680,7 @@ class SessionCreateV2Tests(unittest.TestCase):
                     "project_id": "task_dashboard",
                     "channel_name": "子级07",
                     "cli_type": "codebuddy",
+                    "alias": "CodeBuddy 静态文件会话",
                     "environment": "refactor",
                     "worktree_root": str(workdir),
                     "workdir": str(workdir),
@@ -482,6 +746,7 @@ class SessionCreateV2Tests(unittest.TestCase):
                     "project_id": "task_dashboard",
                     "channel_name": "子级07",
                     "cli_type": "codebuddy",
+                    "alias": "CodeBuddy 静态文件会话",
                     "environment": "refactor",
                     "worktree_root": str(workdir),
                     "workdir": str(workdir),
@@ -659,6 +924,7 @@ class SessionCreateV2Tests(unittest.TestCase):
                     "session_id": sid,
                     "mode": "attach_existing",
                     "cli_type": "codex",
+                    "alias": "恢复上下文会话",
                 },
                 session_store=store,
                 environment_name="stable",
@@ -704,6 +970,7 @@ class SessionCreateV2Tests(unittest.TestCase):
                     "session_id": sid,
                     "mode": "attach_existing",
                     "cli_type": "opencode",
+                    "alias": "OpenCode 接入会话",
                 },
                 session_store=store,
                 environment_name="refactor",
@@ -742,6 +1009,7 @@ class SessionCreateV2Tests(unittest.TestCase):
                             "session_id": sid,
                             "mode": "attach_existing",
                             "cli_type": "claude",
+                            "alias": "Claude 缺失会话",
                         },
                         session_store=store,
                         environment_name="refactor",
@@ -781,6 +1049,7 @@ class SessionCreateV2Tests(unittest.TestCase):
                         "session_id": sid,
                         "mode": "attach_existing",
                         "cli_type": "claude",
+                        "alias": "Claude 接入会话",
                     },
                     session_store=store,
                     environment_name="refactor",
@@ -972,6 +1241,8 @@ class SessionCreateV2Tests(unittest.TestCase):
                                 "project_id": "task_dashboard",
                                 "channel_name": "子级07",
                                 "cli_type": "codex",
+                                "alias": "HTTP 创建会话",
+                                "agentName": "HTTP 创建会话",
                                 "model": "gpt-5.3-codex",
                                 "reasoning_effort": "medium",
                                 "environment": "refactor",
@@ -1012,6 +1283,172 @@ class SessionCreateV2Tests(unittest.TestCase):
                 t.join(timeout=2)
                 httpd.server_close()
 
+    def test_post_api_sessions_returns_409_for_alias_conflict(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            httpd, session_store = self._start_server(base)
+            session_store.create_session(
+                "task_dashboard",
+                "子级07",
+                session_id="019c0000-0000-7000-8000-000000000021",
+                alias="冲突 Agent",
+            )
+            t = threading.Thread(target=httpd.serve_forever, daemon=True)
+            t.start()
+            port = int(httpd.server_address[1])
+            try:
+                with mock.patch.object(
+                    server,
+                    "_load_dashboard_cfg_current",
+                    return_value={
+                        "projects": [
+                            {
+                                "id": "task_dashboard",
+                                "channels": [{"name": "子级07"}, {"name": "子级08"}],
+                            }
+                        ]
+                    },
+                ):
+                    req = url_request.Request(
+                        f"http://127.0.0.1:{port}/api/sessions",
+                        data=json.dumps(
+                            {
+                                "project_id": "task_dashboard",
+                                "channel_name": "子级08",
+                                "cli_type": "codex",
+                                "alias": "冲突 Agent",
+                            }
+                        ).encode("utf-8"),
+                        headers={"Content-Type": "application/json"},
+                        method="POST",
+                    )
+                    with self.assertRaises(HTTPError) as ctx:
+                        url_request.urlopen(req, timeout=3)
+                    self.assertEqual(ctx.exception.code, 409)
+                    body = json.loads(ctx.exception.read().decode("utf-8"))
+                    self.assertEqual(body.get("error_code"), "alias_conflict")
+                    self.assertEqual((body.get("conflict") or {}).get("session_id"), "019c0000-0000-7000-8000-000000000021")
+            finally:
+                httpd.shutdown()
+                t.join(timeout=2)
+                httpd.server_close()
+
+    def test_put_api_sessions_returns_409_for_alias_conflict(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            httpd, session_store = self._start_server(base)
+            session_store.create_session(
+                "task_dashboard",
+                "子级07",
+                session_id="019c0000-0000-7000-8000-000000000031",
+                alias="已有 Agent",
+                environment="refactor",
+            )
+            session_store.create_session(
+                "task_dashboard",
+                "子级08",
+                session_id="019c0000-0000-7000-8000-000000000032",
+                alias="待改名 Agent",
+                environment="refactor",
+            )
+            t = threading.Thread(target=httpd.serve_forever, daemon=True)
+            t.start()
+            port = int(httpd.server_address[1])
+            try:
+                req = url_request.Request(
+                    f"http://127.0.0.1:{port}/api/sessions/019c0000-0000-7000-8000-000000000032",
+                    data=json.dumps({"alias": "已有 Agent"}).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="PUT",
+                )
+                with self.assertRaises(HTTPError) as ctx:
+                    url_request.urlopen(req, timeout=3)
+                self.assertEqual(ctx.exception.code, 409)
+                body = json.loads(ctx.exception.read().decode("utf-8"))
+                self.assertEqual(body.get("error_code"), "alias_conflict")
+                self.assertEqual((body.get("conflict") or {}).get("session_id"), "019c0000-0000-7000-8000-000000000031")
+            finally:
+                httpd.shutdown()
+                t.join(timeout=2)
+                httpd.server_close()
+
+    def test_put_api_sessions_switches_and_clears_codex_reasoning_override(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            httpd, session_store = self._start_server(base)
+            session_id = "019c0000-0000-7000-8000-000000000041"
+            session_store.create_session(
+                "task_dashboard",
+                "子级03",
+                session_id=session_id,
+                alias="Codex 实时切换",
+                cli_type="codex",
+                model="gpt-5.4",
+                reasoning_effort="medium",
+                environment="refactor",
+            )
+            t = threading.Thread(target=httpd.serve_forever, daemon=True)
+            t.start()
+            port = int(httpd.server_address[1])
+            try:
+                switch_req = url_request.Request(
+                    f"http://127.0.0.1:{port}/api/sessions/{session_id}",
+                    data=json.dumps({"reasoningEffort": "xhigh"}).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="PUT",
+                )
+                with url_request.urlopen(switch_req, timeout=3) as resp:
+                    self.assertEqual(resp.status, 200)
+                switched = session_store.get_session(session_id) or {}
+                self.assertEqual(switched.get("reasoning_effort"), "extra_high")
+                self.assertEqual(switched.get("model"), "gpt-5.4")
+
+                clear_req = url_request.Request(
+                    f"http://127.0.0.1:{port}/api/sessions/{session_id}",
+                    data=json.dumps({"model": "", "reasoning_effort": ""}).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="PUT",
+                )
+                with url_request.urlopen(clear_req, timeout=3) as resp:
+                    self.assertEqual(resp.status, 200)
+                cleared = session_store.get_session(session_id) or {}
+                self.assertEqual(cleared.get("model"), "")
+                self.assertEqual(cleared.get("reasoning_effort"), "")
+            finally:
+                httpd.shutdown()
+                t.join(timeout=2)
+                httpd.server_close()
+
+    def test_legacy_session_new_endpoint_is_retired(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            httpd, _session_store = self._start_server(base)
+            t = threading.Thread(target=httpd.serve_forever, daemon=True)
+            t.start()
+            port = int(httpd.server_address[1])
+            try:
+                req = url_request.Request(
+                    f"http://127.0.0.1:{port}/api/codex/session/new",
+                    data=json.dumps(
+                        {
+                            "projectId": "task_dashboard",
+                            "channelName": "子级07",
+                        }
+                    ).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with self.assertRaises(HTTPError) as ctx:
+                    url_request.urlopen(req, timeout=3)
+                self.assertEqual(ctx.exception.code, 410)
+                body = json.loads(ctx.exception.read().decode("utf-8"))
+                self.assertEqual(body.get("error_code"), "legacy_session_new_retired")
+                self.assertEqual(body.get("replacement"), "/api/sessions")
+            finally:
+                httpd.shutdown()
+                t.join(timeout=2)
+                httpd.server_close()
+
     def test_create_session_response_passes_execution_profile_to_cli_session(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)
@@ -1031,6 +1468,7 @@ class SessionCreateV2Tests(unittest.TestCase):
                     "project_id": "task_dashboard",
                     "channel_name": "子级07",
                     "cli_type": "codex",
+                    "alias": "执行 profile 会话",
                     "reuse_strategy": "create_new",
                 },
                 session_store=server.SessionStore(base),

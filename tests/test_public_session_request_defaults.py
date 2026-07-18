@@ -4,7 +4,7 @@ from task_dashboard.runtime.request_parsing import parse_session_create_request
 
 
 class PublicSessionRequestDefaultsTests(unittest.TestCase):
-    def test_session_create_defaults_to_reuse_active(self) -> None:
+    def test_session_create_leaves_reuse_strategy_unspecified(self) -> None:
         payload = parse_session_create_request(
             {
                 "project_id": "standard_project",
@@ -12,9 +12,9 @@ class PublicSessionRequestDefaultsTests(unittest.TestCase):
                 "cli_type": "codex",
             }
         )
-        self.assertEqual(payload["reuse_strategy"], "reuse_active")
+        self.assertEqual(payload["reuse_strategy"], "")
 
-    def test_session_create_accepts_create_timeout(self) -> None:
+    def test_session_create_does_not_expose_transport_timeout(self) -> None:
         payload = parse_session_create_request(
             {
                 "project_id": "standard_project",
@@ -23,7 +23,7 @@ class PublicSessionRequestDefaultsTests(unittest.TestCase):
                 "createTimeoutS": 240,
             }
         )
-        self.assertEqual(payload["create_timeout_s"], 240)
+        self.assertNotIn("create_timeout_s", payload)
 
 
 if __name__ == "__main__":

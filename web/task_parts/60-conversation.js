@@ -3683,13 +3683,14 @@
         subEl.textContent = "";
         hintEl.textContent = "";
         if (senderHintEl) senderHintEl.textContent = "";
+        if (typeof renderConversationComposerCodexModel === "function") renderConversationComposerCodexModel(null);
+        if (typeof renderConversationComposerCodexReasoningEffort === "function") renderConversationComposerCodexReasoningEffort(null);
         if (typeof renderConversationComposerCodeBuddyModel === "function") renderConversationComposerCodeBuddyModel(null);
         if (typeof renderConversationComposerCodeBuddyPermissionMode === "function") renderConversationComposerCodeBuddyPermissionMode(null);
         if (typeof renderConversationComposerClaudeModel === "function") renderConversationComposerClaudeModel(null);
         if (typeof renderConversationComposerClaudePermissionMode === "function") renderConversationComposerClaudePermissionMode(null);
         renderConversationEnterSendToggle(false);
         renderConversationQuickTips(null, []);
-        renderConversationTrainingPrompt(null, []);
         renderConvComposerRunActions(null, []);
         input.placeholder = "请先选择具体项目，再发送会话消息";
         input.disabled = true;
@@ -3719,13 +3720,14 @@
         subEl.textContent = "";
         hintEl.textContent = "";
         if (senderHintEl) senderHintEl.textContent = "";
+        if (typeof renderConversationComposerCodexModel === "function") renderConversationComposerCodexModel(null);
+        if (typeof renderConversationComposerCodexReasoningEffort === "function") renderConversationComposerCodexReasoningEffort(null);
         if (typeof renderConversationComposerCodeBuddyModel === "function") renderConversationComposerCodeBuddyModel(null);
         if (typeof renderConversationComposerCodeBuddyPermissionMode === "function") renderConversationComposerCodeBuddyPermissionMode(null);
         if (typeof renderConversationComposerClaudeModel === "function") renderConversationComposerClaudeModel(null);
         if (typeof renderConversationComposerClaudePermissionMode === "function") renderConversationComposerClaudePermissionMode(null);
         renderConversationEnterSendToggle(false);
         renderConversationQuickTips(null, []);
-        renderConversationTrainingPrompt(null, []);
         renderConvComposerRunActions(null, []);
         input.placeholder = "当前项目没有可用会话，请先维护 session_id";
         input.disabled = true;
@@ -3788,6 +3790,8 @@
       subEl.title = "";
       hintEl.textContent = "";
       if (senderHintEl) senderHintEl.textContent = buildConversationComposerSenderHint();
+      if (typeof renderConversationComposerCodexModel === "function") renderConversationComposerCodexModel(ctx);
+      if (typeof renderConversationComposerCodexReasoningEffort === "function") renderConversationComposerCodexReasoningEffort(ctx);
       if (typeof renderConversationComposerCodeBuddyModel === "function") renderConversationComposerCodeBuddyModel(ctx);
       if (typeof renderConversationComposerCodeBuddyPermissionMode === "function") renderConversationComposerCodeBuddyPermissionMode(ctx);
       if (typeof renderConversationComposerClaudeModel === "function") renderConversationComposerClaudeModel(ctx);
@@ -3921,7 +3925,6 @@
         ? agentIdentityExplanationMeta(currentSession)
         : null;
       renderConversationQuickTips(sessionBindingBlockMeta ? null : ctx, sessionBindingBlockMeta ? [] : runs);
-      renderConversationTrainingPrompt(sessionBindingBlockMeta ? null : ctx, sessionBindingBlockMeta ? [] : runs, { timelineReady: hasSessionTimelineCache });
       refreshConversationRecentAgentsFromRuns(ctx, runs);
       renderConvComposerRunActions(ctx, runs);
       // 找到“最新可展开”的 AI 正文：

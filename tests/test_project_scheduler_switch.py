@@ -637,7 +637,7 @@ scan_interval_seconds = 300
                 rid = reg._dispatch_auto_inspection_gate_followup(
                     project_id="task_dashboard",
                     target_channel="主体-总控（合并与验收）",
-                    target_session_id="019c7906-cd4b-7e81-89d9-7b851b5d81ea",
+                    target_session_id="019f7001-0001-7001-8001-000000000001",
                     message="gate followup",
                     source_run_id="20260301-000000-deadbeef",
                     action="escalate_master",
@@ -694,7 +694,7 @@ scan_interval_seconds = 300
             reg._set_worker_fields("task_dashboard", auto_inspection_last_run_id=rid3)
             with mock.patch.object(reg, "_dispatch_auto_inspection_gate_followup", return_value="gate-l2-run") as followup3, mock.patch(
                 "server._resolve_master_control_target",
-                return_value={"channel_name": "主体-总控（合并与验收）", "session_id": "019c7906-cd4b-7e81-89d9-7b851b5d81ea"},
+                return_value={"channel_name": "主体-总控（合并与验收）", "session_id": "019f7001-0001-7001-8001-000000000001"},
             ):
                 reg._evaluate_previous_auto_inspection_gate("task_dashboard", cfg)
                 self.assertTrue(followup3.called)

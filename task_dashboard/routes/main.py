@@ -96,7 +96,10 @@ from task_dashboard.runtime.scheduler_helpers import (
     _enqueue_run_for_dispatch as runtime_enqueue_run_for_dispatch,
     _validate_announce_session_binding as runtime_validate_announce_session_binding,
 )
+from task_dashboard.runtime.message_delivery_control import MessageDeliveryRuntime
 from task_dashboard.runtime.session_admin import (
+    SessionIdentityError as RuntimeSessionIdentityError,
+    SessionMigrationError as RuntimeSessionMigrationError,
     create_session_response as runtime_create_session_response,
     delete_binding_response as runtime_delete_binding_response,
     delete_session_response as runtime_delete_session_response,
@@ -117,6 +120,12 @@ from task_dashboard.runtime.share_space import (
 from task_dashboard.runtime.platform_lan_access import (
     build_state as runtime_build_platform_lan_access_state,
     update_response as runtime_update_platform_lan_access_response,
+)
+from task_dashboard.routes.project_resources import (
+    handle_project_resources_delete,
+    handle_project_resources_get,
+    handle_project_resources_patch,
+    handle_project_resources_post,
 )
 from task_dashboard.runtime.runstore_health import (
     archive_terminal_runs as runtime_archive_terminal_runs,
@@ -183,6 +192,7 @@ class RouteContext:
     task_push_runtime: Optional[Any]
     task_plan_runtime: Optional[Any]
     assist_request_runtime: Optional[Any]
+    message_delivery_runtime: Optional[Any]
     conversation_memo_store: Optional[Any]
     allow_root: Path
 
@@ -880,6 +890,10 @@ class RouteDispatcher:
             self._handle_conversation_memo_delete_post(handler)
             return True
 
+        if path == "/api/conversation-memos/reorder":
+            self._handle_conversation_memo_reorder_post(handler)
+            return True
+
         if path == "/api/conversation-memos/clear":
             self._handle_conversation_memo_clear_post(handler)
             return True
@@ -906,6 +920,17 @@ class RouteDispatcher:
 
         return False
 
+    def dispatch_patch(self, handler: "BaseHTTPRequestHandler") -> bool:
+        """Dispatch PATCH requests. Returns True if handled, False to fall through."""
+        path = urlparse(handler.path).path
+        parts = [seg for seg in path.split("/") if seg]
+
+        if len(parts) == 5 and parts[:2] == ["api", "projects"] and parts[3] == "resources":
+            handle_project_resources_patch(self.ctx, handler, parts[2], parts[4])
+            return True
+
+        return False
+
     def dispatch_delete(self, handler: "BaseHTTPRequestHandler") -> bool:
         """
         Dispatch DELETE requests. Returns True if handled, False to fall through.
@@ -921,6 +946,10 @@ class RouteDispatcher:
 
         if len(parts) == 4 and parts[:2] == ["api", "tasks"] and parts[3] == "assistant-config":
             self._handle_task_assistant_delete(handler, parts[2], parse_qs(urlparse(handler.path).query or ""))
+            return True
+
+        if len(parts) == 5 and parts[:2] == ["api", "projects"] and parts[3] == "resources":
+            handle_project_resources_delete(self.ctx, handler, parts[2], parts[4])
             return True
 
         return False
@@ -944,12 +973,14 @@ class RouteDispatcher:
             "/api/runtime/perf-snapshot",
             "/api/board/global-resource-graph",
             "/api/conversation-memos",
+            "/api/conversation-memos/reorder",
         ]
         known_patterns = [
             lambda p: p.startswith("/api/codex/run/"),
             lambda p: p.startswith("/api/projects/") and p.endswith("/runtime-bubbles"),
             lambda p: p.startswith("/api/projects/") and p.endswith("/automation-status"),
             lambda p: p.startswith("/api/projects/") and "/auto-scheduler" in p,
+            lambda p: p.startswith("/api/projects/") and p.endswith("/resources"),
         ]
 
         if path in known_paths or any(pattern(path) for pattern in known_patterns):
@@ -1652,6 +1683,10 @@ class RouteDispatcher:
             return True
         if len(parts) == 4 and parts[:2] == ["api", "projects"] and parts[3] == "config":
             self._handle_project_config_get(handler, parts[2])
+            return True
+
+        if len(parts) == 4 and parts[:2] == ["api", "projects"] and parts[3] == "resources":
+            handle_project_resources_get(self.ctx, handler, parts[2])
             return True
 
         return False
@@ -2659,6 +2694,10 @@ class RouteDispatcher:
             self._handle_project_config_post(handler, parts[2])
             return True
 
+        if len(parts) == 4 and parts[:2] == ["api", "projects"] and parts[3] == "resources":
+            handle_project_resources_post(self.ctx, handler, parts[2])
+            return True
+
         if len(parts) == 6 and parts[:2] == ["api", "projects"] and parts[3] == "task-plans" and parts[5] == "activate":
             self._handle_project_task_plan_activate_post(handler, parts[2], parts[4])
             return True
@@ -3202,6 +3241,10 @@ class RouteDispatcher:
         except RuntimeStaticInstructionFileConflict as e:
             self.ctx.json_response(handler, 409, {"error": "static instruction file conflict", "message": str(e)})
             return
+        except RuntimeSessionIdentityError as e:
+            status = 409 if e.error_code == "alias_conflict" else 400
+            self.ctx.json_response(handler, status, e.payload)
+            return
         except ValueError as e:
             self.ctx.json_response(handler, 400, {"error": str(e)})
             return
@@ -3570,6 +3613,87 @@ class RouteDispatcher:
 
         message, run_extra_fields = runtime_apply_plan_first_to_message(message, run_extra_fields)
         _hydrate_reply_to_fields_from_store(self.ctx.store, run_extra_fields)
+        delivery_runtime = getattr(self.ctx, "message_delivery_runtime", None) or MessageDeliveryRuntime.for_store(self.ctx.store)
+        interaction_mode = str(run_extra_fields.get("interaction_mode") or "").strip().lower()
+
+        if interaction_mode == "notify_only":
+            def _create_notification_container(container_message: str, extra_meta: dict[str, Any]) -> dict[str, Any]:
+                return self.ctx.store.create_run(
+                    project_id,
+                    channel_name,
+                    session_id,
+                    container_message,
+                    profile_label=profile_label,
+                    model=model,
+                    cli_type=cli_type,
+                    attachments=attachments if attachments else None,
+                    sender_type=sender_fields["sender_type"],
+                    sender_id=sender_fields["sender_id"],
+                    sender_name=sender_fields["sender_name"],
+                    extra_meta=extra_meta,
+                    reasoning_effort=reasoning_effort,
+                )
+
+            def _enqueue_notification_container(run_meta: dict[str, Any]) -> None:
+                runtime_enqueue_run_for_dispatch(
+                    self.ctx.store,
+                    str(run_meta.get("id") or ""),
+                    session_id,
+                    cli_type,
+                    self.ctx.scheduler,
+                )
+
+            merge_result = delivery_runtime.merge_notify_only(
+                store=self.ctx.store,
+                project_id=project_id,
+                channel_name=channel_name,
+                target_session_id=session_id,
+                message=message,
+                profile_label=profile_label,
+                model=model,
+                cli_type=cli_type,
+                attachments=attachments if attachments else None,
+                sender_fields=sender_fields,
+                run_extra_fields=run_extra_fields,
+                reasoning_effort=reasoning_effort,
+                create_run=_create_notification_container,
+                enqueue_run=_enqueue_notification_container,
+            )
+            self.ctx.json_response(
+                handler,
+                200,
+                {
+                    "run": merge_result.get("run"),
+                    "notification_merge": merge_result.get("notification_merge"),
+                },
+            )
+            return
+
+        busy_gate = delivery_runtime.evaluate_busy_gate(
+            store=self.ctx.store,
+            project_id=project_id,
+            target_session_id=session_id,
+            session_data=session_data,
+            run_extra_fields=run_extra_fields,
+            build_project_session_runtime_index=self.ctx.build_project_session_runtime_index,
+            build_session_runtime_state_for_row=self.ctx.build_session_runtime_state_for_row,
+            looks_like_uuid=self.ctx.looks_like_uuid,
+        )
+        if busy_gate.get("action") == "blocked":
+            self.ctx.json_response(
+                handler,
+                409,
+                {
+                    "ok": False,
+                    "state": "blocked",
+                    "blocking_error": busy_gate.get("blocking_error"),
+                    "target_busy": busy_gate.get("target_busy"),
+                    "busy_confirm": busy_gate.get("busy_confirm"),
+                    "pending_confirm_available": bool(busy_gate.get("pending_confirm_available")),
+                },
+            )
+            return
+
         run = self.ctx.store.create_run(
             project_id,
             channel_name,
@@ -3585,6 +3709,9 @@ class RouteDispatcher:
             extra_meta=run_extra_fields,
             reasoning_effort=reasoning_effort,
         )
+        if busy_gate.get("action") == "confirmed":
+            run["busy_confirm"] = busy_gate.get("busy_confirm")
+            self.ctx.store.save_meta(str(run.get("id") or ""), run)
 
         runtime_enqueue_run_for_dispatch(
             self.ctx.store,
@@ -3593,12 +3720,26 @@ class RouteDispatcher:
             cli_type,
             self.ctx.scheduler,
         )
-        self.ctx.json_response(handler, 200, {"run": run})
+        response_payload: dict[str, Any] = {"run": run}
+        if busy_gate.get("action") == "confirmed":
+            response_payload["busy_confirm"] = busy_gate.get("busy_confirm")
+            response_payload["target_busy"] = busy_gate.get("target_busy")
+        self.ctx.json_response(handler, 200, response_payload)
 
     def _handle_session_new_post(self, handler: "BaseHTTPRequestHandler") -> None:
         """Handle POST /api/codex/session/new."""
         if not self.ctx.require_token():
             return
+        self.ctx.json_response(
+            handler,
+            410,
+            {
+                "error": "legacy session creation endpoint is retired; use POST /api/sessions",
+                "error_code": "legacy_session_new_retired",
+                "replacement": "/api/sessions",
+            },
+        )
+        return
         try:
             body = self.ctx.read_body_json(handler, max_bytes=40_000)
         except Exception:
@@ -4517,6 +4658,7 @@ class RouteDispatcher:
                 primary_session_id="",
                 updates=updates,
                 decorate_sessions_display_fields=self.ctx.decorate_sessions_display_fields,
+                workspace_root=self.ctx.worktree_root,
             )
             deleted_binding_session_ids: list[str] = []
             for binding in existing_bindings:
@@ -4608,8 +4750,13 @@ class RouteDispatcher:
                 create_agents_md=create_agents_md,
             )
             runtime_clear_dashboard_cfg_cache()
+            self.ctx.invalidate_sessions_payload_cache(project_id, channel_name=channel_name)
         except RuntimeStaticInstructionFileConflict as e:
             self.ctx.json_response(handler, 409, {"error": "static instruction file conflict", "message": str(e)})
+            return
+        except RuntimeSessionIdentityError as e:
+            status = 409 if e.error_code == "alias_conflict" else 400
+            self.ctx.json_response(handler, status, e.payload)
             return
         except ValueError as e:
             self.ctx.json_response(handler, 400, {"error": str(e)})
@@ -4771,6 +4918,49 @@ class RouteDispatcher:
             return
         self.ctx.json_response(handler, 200, {"ok": True, "deleted": int(deleted), "count": int(count)})
 
+    def _handle_conversation_memo_reorder_post(
+        self, handler: "BaseHTTPRequestHandler"
+    ) -> None:
+        """Handle POST /api/conversation-memos/reorder."""
+        if not self.ctx.require_token():
+            return
+        try:
+            body = self.ctx.read_body_json(handler, max_bytes=80_000)
+        except Exception as e:
+            self.ctx.json_response(handler, 400, {"error": f"bad json: {e}"})
+            return
+        project_id = self.ctx.safe_text(
+            body.get("projectId") if "projectId" in body else body.get("project_id"),
+            120,
+        ).strip()
+        session_id = self.ctx.safe_text(
+            body.get("sessionId") if "sessionId" in body else body.get("session_id"),
+            120,
+        ).strip()
+        raw_ids = body.get("orderedIds") if "orderedIds" in body else body.get("ordered_ids")
+        if not isinstance(raw_ids, list):
+            raw_ids = []
+        ordered_ids = [self.ctx.safe_text(x, 80).strip() for x in raw_ids if self.ctx.safe_text(x, 80).strip()]
+        if not project_id:
+            self.ctx.json_response(handler, 400, {"error": "missing projectId"})
+            return
+        if not session_id or not self.ctx.looks_like_uuid(session_id):
+            self.ctx.json_response(handler, 400, {"error": "missing/invalid sessionId"})
+            return
+        if not ordered_ids:
+            self.ctx.json_response(handler, 400, {"error": "missing orderedIds"})
+            return
+        memo_store = self.ctx.conversation_memo_store
+        if memo_store is None:
+            self.ctx.json_response(handler, 500, {"error": "memo store not available"})
+            return
+        try:
+            reordered, count = memo_store.reorder(project_id, session_id, ordered_ids)
+        except Exception as e:
+            self.ctx.json_response(handler, 500, {"error": f"reorder memo failed: {e}"})
+            return
+        self.ctx.json_response(handler, 200, {"ok": True, "reordered": int(reordered), "count": int(count)})
+
     def _handle_conversation_memo_clear_post(
         self, handler: "BaseHTTPRequestHandler"
     ) -> None:
@@ -4873,6 +5063,7 @@ class RouteDispatcher:
                 primary_session_id=primary_session_id,
                 updates=updates,
                 decorate_sessions_display_fields=self.ctx.decorate_sessions_display_fields,
+                workspace_root=self.ctx.worktree_root,
             ),
         )
 
@@ -4916,7 +5107,15 @@ class RouteDispatcher:
                 build_session_runtime_state_for_row=self.ctx.build_session_runtime_state_for_row,
                 load_session_heartbeat_config=self.ctx.load_session_heartbeat_config,
                 heartbeat_summary_payload=self.ctx.heartbeat_summary_payload,
+                session_binding_store=self.ctx.session_binding_store,
             )
+        except RuntimeSessionIdentityError as e:
+            status = 409 if e.error_code == "alias_conflict" else 400
+            self.ctx.json_response(handler, status, e.payload)
+            return
+        except RuntimeSessionMigrationError as e:
+            self.ctx.json_response(handler, 500, e.payload)
+            return
         except ValueError as e:
             self.ctx.json_response(handler, 400, {"error": str(e)})
             return
@@ -4952,6 +5151,7 @@ class RouteDispatcher:
                 session_store=self.ctx.session_store,
                 session_id=session_id,
                 session_binding_store=self.ctx.session_binding_store,
+                workspace_root=self.ctx.worktree_root,
             )
         except LookupError:
             self.ctx.json_response(handler, 404, {"error": "session not found"})
@@ -4990,6 +5190,13 @@ def dispatch_put_request(
 ) -> bool:
     """Dispatch PUT request using the given context. Returns True if handled."""
     return RouteDispatcher(context).dispatch_put(handler)
+
+
+def dispatch_patch_request(
+    handler: "BaseHTTPRequestHandler", context: RouteContext
+) -> bool:
+    """Dispatch PATCH request using the given context. Returns True if handled."""
+    return RouteDispatcher(context).dispatch_patch(handler)
 
 
 def dispatch_delete_request(

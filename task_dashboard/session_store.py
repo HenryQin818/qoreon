@@ -72,9 +72,29 @@ def _normalize_reasoning_effort_value(value: Any) -> str:
     return ""
 
 
+def session_context_is_exhausted(session: Any) -> bool:
+    row = session if isinstance(session, dict) else {}
+    binding_state = str(
+        row.get("context_binding_state")
+        or row.get("binding_state")
+        or row.get("context_state")
+        or ""
+    ).strip().lower()
+    status = str(row.get("status") or "").strip().lower()
+    return (
+        bool(row.get("context_exhausted") or row.get("contextExhausted"))
+        or binding_state in {"context_exhausted", "exhausted"}
+        or status in {"context_exhausted", "exhausted"}
+    )
+
+
 def session_binding_is_available(session: Any) -> bool:
     row = session if isinstance(session, dict) else {}
-    return bool(str(row.get("id") or "").strip()) and not bool(row.get("is_deleted"))
+    return (
+        bool(str(row.get("id") or "").strip())
+        and not bool(row.get("is_deleted"))
+        and not session_context_is_exhausted(row)
+    )
 
 
 def session_binding_sort_key(session: Any) -> tuple[int, str, str, str]:
@@ -101,7 +121,8 @@ class SessionStore:
         Args:
             base_dir: The parent directory where .sessions folder will be created.
         """
-        self.sessions_dir = base_dir / ".sessions"
+        self.base_dir = Path(base_dir)
+        self.sessions_dir = self.base_dir / ".sessions"
         self.sessions_dir.mkdir(parents=True, exist_ok=True)
 
     def _project_path(self, project_id: str) -> Path:
@@ -118,6 +139,11 @@ class SessionStore:
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
             if not isinstance(data, dict):
+                return {"project_id": project_id, "sessions": []}
+            # SessionStore project files and legacy per-session bindings share
+            # the same directory. Never normalize a binding JSON as a project
+            # file while scanning by session id.
+            if "sessions" not in data and "sessionId" in data and "projectId" in data:
                 return {"project_id": project_id, "sessions": []}
             data, changed = self._normalize_project_data(project_id, data)
             if changed:
@@ -171,6 +197,9 @@ class SessionStore:
         """Normalize additive session fields for backward compatibility."""
         out = deepcopy(session if isinstance(session, dict) else {})
         out["status"] = str(out.get("status") or "").strip() or "active"
+        out["alias"] = str(out.get("alias") or "").strip()
+        out["agent_name"] = str(out.get("agent_name") or out.get("agentName") or "").strip()
+        out.pop("agentName", None)
         out["is_primary"] = bool(out.get("is_primary"))
         out["is_deleted"] = bool(out.get("is_deleted"))
         out["deleted_at"] = str(out.get("deleted_at") or "").strip()
@@ -270,6 +299,7 @@ class SessionStore:
         channel_name: str,
         cli_type: str = "codex",
         alias: str = "",
+        agent_name: str = "",
         session_id: str = "",
         model: str = "",
         reasoning_effort: str = "",
@@ -296,6 +326,7 @@ class SessionStore:
             channel_name: The channel name.
             cli_type: The CLI type (default: "codex").
             alias: Optional alias for the session.
+            agent_name: Optional agent name alias-compatible identity.
             session_id: Optional external session ID. If empty, generate UUID.
             model: Optional model identifier for this session.
 
@@ -311,7 +342,8 @@ class SessionStore:
         session = {
             "id": sid,
             "cli_type": cli_type or "codex",
-            "alias": alias or "",
+            "alias": str(alias or "").strip(),
+            "agent_name": str(agent_name or "").strip(),
             "model": str(model or "").strip(),
             "reasoning_effort": _normalize_reasoning_effort_value(reasoning_effort),
             "codebuddy_permission_mode": normalize_codebuddy_permission_mode(codebuddy_permission_mode),
@@ -365,6 +397,108 @@ class SessionStore:
 
         return session
 
+    def rotate_session(
+        self,
+        project_id: str,
+        channel_name: str,
+        *,
+        replace_session_ids: list[str] | tuple[str, ...] | None = None,
+        retire_reason: str = "session_rotate_alias_takeover",
+        cli_type: str = "codex",
+        alias: str = "",
+        agent_name: str = "",
+        session_id: str = "",
+        model: str = "",
+        reasoning_effort: str = "",
+        codebuddy_permission_mode: str = "",
+        claude_permission_mode: str = "",
+        environment: str = "",
+        worktree_root: str = "",
+        workdir: str = "",
+        branch: str = "",
+        session_role: str = "",
+        purpose: str = "",
+        reuse_strategy: str = "rotate",
+        schema_version: str = "",
+        created_via: str = "",
+        context_binding_state: str = "",
+        project_execution_context: Optional[dict[str, Any]] = None,
+        is_primary: Optional[bool] = None,
+    ) -> dict[str, Any]:
+        """Create the successor row and retire replaced channel sessions in one file write."""
+
+        now = _utc_now_iso()
+        sid = str(session_id or "").strip() or str(uuid.uuid4())
+        replace_ids = {str(item or "").strip() for item in (replace_session_ids or []) if str(item or "").strip()}
+        effective_primary = is_primary if isinstance(is_primary, bool) else True
+        normalized_role = "primary" if effective_primary else "child"
+        session = {
+            "id": sid,
+            "cli_type": cli_type or "codex",
+            "alias": str(alias or "").strip(),
+            "agent_name": str(agent_name or "").strip(),
+            "model": str(model or "").strip(),
+            "reasoning_effort": _normalize_reasoning_effort_value(reasoning_effort),
+            "codebuddy_permission_mode": normalize_codebuddy_permission_mode(codebuddy_permission_mode),
+            "claude_permission_mode": normalize_claude_permission_mode(claude_permission_mode)
+            if str(claude_permission_mode or "").strip()
+            else "",
+            "environment": str(environment or "").strip(),
+            "worktree_root": str(worktree_root or "").strip(),
+            "workdir": str(workdir or "").strip(),
+            "branch": str(branch or "").strip(),
+            "session_role": normalized_role,
+            "purpose": str(purpose or "").strip(),
+            "reuse_strategy": str(reuse_strategy or "rotate").strip(),
+            "schema_version": str(schema_version or "").strip(),
+            "created_via": str(created_via or "").strip(),
+            "context_binding_state": str(context_binding_state or "").strip().lower(),
+            "project_execution_context": deepcopy(project_execution_context) if isinstance(project_execution_context, dict) else {},
+            "channel_name": channel_name,
+            "status": "active",
+            "is_primary": bool(effective_primary),
+            "is_deleted": False,
+            "deleted_at": "",
+            "deleted_reason": "",
+            "created_at": now,
+            "last_used_at": now,
+        }
+        session = self._apply_project_context_storage_semantics(session)
+
+        data = self._load_project_data(project_id)
+        next_sessions: list[dict[str, Any]] = []
+        for row in data.get("sessions", []):
+            if not isinstance(row, dict):
+                continue
+            next_row = self._normalize_session_record(row)
+            row_sid = str(next_row.get("id") or "").strip()
+            same_channel = str(next_row.get("channel_name") or "").strip() == channel_name
+            if row_sid in replace_ids:
+                next_row["status"] = "inactive"
+                next_row["is_deleted"] = True
+                next_row["deleted_at"] = now
+                next_row["deleted_reason"] = str(retire_reason or "session_rotate_alias_takeover").strip()
+                next_row["is_primary"] = False
+                next_row["session_role"] = "child"
+            elif bool(effective_primary) and same_channel and not bool(next_row.get("is_deleted")):
+                next_row["is_primary"] = False
+                if str(next_row.get("session_role") or "").strip().lower() == "primary":
+                    next_row["session_role"] = "child"
+            next_sessions.append(next_row)
+        next_sessions.append(session)
+        data["sessions"] = next_sessions
+        self._save_project_data(project_id, data)
+        try:
+            from task_dashboard.runtime.session_routes import _invalidate_sessions_payload_cache
+
+            _invalidate_sessions_payload_cache(project_id)
+        except Exception:
+            pass
+
+        out = self._normalize_session_record(session)
+        out["project_id"] = project_id
+        return out
+
     def attach_existing_session(
         self,
         project_id: str,
@@ -373,6 +507,7 @@ class SessionStore:
         session_id: str,
         cli_type: str = "codex",
         alias: str = "",
+        agent_name: str = "",
         model: str = "",
         reasoning_effort: str = "",
         codebuddy_permission_mode: str = "",
@@ -420,6 +555,8 @@ class SessionStore:
                 update_fields["cli_type"] = str(cli_type)
             if alias:
                 update_fields["alias"] = str(alias).strip()
+            if agent_name:
+                update_fields["agent_name"] = str(agent_name).strip()
             if model:
                 update_fields["model"] = str(model).strip()
             if reasoning_effort:
@@ -456,6 +593,7 @@ class SessionStore:
             channel_name=channel_name,
             cli_type=cli_type,
             alias=alias,
+            agent_name=agent_name,
             session_id=sid,
             model=model,
             reasoning_effort=reasoning_effort,
@@ -494,23 +632,12 @@ class SessionStore:
                 sessions = data.get("sessions", [])
                 for i, session in enumerate(sessions):
                     if session.get("id") == session_id:
-                        next_channel_name = str(kwargs.get("channel_name") or session.get("channel_name") or "").strip()
-                        if bool(kwargs.get("is_primary")) and next_channel_name:
-                            for j, other in enumerate(sessions):
-                                if j == i or not isinstance(other, dict):
-                                    continue
-                                other_row = self._normalize_session_record(other)
-                                if (
-                                    str(other_row.get("channel_name") or "").strip() == next_channel_name
-                                    and not bool(other_row.get("is_deleted"))
-                                ):
-                                    other_row["is_primary"] = False
-                                    if str(other_row.get("session_role") or "").strip().lower() == "primary":
-                                        other_row["session_role"] = "child"
-                                    sessions[j] = other_row
+                        original_session = self._normalize_session_record(session)
+                        old_channel_name = str(original_session.get("channel_name") or "").strip()
                         # Update allowed fields
                         allowed_fields = {
                             "alias",
+                            "agent_name",
                             "status",
                             "channel_name",
                             "cli_type",
@@ -536,19 +663,73 @@ class SessionStore:
                             "deleted_at",
                             "deleted_reason",
                         }
+                        next_session = deepcopy(original_session)
                         for key, value in kwargs.items():
                             if key in allowed_fields:
-                                session[key] = deepcopy(value)
+                                next_session[key] = deepcopy(value)
 
-                        session = self._normalize_session_record(session)
-                        session = self._apply_project_context_storage_semantics(session)
-                        session["session_role"] = "primary" if bool(session.get("is_primary")) else "child"
+                        if "is_primary" not in kwargs and "session_role" in kwargs:
+                            next_session["is_primary"] = (
+                                str(kwargs.get("session_role") or "").strip().lower() == "primary"
+                            )
+
+                        next_session = self._normalize_session_record(next_session)
+                        next_session = self._apply_project_context_storage_semantics(next_session)
+                        next_session["session_role"] = "primary" if bool(next_session.get("is_primary")) else "child"
+                        next_channel_name = str(next_session.get("channel_name") or "").strip()
 
                         # Update last_used_at if not explicitly set
                         if "last_used_at" not in kwargs:
-                            session["last_used_at"] = _utc_now_iso()
+                            next_session["last_used_at"] = _utc_now_iso()
 
-                        sessions[i] = session
+                        sessions[i] = next_session
+                        if bool(next_session.get("is_primary")) and next_channel_name:
+                            for j, other in enumerate(sessions):
+                                if j == i or not isinstance(other, dict):
+                                    continue
+                                other_row = self._normalize_session_record(other)
+                                if (
+                                    str(other_row.get("channel_name") or "").strip() == next_channel_name
+                                    and not bool(other_row.get("is_deleted"))
+                                ):
+                                    other_row["is_primary"] = False
+                                    other_row["session_role"] = "child"
+                                    sessions[j] = other_row
+
+                        if (
+                            old_channel_name
+                            and old_channel_name != next_channel_name
+                            and bool(original_session.get("is_primary"))
+                        ):
+                            old_channel_candidates = [
+                                self._normalize_session_record(other)
+                                for j, other in enumerate(sessions)
+                                if j != i
+                                and isinstance(other, dict)
+                                and str(other.get("channel_name") or "").strip() == old_channel_name
+                                and session_binding_is_available(other)
+                            ]
+                            old_channel_candidates.sort(key=session_binding_sort_key, reverse=True)
+                            fallback_primary_id = (
+                                str(old_channel_candidates[0].get("id") or "").strip()
+                                if old_channel_candidates
+                                else ""
+                            )
+                            for j, other in enumerate(sessions):
+                                if j == i or not isinstance(other, dict):
+                                    continue
+                                other_row = self._normalize_session_record(other)
+                                if str(other_row.get("channel_name") or "").strip() != old_channel_name:
+                                    continue
+                                other_row["is_primary"] = (
+                                    bool(fallback_primary_id)
+                                    and str(other_row.get("id") or "").strip() == fallback_primary_id
+                                )
+                                other_row["session_role"] = (
+                                    "primary" if bool(other_row.get("is_primary")) else "child"
+                                )
+                                sessions[j] = other_row
+
                         data["sessions"] = sessions
                         self._save_project_data(data.get("project_id", ""), data)
                         try:
@@ -557,12 +738,73 @@ class SessionStore:
                             _invalidate_sessions_payload_cache(str(data.get("project_id") or path.stem))
                         except Exception:
                             pass
-                        out = self._normalize_session_record(session)
+                        out = self._normalize_session_record(next_session)
                         out["project_id"] = str(data.get("project_id") or path.stem)
                         return out
             except Exception:
                 continue
         return None
+
+    def snapshot_session_records(
+        self,
+        project_id: str,
+        *,
+        session_ids: set[str] | None = None,
+        channel_names: set[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return exact rows needed for a compensating migration rollback."""
+
+        ids = {str(item or "").strip() for item in (session_ids or set()) if str(item or "").strip()}
+        channels = {
+            str(item or "").strip()
+            for item in (channel_names or set())
+            if str(item or "").strip()
+        }
+        data = self._load_project_data(project_id)
+        return [
+            deepcopy(row)
+            for row in data.get("sessions", [])
+            if isinstance(row, dict)
+            and (
+                str(row.get("id") or "").strip() in ids
+                or str(row.get("channel_name") or "").strip() in channels
+            )
+        ]
+
+    def restore_session_records(
+        self,
+        project_id: str,
+        snapshots: list[dict[str, Any]],
+    ) -> None:
+        """Restore only snapshotted rows in one project-file write."""
+
+        snapshot_map = {
+            str(row.get("id") or "").strip(): deepcopy(row)
+            for row in snapshots
+            if isinstance(row, dict) and str(row.get("id") or "").strip()
+        }
+        if not snapshot_map:
+            return
+        data = self._load_project_data(project_id)
+        sessions = [deepcopy(row) for row in data.get("sessions", []) if isinstance(row, dict)]
+        restored_ids: set[str] = set()
+        for index, row in enumerate(sessions):
+            sid = str(row.get("id") or "").strip()
+            if sid not in snapshot_map:
+                continue
+            sessions[index] = deepcopy(snapshot_map[sid])
+            restored_ids.add(sid)
+        for sid, row in snapshot_map.items():
+            if sid not in restored_ids:
+                sessions.append(deepcopy(row))
+        data["sessions"] = sessions
+        self._save_project_data(project_id, data)
+        try:
+            from task_dashboard.runtime.session_routes import _invalidate_sessions_payload_cache
+
+            _invalidate_sessions_payload_cache(project_id)
+        except Exception:
+            pass
 
     def delete_session(self, session_id: str) -> bool:
         """
@@ -739,7 +981,7 @@ class SessionStore:
             for idx in channel_indexes:
                 session = self._normalize_session_record(sessions[idx])
                 sid = str(session.get("id") or "").strip()
-                if sid == candidate_primary and not bool(session.get("is_deleted")):
+                if sid == candidate_primary and session_binding_is_available(session):
                     effective_primary = sid
                     break
 
@@ -753,9 +995,6 @@ class SessionStore:
             if available_fallback:
                 available_fallback.sort(key=session_binding_sort_key, reverse=True)
                 effective_primary = str(available_fallback[0].get("id") or "").strip()
-            elif fallback:
-                fallback.sort(key=session_binding_sort_key, reverse=True)
-                effective_primary = str(fallback[0].get("id") or "").strip()
 
         for idx in channel_indexes:
             session = self._normalize_session_record(sessions[idx])

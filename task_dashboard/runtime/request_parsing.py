@@ -149,6 +149,11 @@ def _normalize_session_create_mode_local(value: Any) -> str:
 
 def parse_session_create_request(body: dict[str, Any]) -> dict[str, Any]:
     row = body if isinstance(body, dict) else {}
+    agent_name = _safe_text_local(
+        row.get("agent_name") if "agent_name" in row else row.get("agentName"),
+        200,
+    ).strip()
+    alias = _safe_text_local(row.get("alias"), 200).strip() or agent_name
     raw_cli_type = _safe_text_local(
         row.get("cli_type") if "cli_type" in row else row.get("cliType"),
         40,
@@ -181,18 +186,6 @@ def parse_session_create_request(body: dict[str, Any]) -> dict[str, Any]:
             else (row.get("permission_mode") if "permission_mode" in row else row.get("permissionMode"))
         )
     )
-    raw_reuse_strategy = _safe_text_local(
-        row.get("reuse_strategy") if "reuse_strategy" in row else row.get("reuseStrategy"),
-        80,
-    ).strip()
-    raw_create_timeout = row.get("create_timeout_s") if "create_timeout_s" in row else row.get("createTimeoutS")
-    try:
-        create_timeout_s = max(10, int(raw_create_timeout)) if raw_create_timeout not in (None, "") else 90
-    except Exception:
-        create_timeout_s = 90
-    has_reuse_strategy = "reuse_strategy" in row or "reuseStrategy" in row
-    if not raw_reuse_strategy and set_as_primary is True and not has_reuse_strategy:
-        raw_reuse_strategy = "create_new"
     return {
         "mode": _normalize_session_create_mode_local(
             row.get("mode") if "mode" in row else row.get("createMode")
@@ -222,7 +215,8 @@ def parse_session_create_request(body: dict[str, Any]) -> dict[str, Any]:
         if claude_permission_mode_explicit
         else "",
         "_claude_permission_mode_explicit": claude_permission_mode_explicit,
-        "alias": _safe_text_local(row.get("alias"), 200).strip(),
+        "alias": alias,
+        "agent_name": agent_name,
         "environment": _safe_text_local(
             row.get("environment") if "environment" in row else row.get("environmentName"),
             80,
@@ -237,8 +231,10 @@ def parse_session_create_request(body: dict[str, Any]) -> dict[str, Any]:
             row.get("session_role") if "session_role" in row else row.get("sessionRole")
         ),
         "purpose": _safe_text_local(row.get("purpose"), 200).strip(),
-        "reuse_strategy": raw_reuse_strategy or "reuse_active",
-        "create_timeout_s": create_timeout_s,
+        "reuse_strategy": _safe_text_local(
+            row.get("reuse_strategy") if "reuse_strategy" in row else row.get("reuseStrategy"),
+            80,
+        ).strip(),
         "set_as_primary": set_as_primary,
         "first_message": _safe_text_local(
             row.get("first_message") if "first_message" in row else row.get("firstMessage"),
@@ -252,6 +248,11 @@ def parse_session_update_fields(body: dict[str, Any]) -> dict[str, Any]:
     update_fields: dict[str, Any] = {}
     if "alias" in row:
         update_fields["alias"] = _safe_text_local(row.get("alias"), 200).strip()
+    if "agent_name" in row or "agentName" in row:
+        update_fields["agent_name"] = _safe_text_local(
+            row.get("agent_name") if "agent_name" in row else row.get("agentName"),
+            200,
+        ).strip()
     # `status` is a legacy read-only compatibility field; runtime state is
     # projected from run/session evidence instead of being updated by PUT.
     if "channel_name" in row:

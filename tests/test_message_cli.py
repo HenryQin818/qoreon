@@ -15,9 +15,9 @@ from task_dashboard.runtime.scheduler_helpers import _extract_run_extra_fields, 
 from task_dashboard.session_store import SessionStore
 
 
-SID_TARGET = "019d232f-02f1-7781-9de8-2333f2417e73"
+SID_TARGET = "019f7003-0003-7003-8003-000000000003"
 SID_TARGET_2 = "019d232f-02f1-7781-9de8-2333f2417e74"
-SID_SOURCE = "019dbd03-829b-78e1-8816-ab73c2f01071"
+SID_SOURCE = "019f700d-000d-700d-800d-00000000000d"
 
 
 class MessageCliTests(unittest.TestCase):
@@ -190,6 +190,28 @@ class MessageCliTests(unittest.TestCase):
             self.assertEqual(code, 1)
             self.assertEqual(payload["blocking_error"]["code"], "agent_ambiguous")
             self.assertEqual(len(payload["candidates"]), 2)
+
+    def test_channel_multi_active_returns_primary_governance_item(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._create_session(root, session_id=SID_TARGET, alias="主 Agent", channel_name="同通道")
+            self._create_session(root, session_id=SID_TARGET_2, alias="子 Agent", channel_name="同通道")
+            code, payload = self._run(
+                [
+                    "resolve",
+                    "--root",
+                    str(root),
+                    "--channel",
+                    "同通道",
+                ]
+            )
+
+            self.assertEqual(code, 1)
+            self.assertEqual(payload["blocking_error"]["code"], "agent_ambiguous")
+            governance_items = payload["blocking_error"].get("governance_items") or []
+            self.assertEqual(governance_items[0]["code"], "channel_primary_disambiguation_required")
+            self.assertEqual(governance_items[0]["endpoint"], "POST /api/channel-sessions/manage")
+            self.assertIn("primary_session_id", governance_items[0]["suggested_action"])
 
     def test_deleted_context_exhausted_and_project_mismatch_are_blocked(self) -> None:
         with tempfile.TemporaryDirectory() as td:

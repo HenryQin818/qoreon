@@ -54,6 +54,7 @@ class CreateCliSessionTests(unittest.TestCase):
                     "server.runtime_prepare_process_spawn",
                     return_value={"cmd": ["fake-cli", "exec"], "spawn_cwd": str(tmp_root)},
                 ),
+                mock.patch("server._find_new_session_id", return_value=("", "")),
                 mock.patch(
                     "server.subprocess.run",
                     side_effect=subprocess.TimeoutExpired(

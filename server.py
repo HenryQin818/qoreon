@@ -144,6 +144,7 @@ from task_dashboard.runtime.provider_failure import (
     apply_run_failure_classification as runtime_apply_run_failure_classification,
     classify_provider_error_text as runtime_classify_provider_error_text,
 )
+from task_dashboard.runtime.message_delivery_control import MessageDeliveryRuntime
 from task_dashboard.sender_contract import normalize_sender_fields
 
 # Import assist-request registry (extracted from server.py)
@@ -227,6 +228,7 @@ from task_dashboard.routes import (
     dispatch_get_request,
     dispatch_post_request,
     dispatch_put_request,
+    dispatch_patch_request,
     dispatch_delete_request,
     dispatch_head_request,
 )
@@ -5308,6 +5310,7 @@ class Handler(BaseHTTPRequestHandler):
             task_push_runtime=getattr(self.server, "task_push_runtime", None),  # type: ignore[attr-defined]
             task_plan_runtime=getattr(self.server, "task_plan_runtime", None),  # type: ignore[attr-defined]
             assist_request_runtime=getattr(self.server, "assist_request_runtime", None),  # type: ignore[attr-defined]
+            message_delivery_runtime=getattr(self.server, "message_delivery_runtime", None),  # type: ignore[attr-defined]
             conversation_memo_store=self._conversation_memo_store(store),
             allow_root=self.server.allow_root,  # type: ignore[attr-defined]
             # Helper functions
@@ -5741,6 +5744,21 @@ class Handler(BaseHTTPRequestHandler):
 
         _json_response(self, 404, {"error": "not found"})
 
+    def do_PATCH(self) -> None:  # noqa: N802
+        """Handle PATCH requests for partial resource updates."""
+        if self._deny_remote_share_only_request("PATCH"):
+            return
+        store: RunStore = self.server.store  # type: ignore[attr-defined]
+        session_store: SessionStore = self.server.session_store  # type: ignore[attr-defined]
+        static_root: Path = self.server.static_root  # type: ignore[attr-defined]
+        scheduler = getattr(self.server, "scheduler", None)  # type: ignore[attr-defined]
+
+        ctx = self._build_route_context(store, session_store, static_root, scheduler)
+        if dispatch_patch_request(self, ctx):
+            return
+
+        _json_response(self, 404, {"error": "not found"})
+
     def do_DELETE(self) -> None:  # noqa: N802
         """Handle DELETE requests for deleting resources."""
         if self._deny_remote_share_only_request("DELETE"):
@@ -5795,6 +5813,7 @@ def main() -> int:
     if repaired_legacy_rows:
         print(f"[runstore] repaired legacy/hot meta drift: {len(repaired_legacy_rows)}")
     conversation_memo_store = ConversationMemoStore(base_dir=runs_dir.parent / ".run" / "conversation-memos")
+    message_delivery_runtime = MessageDeliveryRuntime.for_store(store)
     repo_root = Path(__file__).resolve().parent
     environment_name = str(args.environment_name or "stable").strip() or "stable"
     cfg = _load_dashboard_cfg_current()
@@ -5831,6 +5850,7 @@ def main() -> int:
     httpd.worktree_root = Path(__file__).resolve().parent  # type: ignore[attr-defined]
     httpd.store = store  # type: ignore[attr-defined]
     httpd.conversation_memo_store = conversation_memo_store  # type: ignore[attr-defined]
+    httpd.message_delivery_runtime = message_delivery_runtime  # type: ignore[attr-defined]
     httpd.session_store = session_store  # type: ignore[attr-defined]
     httpd.sessions_file = session_store.sessions_dir / f"{current_project_id or 'task_dashboard'}.json"  # type: ignore[attr-defined]
     httpd.session_binding_store = session_binding_store  # type: ignore[attr-defined]

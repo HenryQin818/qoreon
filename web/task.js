@@ -1844,7 +1844,7 @@
       }
     }
 
-    async function sendNewConversationInitMessage(projectId, channelName, sessionId, cliType, message, model = "") {
+    async function sendNewConversationInitMessage(projectId, channelName, sessionId, cliType, message, model = "", reasoningEffort = "") {
       try {
         const r = await fetch("/api/codex/announce", {
           method: "POST",
@@ -1855,6 +1855,7 @@
             sessionId,
             cliType: cliType || "codex",
             model: normalizeSessionModel(model),
+            ...(normalizeReasoningEffort(reasoningEffort) ? { reasoning_effort: normalizeReasoningEffort(reasoningEffort) } : {}),
             message,
             ...buildUiUserSenderFields(),
           }),

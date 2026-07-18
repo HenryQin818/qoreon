@@ -422,7 +422,7 @@ class SessionRuntimeStateApiTests(unittest.TestCase):
             httpd, store, session_store = self._start_server(base)
             pid = "task_dashboard"
             channel_name = "子级03-多CLI适配器（codex-claude-opencode）"
-            healthy_sid = "019d10a7-3237-7543-816b-2320beabfff3"
+            healthy_sid = "019f7002-0002-7002-8002-000000000002"
             blocked_sid = "019d10a7-3237-7543-816b-2320beabfff4"
             session_store.create_session(pid, channel_name, cli_type="claude", session_id=healthy_sid)
             session_store.create_session(pid, channel_name, cli_type="claude", session_id=blocked_sid)
@@ -2070,6 +2070,8 @@ class SessionRuntimeStateApiTests(unittest.TestCase):
                                 "project_id": pid,
                                 "channel_name": channel_name,
                                 "cli_type": "codex",
+                                "alias": "CCB运行时-新主会话",
+                                "agent_name": "CCB运行时-新主会话",
                                 "environment": "refactor",
                                 "worktree_root": str(custom_root),
                                 "workdir": str(workdir_b),
@@ -2403,7 +2405,7 @@ class SessionRuntimeStateApiTests(unittest.TestCase):
             pid = "task_dashboard"
             channel_name = "辅助05-督办PMO（排期-巡查-催办-升级）"
             sid1 = "019ca897-461e-7d11-b077-819b27128de8"
-            sid2 = "019d9a93-f1c1-77e2-a613-e1e793d6a11a"
+            sid2 = "019f700b-000b-700b-800b-00000000000b"
             session_store.create_session(
                 pid,
                 channel_name,

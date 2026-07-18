@@ -207,7 +207,7 @@ class PrepareProcessSpawnTests(unittest.TestCase):
     def test_claude_adapter_resolve_session_cwd_reads_jsonl_metadata(self) -> None:
         with tempfile.TemporaryDirectory(prefix="td-claude-home-") as home_td:
             with tempfile.TemporaryDirectory(prefix="td-claude-cwd-") as cwd_td:
-                session_id = "75213c43-c884-4a42-903c-c4961927a2da"
+                session_id = "019f700e-000e-700e-800e-00000000000e"
                 session_dir = Path(home_td) / "projects" / "encoded-cwd"
                 session_dir.mkdir(parents=True, exist_ok=True)
                 session_file = session_dir / f"{session_id}.jsonl"
@@ -223,7 +223,7 @@ class PrepareProcessSpawnTests(unittest.TestCase):
     def test_prepare_process_spawn_uses_claude_session_cwd_for_resume(self) -> None:
         with tempfile.TemporaryDirectory(prefix="td-requested-") as requested_td:
             with tempfile.TemporaryDirectory(prefix="td-claude-session-") as session_td:
-                session_id = "75213c43-c884-4a42-903c-c4961927a2da"
+                session_id = "019f700e-000e-700e-800e-00000000000e"
                 with patch.object(ClaudeAdapter, "resolve_session_cwd", return_value=session_td):
                     result = prepare_process_spawn(
                         cli_type="claude",
@@ -238,7 +238,7 @@ class PrepareProcessSpawnTests(unittest.TestCase):
     def test_prepare_process_spawn_uses_claude_session_cwd_for_short_resume_flag(self) -> None:
         with tempfile.TemporaryDirectory(prefix="td-requested-") as requested_td:
             with tempfile.TemporaryDirectory(prefix="td-claude-session-") as session_td:
-                session_id = "75213c43-c884-4a42-903c-c4961927a2da"
+                session_id = "019f700e-000e-700e-800e-00000000000e"
                 with patch.object(ClaudeAdapter, "resolve_session_cwd", return_value=session_td):
                     result = prepare_process_spawn(
                         cli_type="claude",
@@ -251,7 +251,7 @@ class PrepareProcessSpawnTests(unittest.TestCase):
 
     def test_prepare_process_spawn_falls_back_when_claude_session_cwd_missing(self) -> None:
         with tempfile.TemporaryDirectory(prefix="td-requested-") as requested_td:
-            session_id = "75213c43-c884-4a42-903c-c4961927a2da"
+            session_id = "019f700e-000e-700e-800e-00000000000e"
             with patch.object(ClaudeAdapter, "resolve_session_cwd", return_value=""):
                 result = prepare_process_spawn(
                     cli_type="claude",
@@ -484,7 +484,7 @@ class PrepareProcessSpawnTests(unittest.TestCase):
     def test_prepare_process_spawn_adds_project_pythonpath_for_claude_runner_session_cwd(self) -> None:
         with tempfile.TemporaryDirectory(prefix="td-requested-") as requested_td:
             with tempfile.TemporaryDirectory(prefix="td-claude-session-") as session_td:
-                session_id = "75213c43-c884-4a42-903c-c4961927a2da"
+                session_id = "019f700e-000e-700e-800e-00000000000e"
                 with patch.dict("os.environ", {"PATH": "/usr/bin"}, clear=True):
                     with patch.object(ClaudeAdapter, "resolve_session_cwd", return_value=session_td):
                         result = prepare_process_spawn(
