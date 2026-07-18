@@ -76,7 +76,7 @@ class AnnounceMessageConsistencyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)
             httpd, run_store, session_store = self._start_server(base)
-            sid = "019d232f-02f1-7781-9de8-2333f2417e73"
+            sid = "019f7003-0003-7003-8003-000000000003"
             self._create_bound_session(session_store, sid)
             t = threading.Thread(target=httpd.serve_forever, daemon=True)
             t.start()
@@ -102,15 +102,15 @@ class AnnounceMessageConsistencyTests(unittest.TestCase):
                             "source_ref": {
                                 "project_id": "task_dashboard",
                                 "channel_name": "子级02-CCB运行时（server-并发-安全-启动）",
-                                "session_id": "019d3d63-057a-7620-8f04-730f3488d0a5",
+                                "session_id": "019f7006-0006-7006-8006-000000000006",
                             },
                             "callback_to": {
                                 "channel_name": "子级02-CCB运行时（server-并发-安全-启动）",
-                                "session_id": "019d3d63-057a-7620-8f04-730f3488d0a5",
+                                "session_id": "019f7006-0006-7006-8006-000000000006",
                             },
                             "sender_agent_ref": {
                                 "agent_name": "服务开发-通讯能力",
-                                "session_id": "019d3d63-057a-7620-8f04-730f3488d0a5",
+                                "session_id": "019f7006-0006-7006-8006-000000000006",
                                 "alias": "服务开发-通讯能力",
                             },
                         },

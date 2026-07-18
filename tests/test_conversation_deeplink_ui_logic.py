@@ -310,7 +310,7 @@ class ConversationDeepLinkUiLogicTests(unittest.TestCase):
             global.STATE = {
               project: "task_dashboard",
               panelMode: "conv",
-              selectedSessionId: "019d684a-cbb6-7eb3-b95b-7ec9c30ecfd3",
+              selectedSessionId: "019f7007-0007-7007-8007-000000000007",
               selectedSessionExplicit: true,
             };
             global.PCONV = {
@@ -322,17 +322,17 @@ class ConversationDeepLinkUiLogicTests(unittest.TestCase):
             };
 
             const sessions = [{
-              sessionId: "019d684a-cbb6-7eb3-b95b-7ec9c30ecfd3",
+              sessionId: "019f7007-0007-7007-8007-000000000007",
               source: "live",
             }];
 
             assert.equal(shouldDeferConversationTaskCountWarmup("task_dashboard", sessions), true);
 
-            PCONV.timelineLoadingKey = "task_dashboard::019d684a-cbb6-7eb3-b95b-7ec9c30ecfd3";
+            PCONV.timelineLoadingKey = "task_dashboard::019f7007-0007-7007-8007-000000000007";
             assert.equal(shouldDeferConversationTaskCountWarmup("task_dashboard", sessions), true);
 
             PCONV.timelineLoadingKey = "";
-            PCONV.sessionTimelineMap["task_dashboard::019d684a-cbb6-7eb3-b95b-7ec9c30ecfd3"] = [];
+            PCONV.sessionTimelineMap["task_dashboard::019f7007-0007-7007-8007-000000000007"] = [];
             assert.equal(shouldDeferConversationTaskCountWarmup("task_dashboard", sessions), false);
             """
         )

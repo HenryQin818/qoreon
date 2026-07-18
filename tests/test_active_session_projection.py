@@ -7,7 +7,7 @@ class ActiveSessionProjectionTests(unittest.TestCase):
     def test_projection_merges_session_summary_history_and_memos(self) -> None:
         payload = build_active_session_projection(
             project_id="task_dashboard",
-            session_id="019d684a-cbb6-7eb3-b95b-7ec9c30ecfd3",
+            session_id="019f7007-0007-7007-8007-000000000007",
             session_detail={
                 "session_display_state": "done",
                 "session_display_reason": "latest_run_summary:done",

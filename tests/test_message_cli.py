@@ -15,9 +15,9 @@ from task_dashboard.runtime.scheduler_helpers import _extract_run_extra_fields, 
 from task_dashboard.session_store import SessionStore
 
 
-SID_TARGET = "019d232f-02f1-7781-9de8-2333f2417e73"
+SID_TARGET = "019f7003-0003-7003-8003-000000000003"
 SID_TARGET_2 = "019d232f-02f1-7781-9de8-2333f2417e74"
-SID_SOURCE = "019dbd03-829b-78e1-8816-ab73c2f01071"
+SID_SOURCE = "019f700d-000d-700d-800d-00000000000d"
 
 
 class MessageCliTests(unittest.TestCase):

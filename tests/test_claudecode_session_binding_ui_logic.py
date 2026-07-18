@@ -143,7 +143,7 @@ class ClaudeCodeSessionBindingUiLogicTests(unittest.TestCase):
                 run_id: "20260611-err",
                 outcome_state: "failed_config",
                 error_class: "session_binding",
-                preview: "error: No conversation found with session ID: 75213c43-c884-4a42-903c-c4961927a2da",
+                preview: "error: No conversation found with session ID: 019f700e-000e-700e-800e-00000000000e",
               },
             };
             const meta = conversationSessionBindingBlockMeta(blocked);

@@ -391,7 +391,7 @@ class SessionBootstrapUiLogicTests(unittest.TestCase):
                 resp: { ok: true },
                 json: {
                   session: {
-                    id: "019d8568-f955-7d10-8b9d-af9a421cc307",
+                    id: "019f7009-0009-7009-8009-000000000009",
                     cli_type: payload.cli_type,
                   },
                 },
@@ -581,7 +581,7 @@ class SessionBootstrapUiLogicTests(unittest.TestCase):
                   resp: { ok: true },
                   json: {
                     session: {
-                      id: "019d8568-f955-7d10-8b9d-af9a421cc307",
+                      id: "019f7009-0009-7009-8009-000000000009",
                       cli_type: payload.cli_type,
                     },
                   },

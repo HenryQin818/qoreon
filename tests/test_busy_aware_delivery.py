@@ -19,8 +19,8 @@ from task_dashboard.runtime.message_delivery_control import MessageDeliveryRunti
 
 PROJECT_ID = "task_dashboard"
 CHANNEL = "目标通道"
-TARGET_SESSION = "019d232f-02f1-7781-9de8-2333f2417e73"
-SOURCE_SESSION = "019dbd03-829b-78e1-8816-ab73c2f01071"
+TARGET_SESSION = "019f7003-0003-7003-8003-000000000003"
+SOURCE_SESSION = "019f700d-000d-700d-800d-00000000000d"
 
 
 class _CountingScheduler:

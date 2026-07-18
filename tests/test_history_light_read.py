@@ -5,7 +5,7 @@ from task_dashboard.runtime.history_light_read import history_light_read_respons
 
 class _FakeSessionStore:
     def get_session(self, session_id: str, *, project_id: str = ""):
-        if session_id != "019d684a-cbb6-7eb3-b95b-7ec9c30ecfd3":
+        if session_id != "019f7007-0007-7007-8007-000000000007":
             return None
         return {"id": session_id, "project_id": project_id or "task_dashboard"}
 
@@ -49,7 +49,7 @@ class HistoryLightReadTests(unittest.TestCase):
         store = _FakeRunStore()
         code, payload = history_light_read_response(
             query_string="project_id=task_dashboard&limit=5",
-            session_id="019d684a-cbb6-7eb3-b95b-7ec9c30ecfd3",
+            session_id="019f7007-0007-7007-8007-000000000007",
             session_store=_FakeSessionStore(),
             store=store,
             infer_project_id_for_session=lambda _store, _sid: "task_dashboard",
