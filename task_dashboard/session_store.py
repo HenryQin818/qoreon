@@ -33,12 +33,17 @@ import time
 import uuid
 from copy import deepcopy
 from datetime import datetime, timezone
+from functools import wraps
 from pathlib import Path
 from typing import Any, Optional
 
-from task_dashboard.claude_models import normalize_claude_model
+from task_dashboard.claude_models import (
+    normalize_claude_model,
+    normalize_claude_model_for_storage_read,
+)
 from task_dashboard.claude_permissions import normalize_claude_permission_mode
 from task_dashboard.codebuddy_permissions import normalize_codebuddy_permission_mode
+from task_dashboard.runtime.claude_model_migration import claude_model_migration_lock
 from task_dashboard.runtime.project_execution_context import (
     build_context_override_values,
     normalize_project_execution_context,
@@ -70,6 +75,17 @@ def _normalize_reasoning_effort_value(value: Any) -> str:
     if txt in {"low", "medium", "high", "extra_high"}:
         return txt
     return ""
+
+
+def _session_store_write_locked(method):
+    """Hold the migration shared lock across a SessionStore read-modify-write."""
+
+    @wraps(method)
+    def wrapped(self, *args, **kwargs):
+        with claude_model_migration_lock(self.base_dir, exclusive=False, timeout_s=30.0):
+            return method(self, *args, **kwargs)
+
+    return wrapped
 
 
 def session_context_is_exhausted(session: Any) -> bool:
@@ -131,6 +147,7 @@ class SessionStore:
         safe_id = project_id.replace("/", "_").replace("\\", "_").replace("..", "_")
         return self.sessions_dir / f"{safe_id}.json"
 
+    @_session_store_write_locked
     def _load_project_data(self, project_id: str) -> dict[str, Any]:
         """Load project session data from file, return empty structure if not exists."""
         path = self._project_path(project_id)
@@ -152,6 +169,7 @@ class SessionStore:
         except (json.JSONDecodeError, Exception):
             return {"project_id": project_id, "sessions": []}
 
+    @_session_store_write_locked
     def _save_project_data(self, project_id: str, data: dict[str, Any]) -> None:
         """Save project session data to file atomically."""
         path = self._project_path(project_id)
@@ -193,7 +211,12 @@ class SessionStore:
         out["sessions"] = normalized_sessions
         return out, changed
 
-    def _normalize_session_record(self, session: dict[str, Any]) -> dict[str, Any]:
+    def _normalize_session_record(
+        self,
+        session: dict[str, Any],
+        *,
+        canonicalize_claude_model: bool = False,
+    ) -> dict[str, Any]:
         """Normalize additive session fields for backward compatibility."""
         out = deepcopy(session if isinstance(session, dict) else {})
         out["status"] = str(out.get("status") or "").strip() or "active"
@@ -226,7 +249,11 @@ class SessionStore:
         raw_claude_permission_mode = str(out.get("claude_permission_mode") or "").strip()
         cli_type = str(out.get("cli_type") or "codex").strip().lower()
         out["model"] = (
-            normalize_claude_model(out.get("model"))
+            (
+                normalize_claude_model(out.get("model"))
+                if canonicalize_claude_model
+                else normalize_claude_model_for_storage_read(out.get("model"))
+            )
             if cli_type == "claude"
             else str(out.get("model") or "").strip()
         )
@@ -238,8 +265,16 @@ class SessionStore:
             out.pop("claude_permission_mode", None)
         return self._apply_project_context_storage_semantics_to_normalized(out)
 
-    def _apply_project_context_storage_semantics(self, session: dict[str, Any]) -> dict[str, Any]:
-        return self._normalize_session_record(session)
+    def _apply_project_context_storage_semantics(
+        self,
+        session: dict[str, Any],
+        *,
+        canonicalize_claude_model: bool = False,
+    ) -> dict[str, Any]:
+        return self._normalize_session_record(
+            session,
+            canonicalize_claude_model=canonicalize_claude_model,
+        )
 
     def list_sessions(
         self,
@@ -293,6 +328,7 @@ class SessionStore:
                 continue
         return None
 
+    @_session_store_write_locked
     def create_session(
         self,
         project_id: str,
@@ -370,7 +406,10 @@ class SessionStore:
             "created_at": now,
             "last_used_at": now,
         }
-        session = self._apply_project_context_storage_semantics(session)
+        session = self._apply_project_context_storage_semantics(
+            session,
+            canonicalize_claude_model=True,
+        )
 
         data = self._load_project_data(project_id)
         if bool(effective_primary):
@@ -397,6 +436,7 @@ class SessionStore:
 
         return session
 
+    @_session_store_write_locked
     def rotate_session(
         self,
         project_id: str,
@@ -463,7 +503,10 @@ class SessionStore:
             "created_at": now,
             "last_used_at": now,
         }
-        session = self._apply_project_context_storage_semantics(session)
+        session = self._apply_project_context_storage_semantics(
+            session,
+            canonicalize_claude_model=True,
+        )
 
         data = self._load_project_data(project_id)
         next_sessions: list[dict[str, Any]] = []
@@ -499,6 +542,7 @@ class SessionStore:
         out["project_id"] = project_id
         return out
 
+    @_session_store_write_locked
     def attach_existing_session(
         self,
         project_id: str,
@@ -614,6 +658,7 @@ class SessionStore:
         )
         return created, True
 
+    @_session_store_write_locked
     def update_session(self, session_id: str, **kwargs) -> dict[str, Any] | None:
         """
         Update session attributes.
@@ -673,8 +718,15 @@ class SessionStore:
                                 str(kwargs.get("session_role") or "").strip().lower() == "primary"
                             )
 
-                        next_session = self._normalize_session_record(next_session)
-                        next_session = self._apply_project_context_storage_semantics(next_session)
+                        explicit_model_write = "model" in kwargs
+                        next_session = self._normalize_session_record(
+                            next_session,
+                            canonicalize_claude_model=explicit_model_write,
+                        )
+                        next_session = self._apply_project_context_storage_semantics(
+                            next_session,
+                            canonicalize_claude_model=explicit_model_write,
+                        )
                         next_session["session_role"] = "primary" if bool(next_session.get("is_primary")) else "child"
                         next_channel_name = str(next_session.get("channel_name") or "").strip()
 
@@ -771,6 +823,7 @@ class SessionStore:
             )
         ]
 
+    @_session_store_write_locked
     def restore_session_records(
         self,
         project_id: str,
@@ -806,6 +859,7 @@ class SessionStore:
         except Exception:
             pass
 
+    @_session_store_write_locked
     def delete_session(self, session_id: str) -> bool:
         """
         Soft-delete a session by its ID.
@@ -914,6 +968,7 @@ class SessionStore:
         available_sessions.sort(key=session_binding_sort_key, reverse=True)
         return available_sessions[0]
 
+    @_session_store_write_locked
     def manage_channel_sessions(
         self,
         project_id: str,

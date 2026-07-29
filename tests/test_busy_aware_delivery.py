@@ -196,6 +196,44 @@ class BusyAwareDeliveryTests(unittest.TestCase):
             self.assertIn("source_ref.session_id", body1["blocking_error"]["message"])
             self.assertEqual(0, len(scheduler.enqueued))
 
+    def test_auto_browser_mode_persists_single_collab_backend_meta(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            httpd, run_store, session_store, scheduler = self._start_server(base)
+            self._create_target_session(session_store)
+            thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+            thread.start()
+            port = int(httpd.server_address[1])
+            payload = self._base_payload(mode="dialog_now", source_ref=None)
+            payload["browser_mode"] = "auto"
+            try:
+                with mock.patch.dict(
+                    "os.environ",
+                    {
+                        "TASK_DASHBOARD_TOKEN": "test-token",
+                        "TASK_DASHBOARD_CODEX_PLAYWRIGHT_MCP": "1",
+                        "TASK_DASHBOARD_CODEX_BROWSER_PLUGIN": "0",
+                    },
+                    clear=False,
+                ):
+                    status_ok, body_ok = self._post(port, payload)
+            finally:
+                httpd.shutdown()
+                thread.join(timeout=2)
+                httpd.server_close()
+
+            self.assertEqual(200, status_ok)
+            run = body_ok.get("run") or {}
+            self.assertEqual("auto", run.get("browser_mode"))
+            self.assertEqual("collab", run.get("browser_effective_mode"))
+            self.assertEqual("stdio", run.get("browser_transport"))
+            self.assertEqual("playwright", run.get("browser_backend"))
+            self.assertEqual(["playwright"], run.get("browser_available_backends"))
+            self.assertEqual("project", run.get("browser_profile_scope"))
+            self.assertTrue(run.get("browser_persistent"))
+            self.assertTrue(run.get("browser_headed"))
+            self.assertEqual(1, len(scheduler.enqueued))
+
     def test_expired_busy_confirm_window_rebounces_without_enqueue(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)

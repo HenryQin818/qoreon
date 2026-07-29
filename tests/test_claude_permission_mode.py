@@ -57,7 +57,7 @@ class ClaudePermissionModeTests(unittest.TestCase):
             {"cliType": "claude", "permissionMode": "acceptEdits", "model": "辅助04-原型设计"}
         )
         self.assertEqual(sanitized.get("claude_permission_mode"), "acceptEdits")
-        self.assertEqual(sanitized.get("model"), "claude-opus-4-8")
+        self.assertEqual(sanitized.get("model"), "claude-opus-5")
         self.assertNotIn("codebuddy_permission_mode", sanitized)
 
     def test_parse_session_create_request_tracks_claude_permission_explicitness(self) -> None:
@@ -156,12 +156,12 @@ class ClaudePermissionModeTests(unittest.TestCase):
 
             meta = store.load_meta(str(run.get("id"))) or {}
             self.assertEqual(meta.get("claude_permission_mode"), "plan")
-            self.assertEqual(meta.get("model"), "claude-opus-4-8")
+            self.assertEqual(meta.get("model"), "claude-opus-5")
             self.assertEqual(_FakeProc.seen_env.get("TASK_DASHBOARD_CLAUDE_PERMISSION_MODE"), "plan")
             self.assertIn("--permission-mode", _FakeProc.seen_cmd)
             self.assertEqual(_FakeProc.seen_cmd[_FakeProc.seen_cmd.index("--permission-mode") + 1], "plan")
             self.assertIn("--model", _FakeProc.seen_cmd)
-            self.assertEqual(_FakeProc.seen_cmd[_FakeProc.seen_cmd.index("--model") + 1], "claude-opus-4-8")
+            self.assertEqual(_FakeProc.seen_cmd[_FakeProc.seen_cmd.index("--model") + 1], "claude-opus-5")
 
 
 if __name__ == "__main__":

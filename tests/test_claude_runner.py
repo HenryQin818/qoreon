@@ -32,27 +32,28 @@ class ClaudeRunnerTests(unittest.TestCase):
         self.assertIn("--resume", cmd)
         self.assertEqual(cmd[cmd.index("--resume") + 1], "claude-session-001")
         self.assertIn("--model", cmd)
-        self.assertEqual(cmd[cmd.index("--model") + 1], "claude-opus-4-8")
+        self.assertEqual(cmd[cmd.index("--model") + 1], "claude-opus-5")
         self.assertIn("--dangerously-skip-permissions", cmd)
 
     def test_build_command_normalizes_current_full_ids_and_aliases(self) -> None:
         supported_values = {
             "claude-fable-5": "claude-fable-5",
-            "claude-opus-4-8": "claude-opus-4-8",
+            "claude-opus-5": "claude-opus-5",
+            "claude-opus-4-8": "claude-opus-5",
             "claude-sonnet-4-6": "claude-sonnet-4-6",
             "claude-haiku-4-5": "claude-haiku-4-5",
-            "default": "claude-opus-4-8",
+            "default": "claude-opus-5",
             "fable": "claude-fable-5",
             "fable5": "claude-fable-5",
             "fable-5": "claude-fable-5",
             "claude-fable": "claude-fable-5",
             "sonnet": "claude-sonnet-4-6",
-            "opus": "claude-opus-4-8",
+            "opus": "claude-opus-5",
             "haiku": "claude-haiku-4-5",
-            "best": "claude-opus-4-8",
-            "opusplan": "claude-opus-4-8",
+            "best": "claude-opus-5",
+            "opusplan": "claude-opus-5",
             "claude-sonnet-4-20250514": "claude-sonnet-4-6",
-            "not-a-real-model": "claude-opus-4-8",
+            "not-a-real-model": "claude-opus-5",
         }
 
         for model, expected in supported_values.items():

@@ -52,6 +52,12 @@ from task_dashboard.runtime.network_recovery import (
 from task_dashboard.runtime.provider_failure import (
     apply_run_failure_classification as runtime_apply_run_failure_classification,
 )
+from task_dashboard.runtime.process_control import (
+    mark_process_group as runtime_mark_process_group,
+    process_group_spawn_kwargs as runtime_process_group_spawn_kwargs,
+    run_process_in_group as runtime_run_process_in_group,
+    terminate_process_tree as runtime_terminate_process_tree,
+)
 from task_dashboard.runtime.restart_recovery import (
     bootstrap_stale_queued_runs as runtime_bootstrap_stale_queued_runs,
     bootstrap_queued_runs as runtime_bootstrap_queued_runs,
@@ -1148,6 +1154,12 @@ def run_cli_exec(
             else ""
         ),
         attachments=runtime_image_attachments,
+        browser_mode=str(
+            meta.get("browser_effective_mode")
+            or meta.get("browser_mode")
+            or "auto"
+        ),
+        project_id=project_id,
     )
     base_cmd = list(command_bundle.get("base_cmd") or [])
     cmd = list(command_bundle.get("cmd") or [])
@@ -1228,7 +1240,9 @@ def run_cli_exec(
                 text=True,
                 bufsize=1,
                 env=spawn_env,
+                **runtime_process_group_spawn_kwargs(),
             )
+            runtime_mark_process_group(proc)
             if str(cli_type or "").strip().lower() == "codex":
                 meta["actual_cli_invoked"] = True
                 meta["deterministic_fallback_used"] = False
@@ -1587,7 +1601,7 @@ def run_cli_exec(
                                 logf.write(f"$ {' '.join(retry_base_cmd)}\n\n")
                                 logf.flush()
                             try:
-                                retry = subprocess.run(
+                                retry = runtime_run_process_in_group(
                                     retry_base_cmd,
                                     cwd=str(spawn_cwd),
                                     capture_output=True,
@@ -1642,7 +1656,7 @@ def run_cli_exec(
                                     if delay_s > 0:
                                         time.sleep(delay_s)
                                     try:
-                                        retry = subprocess.run(
+                                        retry = runtime_run_process_in_group(
                                             spawn_cmd,
                                             cwd=str(spawn_cwd),
                                             capture_output=True,
@@ -1752,6 +1766,9 @@ def run_cli_exec(
                             meta["error"] = ""
                             meta.pop("errorType", None)
             finally:
+                # Codex normally closes its MCP servers itself. Enforce cleanup
+                # for Playwright/Chrome descendants on success, error or cancel.
+                runtime_terminate_process_tree(proc, graceful=True, sleep_s=0.05)
                 registry.unregister(run_id)
     except Exception as exc:
         meta["status"] = "error"

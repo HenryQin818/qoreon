@@ -173,11 +173,21 @@ class SessionCreateV2Tests(unittest.TestCase):
                 "model": "deepseek-v4-pro",
             }
         )
+        inherited_payload = parse_session_create_request(
+            {
+                "project_id": "task_dashboard",
+                "channel_name": "子级02",
+                "cliType": "claude",
+            }
+        )
 
         self.assertEqual(legacy_payload["model"], "claude-sonnet-4-6")
-        self.assertEqual(invalid_payload["model"], "claude-opus-4-8")
+        self.assertEqual(invalid_payload["model"], "claude-opus-5")
         self.assertEqual(fable_payload["model"], "claude-fable-5")
         self.assertEqual(non_claude_payload["model"], "deepseek-v4-pro")
+        self.assertIs(legacy_payload["_model_explicit"], True)
+        self.assertEqual(inherited_payload["model"], "claude-opus-5")
+        self.assertIs(inherited_payload["_model_explicit"], False)
 
     def test_parse_session_update_fields_normalizes_claude_model_when_cli_type_present(self) -> None:
         fields = parse_session_update_fields(
@@ -200,11 +210,11 @@ class SessionCreateV2Tests(unittest.TestCase):
                 cli_type="claude",
                 model="claude-opus-4-20250514",
             )
-            self.assertEqual(created.get("model"), "claude-opus-4-8")
+            self.assertEqual(created.get("model"), "claude-opus-5")
 
             updated = store.update_session(str(created.get("id") or ""), model="辅助04-原型设计")
 
-            self.assertEqual((updated or {}).get("model"), "claude-opus-4-8")
+            self.assertEqual((updated or {}).get("model"), "claude-opus-5")
 
     def test_create_session_response_preserves_copy_reuse_strategy(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -594,6 +604,54 @@ class SessionCreateV2Tests(unittest.TestCase):
             self.assertEqual(session.get("created_via"), "api.create_session_v2.reuse")
             self.assertEqual(session.get("context_binding_state"), "bound")
 
+    def test_reuse_active_claude_session_inherits_existing_model_when_omitted(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            workdir = base / "wt"
+            workdir.mkdir()
+            store = server.SessionStore(base)
+            existing = store.create_session(
+                "task_dashboard",
+                "子级02",
+                cli_type="claude",
+                session_id="019c0000-0000-7000-8000-00000000005a",
+                alias="Claude Fable",
+                model="claude-fable-5",
+                environment="refactor",
+                worktree_root=str(workdir),
+                workdir=str(workdir),
+                is_primary=True,
+            )
+            payload = parse_session_create_request(
+                {
+                    "project_id": "task_dashboard",
+                    "channel_name": "子级02",
+                    "cli_type": "claude",
+                    "reuse_strategy": "reuse_active",
+                }
+            )
+
+            result = create_session_response(
+                payload=payload,
+                session_store=store,
+                environment_name="refactor",
+                worktree_root=str(workdir),
+                create_cli_session=lambda **_kwargs: self.fail("reuse_active 不应创建新 CLI 会话"),
+                resolve_project_workdir=lambda _pid: workdir,
+                detect_git_branch=lambda _root: "main",
+                build_session_seed_prompt=lambda **_kwargs: "seed",
+                decorate_session_display_fields=lambda row: row,
+                apply_session_work_context=lambda row, **_kwargs: row,
+                load_project_execution_context=lambda *_args, **_kwargs: {"profile": "project_privileged_full"},
+                project_exists=lambda _pid: True,
+                channel_exists=lambda _pid, _channel: True,
+            )
+
+            self.assertTrue(bool(result.get("reused")))
+            self.assertEqual((result.get("session") or {}).get("id"), existing["id"])
+            self.assertEqual((result.get("session") or {}).get("model"), "claude-fable-5")
+            self.assertEqual((store.get_session(existing["id"]) or {}).get("model"), "claude-fable-5")
+
     def test_create_session_response_reuse_active_preserves_codebuddy_permission_when_missing(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)
@@ -957,6 +1015,58 @@ class SessionCreateV2Tests(unittest.TestCase):
             self.assertEqual((stored_ctx.get("target") or {}).get("workdir"), str(stable_workdir))
             self.assertEqual((stored_ctx.get("source") or {}).get("worktree_root"), str(stable_root))
             self.assertFalse(bool((stored_ctx.get("override") or {}).get("applied")))
+
+    def test_attach_existing_claude_session_inherits_existing_model_when_omitted(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            workdir = base / "wt"
+            workdir.mkdir()
+            store = server.SessionStore(base)
+            sid = "019c0000-0000-7000-8000-00000000005b"
+            store.create_session(
+                "task_dashboard",
+                "子级02",
+                cli_type="claude",
+                session_id=sid,
+                alias="Claude Sonnet",
+                model="claude-sonnet-4-6",
+                environment="refactor",
+                worktree_root=str(workdir),
+                workdir=str(workdir),
+            )
+            payload = parse_session_create_request(
+                {
+                    "project_id": "task_dashboard",
+                    "channel_name": "子级02",
+                    "cli_type": "claude",
+                    "mode": "attach_existing",
+                    "session_id": sid,
+                }
+            )
+
+            with mock.patch(
+                "task_dashboard.runtime.session_admin._cli_session_exists_for_attach",
+                return_value=True,
+            ):
+                result = create_session_response(
+                    payload=payload,
+                    session_store=store,
+                    environment_name="refactor",
+                    worktree_root=str(workdir),
+                    create_cli_session=lambda **_kwargs: self.fail("attach_existing 不应创建新 CLI 会话"),
+                    resolve_project_workdir=lambda _pid: workdir,
+                    detect_git_branch=lambda _root: "main",
+                    build_session_seed_prompt=lambda **_kwargs: "seed",
+                    decorate_session_display_fields=lambda row: row,
+                    apply_session_work_context=lambda row, **_kwargs: row,
+                    load_project_execution_context=lambda *_args, **_kwargs: {"profile": "project_privileged_full"},
+                    project_exists=lambda _pid: True,
+                    channel_exists=lambda _pid, _channel: True,
+                )
+
+            self.assertTrue(bool(result.get("attached")))
+            self.assertEqual((result.get("session") or {}).get("model"), "claude-sonnet-4-6")
+            self.assertEqual((store.get_session(sid) or {}).get("model"), "claude-sonnet-4-6")
 
     def test_attach_existing_session_accepts_opencode_session_id(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -1414,6 +1524,41 @@ class SessionCreateV2Tests(unittest.TestCase):
                 cleared = session_store.get_session(session_id) or {}
                 self.assertEqual(cleared.get("model"), "")
                 self.assertEqual(cleared.get("reasoning_effort"), "")
+            finally:
+                httpd.shutdown()
+                t.join(timeout=2)
+                httpd.server_close()
+
+    def test_put_api_sessions_echoes_canonical_claude_opus5_model(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            httpd, session_store = self._start_server(base)
+            session_id = "019c0000-0000-7000-8000-000000000042"
+            session_store.create_session(
+                "task_dashboard",
+                "子级02",
+                session_id=session_id,
+                alias="Claude 模型切换",
+                cli_type="claude",
+                model="claude-fable-5",
+                environment="refactor",
+            )
+            t = threading.Thread(target=httpd.serve_forever, daemon=True)
+            t.start()
+            port = int(httpd.server_address[1])
+            try:
+                for requested_model in ("claude-opus-4-8", "not-a-real-model"):
+                    req = url_request.Request(
+                        f"http://127.0.0.1:{port}/api/sessions/{session_id}",
+                        data=json.dumps({"model": requested_model}).encode("utf-8"),
+                        headers={"Content-Type": "application/json"},
+                        method="PUT",
+                    )
+                    with url_request.urlopen(req, timeout=3) as resp:
+                        self.assertEqual(resp.status, 200)
+                        body = json.loads(resp.read().decode("utf-8"))
+                    self.assertEqual((body.get("session") or {}).get("model"), "claude-opus-5")
+                    self.assertEqual((session_store.get_session(session_id) or {}).get("model"), "claude-opus-5")
             finally:
                 httpd.shutdown()
                 t.join(timeout=2)

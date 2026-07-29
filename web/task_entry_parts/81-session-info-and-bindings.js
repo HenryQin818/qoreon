@@ -319,10 +319,23 @@
       if (cliSelect && cur && cur.cli_type) cliSelect.value = String(cur.cli_type || "codex");
       if (modelInput) {
         const cliType = String((cliSelect && cliSelect.value) || "codex").trim().toLowerCase() || "codex";
-        const model = NEW_CONV_UI.mode === "attach" ? normalizeSessionModel(sess && sess.model) : "";
+        const attaching = NEW_CONV_UI.mode === "attach";
+        const model = attaching
+          ? normalizeSessionModel(sess && sess.model)
+          : (
+            typeof isClaudeCliType === "function" && isClaudeCliType(cliType)
+              ? claudeDefaultModel()
+              : ""
+          );
         modelInput.value = model;
         modelInput.dataset.modelCliType = cliType;
-        modelInput.dataset.modelSource = model ? "preset" : "";
+        modelInput.dataset.modelSource = attaching
+          ? (model ? "preset" : "inherit")
+          : (
+            typeof isClaudeCliType === "function" && isClaudeCliType(cliType)
+              ? "default"
+              : (model ? "preset" : "")
+          );
         delete modelInput.dataset.codebuddyModelApplied;
         if (isCodeBuddyCliType(cliType)) {
           modelInput.dataset.codebuddyModel = model;
@@ -357,6 +370,14 @@
         const source = String((modelInput && modelInput.dataset && modelInput.dataset.modelSource) || "").trim();
         const selected = normalizeSessionModel(modelInput && modelInput.value);
         return source === "user" ? selected : "";
+      }
+      if (typeof isClaudeCliType === "function" && isClaudeCliType(cliTypeRaw)) {
+        const source = String((modelInput && modelInput.dataset && modelInput.dataset.modelSource) || "").trim();
+        const selected = normalizeSessionModel(modelInput && modelInput.value);
+        const mode = normalizeNewConvMode(opts && opts.mode);
+        const reuseStrategy = String((opts && opts.reuseStrategy) || "create_new").trim() || "create_new";
+        if ((mode === "attach" || reuseStrategy === "reuse_active") && source !== "user") return "";
+        return selected || claudeDefaultModel();
       }
       return normalizeSessionModel(modelInput && modelInput.value);
     }
@@ -526,6 +547,26 @@
           modelInput.dataset.modelSource = source === "user" ? "user" : "inherit";
           modelInput.dataset.codexModelSource = modelInput.dataset.modelSource;
           delete modelInput.dataset.codebuddyModelApplied;
+        } else if (typeof isClaudeCliType === "function" && isClaudeCliType(normalized)) {
+          const wasClaude = typeof isClaudeCliType === "function" && isClaudeCliType(previousCli);
+          const currentSource = wasClaude
+            ? String(modelInput.dataset.modelSource || "").trim()
+            : "";
+          const current = wasClaude ? normalizeSessionModel(modelInput.value) : "";
+          const selected = current || (
+            NEW_CONV_UI.mode === "create"
+              ? claudeDefaultModel()
+              : ""
+          );
+          modelInput.value = selected;
+          modelInput.hidden = false;
+          modelInput.disabled = false;
+          modelInput.dataset.standardModel = selected;
+          modelInput.dataset.modelCliType = "claude";
+          modelInput.dataset.modelSource = currentSource || (
+            NEW_CONV_UI.mode === "create" ? "default" : "inherit"
+          );
+          delete modelInput.dataset.codebuddyModelApplied;
         } else {
           if (isCodeBuddyCliType(previousCli) || isCodexCliType(previousCli)) {
             modelInput.value = normalizeSessionModel(modelInput.dataset.standardModel);
@@ -563,9 +604,25 @@
         }
       }
       if (modelHint) {
-        modelHint.textContent = isCodexCliType(normalized)
-          ? (codexModelSelectionHint(modelInput && modelInput.value) || "留空跟随 Codex CLI 默认；也可选 7 个预设或直接输入自定义模型 ID。")
-          : "";
+        if (isCodexCliType(normalized)) {
+          modelHint.textContent = codexModelSelectionHint(modelInput && modelInput.value)
+            || "留空跟随 Codex CLI 默认；也可选 7 个预设或直接输入自定义模型 ID。";
+        } else if (typeof isClaudeCliType === "function" && isClaudeCliType(normalized)) {
+          const migrationText = typeof claudeModelMigrationStatusText === "function"
+            ? claudeModelMigrationStatusText(modelInput && modelInput.value)
+            : "";
+          const reuseSelect = document.getElementById("newConvReuseStrategy");
+          const inheritsExisting = NEW_CONV_UI.mode === "attach"
+            || String((reuseSelect && reuseSelect.value) || "").trim() === "reuse_active";
+          modelHint.textContent = migrationText
+            || (
+              inheritsExisting
+                ? "绑定或复用已有会话时继承原 session.model；只有手动选择才更新模型。"
+                : "新建 ClaudeCode 会话默认使用 Claude Opus 5。"
+            );
+        } else {
+          modelHint.textContent = "";
+        }
       }
       if (!hintEl) return;
       if (normalized === "codex") {
@@ -1143,7 +1200,7 @@
       }
       SESSION_INFO_UI.base = normalizeSessionInfoResponse(payload, SESSION_INFO_UI.base);
       if (typeof mergeConversationSessionDetailIntoStore === "function") {
-        mergeConversationSessionDetailIntoStore(SESSION_INFO_UI.base, sid);
+        mergeConversationSessionDetailIntoStore(SESSION_INFO_UI.base, sid, { authoritativeModel: true });
       }
       applySessionHeartbeatPayload(payload, preferredTaskId);
       syncConversationHeartbeatSummaryToStore(sid, SESSION_INFO_UI.heartbeatSummary, SESSION_INFO_UI.heartbeatTasks);
@@ -2121,6 +2178,19 @@
           sessionId: sid,
           runtime_state: SESSION_INFO_UI.base && SESSION_INFO_UI.base.runtime_state,
         });
+        if (typeof isClaudeCliType === "function" && isClaudeCliType(cliType)) {
+          const expectedModel = typeof claudeCanonicalModelForSave === "function"
+            ? claudeCanonicalModelForSave(payload.model)
+            : normalizeSessionModel(payload.model);
+          const echoedModel = normalizeSessionModel(updated.model);
+          if (!echoedModel || echoedModel !== expectedModel) {
+            SESSION_INFO_UI.form = { ...(SESSION_INFO_UI.base || {}) };
+            SESSION_INFO_UI.saving = false;
+            setConversationSessionInfoError("保存失败：服务端未回显一致的 ClaudeCode canonical model，已回退原值。");
+            renderConversationSessionInfoModal();
+            return;
+          }
+        }
         persistConversationAvatarAssignment(sid, form.avatar_id);
         SESSION_INFO_UI.base = updated;
         if (isCodeBuddyCliType(cliType) && normalizeSessionModel(updated.model) && typeof syncConversationComposerCodeBuddyModelToLocal === "function") {
@@ -2242,6 +2312,19 @@
       const form = SESSION_INFO_UI.form || {};
       const saving = !!SESSION_INFO_UI.saving;
       const loading = !!SESSION_INFO_UI.loading;
+      if (
+        !loading
+        && typeof isClaudeCliType === "function"
+        && isClaudeCliType(base.cli_type)
+        && typeof reconcileConversationSessionDetailModel === "function"
+      ) {
+        reconcileConversationSessionDetailModel(
+          sid,
+          base.model,
+          base.cli_type,
+          SESSION_INFO_UI.projectId || STATE.project || ""
+        );
+      }
 
       sub.textContent = sid ? ("Session: " + sid) : "-";
       saveBtn.disabled = loading || saving || !sid;
@@ -2564,7 +2647,18 @@
         if (isCodexCliType(cliType)) {
           modelHint.textContent = codexModelSelectionHint(form.model)
             || "可选 7 个预设，也可保留历史或自定义模型 ID；留空继续继承现有设置。";
+        } else if (typeof isClaudeCliType === "function" && isClaudeCliType(cliType)) {
+          modelHint.textContent = typeof claudeModelMigrationStatusText === "function"
+            ? claudeModelMigrationStatusText(form.model)
+            : "";
         }
+      });
+      const claudeModelSelect = el("select", { class: "input", style: "cursor:pointer;" });
+      claudeModelSelect.addEventListener("change", () => {
+        form.model = String(claudeModelSelect.value || claudeDefaultModel());
+        modelHint.textContent = typeof claudeModelMigrationStatusText === "function"
+          ? claudeModelMigrationStatusText(form.model)
+          : "";
       });
       const codeBuddyModelSelect = el("select", { class: "input", style: "cursor:pointer;" });
       codeBuddyModelSelect.addEventListener("change", () => {
@@ -2573,6 +2667,7 @@
       const modelFieldWrap = el("div", { class: "conv-session-model-control" });
       modelFieldWrap.appendChild(modelTextInput);
       modelFieldWrap.appendChild(codexModelDatalist);
+      modelFieldWrap.appendChild(claudeModelSelect);
       modelFieldWrap.appendChild(codeBuddyModelSelect);
       modelFieldWrap.appendChild(modelHint);
       formNode.appendChild(mkField("模型（model）", modelFieldWrap));
@@ -2615,6 +2710,9 @@
           modelTextInput.disabled = true;
           codeBuddyModelSelect.hidden = false;
           codeBuddyModelSelect.disabled = false;
+          claudeModelSelect.hidden = true;
+          claudeModelSelect.disabled = true;
+          claudeModelSelect.innerHTML = "";
           modelTextInput.removeAttribute("list");
           modelHint.textContent = "";
           permissionField.style.display = "";
@@ -2627,8 +2725,28 @@
           codeBuddyModelSelect.hidden = true;
           codeBuddyModelSelect.disabled = true;
           codeBuddyModelSelect.innerHTML = "";
+          claudeModelSelect.hidden = true;
+          claudeModelSelect.disabled = true;
+          claudeModelSelect.innerHTML = "";
           modelHint.textContent = codexModelSelectionHint(form.model)
             || "可选 7 个预设，也可保留历史或自定义模型 ID；留空继续继承现有设置。";
+          permissionField.style.display = "none";
+          codeBuddyPermissionSelect.disabled = true;
+          codeBuddyPermissionSelect.innerHTML = "";
+        } else if (typeof isClaudeCliType === "function" && isClaudeCliType(cliType)) {
+          form.model = normalizeSessionModel(form.model) || claudeDefaultModel();
+          populateClaudeModelSelect(claudeModelSelect, form.model);
+          modelTextInput.hidden = true;
+          modelTextInput.disabled = true;
+          modelTextInput.removeAttribute("list");
+          codeBuddyModelSelect.hidden = true;
+          codeBuddyModelSelect.disabled = true;
+          codeBuddyModelSelect.innerHTML = "";
+          claudeModelSelect.hidden = false;
+          claudeModelSelect.disabled = false;
+          modelHint.textContent = typeof claudeModelMigrationStatusText === "function"
+            ? claudeModelMigrationStatusText(form.model)
+            : "";
           permissionField.style.display = "none";
           codeBuddyPermissionSelect.disabled = true;
           codeBuddyPermissionSelect.innerHTML = "";
@@ -2640,6 +2758,9 @@
           codeBuddyModelSelect.hidden = true;
           codeBuddyModelSelect.disabled = true;
           codeBuddyModelSelect.innerHTML = "";
+          claudeModelSelect.hidden = true;
+          claudeModelSelect.disabled = true;
+          claudeModelSelect.innerHTML = "";
           permissionField.style.display = "none";
           codeBuddyPermissionSelect.disabled = true;
           codeBuddyPermissionSelect.innerHTML = "";

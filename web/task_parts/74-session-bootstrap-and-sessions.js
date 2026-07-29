@@ -68,9 +68,10 @@
       }
     }
 
-    async function tryUpdateSessionModel(sessionId, model) {
+    async function tryUpdateSessionModel(sessionId, model, opts = {}) {
       const sid = String(sessionId || "").trim();
       const normalized = normalizeSessionModel(model);
+      const expected = normalizeSessionModel(opts && opts.expectedModel);
       if (!looksLikeSessionId(sid)) return false;
       try {
         const r = await fetch("/api/sessions/" + encodeURIComponent(sid), {
@@ -78,7 +79,14 @@
           headers: authHeaders({ "Content-Type": "application/json" }),
           body: JSON.stringify({ model: normalized }),
         });
-        return !!(r && r.ok);
+        if (!r || !r.ok) return false;
+        if (!expected) return true;
+        const payload = await r.json().catch(() => null);
+        const session = payload && typeof payload === "object" && payload.session && typeof payload.session === "object"
+          ? payload.session
+          : payload;
+        const echoed = normalizeSessionModel(session && session.model);
+        return !!echoed && echoed === expected;
       } catch (_) {
         return false;
       }
@@ -1140,6 +1148,9 @@
       if (!PCONV.sessionDetailLoadedAtById || typeof PCONV.sessionDetailLoadedAtById !== "object") {
         PCONV.sessionDetailLoadedAtById = Object.create(null);
       }
+      if (!PCONV.sessionDetailModelById || typeof PCONV.sessionDetailModelById !== "object") {
+        PCONV.sessionDetailModelById = Object.create(null);
+      }
       if (!PCONV.sessionDetailErrorById || typeof PCONV.sessionDetailErrorById !== "object") {
         PCONV.sessionDetailErrorById = Object.create(null);
       }
@@ -1149,6 +1160,55 @@
       if (!PCONV.sessionDetailDeferredReasonById || typeof PCONV.sessionDetailDeferredReasonById !== "object") {
         PCONV.sessionDetailDeferredReasonById = Object.create(null);
       }
+    }
+
+    function reconcileConversationSessionDetailModel(sessionId, model, cliTypeRaw = "", projectId = "") {
+      const sid = String(sessionId || "").trim();
+      const normalized = normalizeSessionModel(model);
+      const cliType = String(cliTypeRaw || "").trim().toLowerCase();
+      if (
+        !sid
+        || !normalized
+        || !(typeof isClaudeCliType === "function" && isClaudeCliType(cliType))
+      ) {
+        return "";
+      }
+      ensureConversationSessionDetailStateMaps();
+      PCONV.sessionDetailModelById[sid] = normalized;
+      if (!PCONV.claudeModelBySessionId || typeof PCONV.claudeModelBySessionId !== "object") {
+        PCONV.claudeModelBySessionId = Object.create(null);
+      }
+      PCONV.claudeModelBySessionId[sid] = normalized;
+      const applyToList = (list) => {
+        if (!Array.isArray(list)) return;
+        list.forEach((row) => {
+          if (String(getSessionId(row) || "").trim() !== sid) return;
+          row.model = normalized;
+          row.model_source = "session-detail";
+          row.modelSource = "session-detail";
+        });
+      };
+      applyToList(PCONV.sessions);
+      if (PCONV.sessionDirectoryByProject && typeof PCONV.sessionDirectoryByProject === "object") {
+        Object.keys(PCONV.sessionDirectoryByProject).forEach((pid) => {
+          applyToList(PCONV.sessionDirectoryByProject[pid]);
+        });
+      }
+      if (typeof conversationStoreUpsertSession === "function") {
+        conversationStoreUpsertSession({
+          id: sid,
+          sessionId: sid,
+          project_id: String(projectId || STATE.project || "").trim(),
+          cli_type: cliType,
+          model: normalized,
+          source: "session-detail",
+          model_source: "session-detail",
+        }, {
+          projectId: String(projectId || STATE.project || "").trim(),
+          source: "session-detail",
+        });
+      }
+      return normalized;
     }
 
     function isConversationSessionDetailLoading(sessionId) {
@@ -1225,11 +1285,11 @@
       };
     }
 
-    function mergeConversationSessionDetailIntoStore(detail, sessionId = "") {
+    function mergeConversationSessionDetailIntoStore(detail, sessionId = "", opts = {}) {
       const base = (detail && typeof detail === "object") ? detail : {};
       const sid = String(firstNonEmptyText([sessionId, base.sessionId, base.id]) || "").trim();
       if (!sid) return null;
-      const prev = typeof findConversationSessionById === "function"
+      let prev = typeof findConversationSessionById === "function"
         ? findConversationSessionById(sid)
         : null;
       const projectId = String(firstNonEmptyText([
@@ -1239,14 +1299,29 @@
         prev && prev.projectId,
         STATE && STATE.project,
       ]) || "").trim();
+      const detailCliType = String(firstNonEmptyText([
+        base.cli_type,
+        base.cliType,
+        prev && prev.cli_type,
+        prev && prev.cliType,
+      ]) || "").trim().toLowerCase();
+      const authoritativeModel = opts && opts.authoritativeModel === true
+        ? reconcileConversationSessionDetailModel(sid, base.model, detailCliType, projectId)
+        : "";
+      if (authoritativeModel && typeof findConversationSessionById === "function") {
+        prev = findConversationSessionById(sid) || prev;
+      }
+      const mergeBase = authoritativeModel
+        ? { ...base, model: authoritativeModel, source: "session-detail", model_source: "session-detail" }
+        : base;
       let merged = normalizeConversationSession({
         ...(prev || {}),
         id: sid,
         sessionId: sid,
         project_id: projectId,
         projectId,
-        alias: firstNonEmptyText([base.alias, prev && prev.alias]),
-        channel_name: firstNonEmptyText([base.channel_name, prev && prev.channel_name, prev && prev.primaryChannel]),
+        alias: firstNonEmptyText([mergeBase.alias, prev && prev.alias]),
+        channel_name: firstNonEmptyText([mergeBase.channel_name, prev && prev.channel_name, prev && prev.primaryChannel]),
         channels: Array.isArray(prev && prev.channels) ? prev.channels.slice() : [],
         primaryChannel: firstNonEmptyText([base.channel_name, prev && prev.primaryChannel]),
         display_name: firstNonEmptyText([base.display_name, base.displayName, prev && prev.displayName]),
@@ -1256,10 +1331,10 @@
         worktree_root: firstNonEmptyText([base.worktree_root, prev && prev.worktree_root]),
         workdir: firstNonEmptyText([base.workdir, prev && prev.workdir]),
         branch: firstNonEmptyText([base.branch, prev && prev.branch]),
-        cli_type: firstNonEmptyText([base.cli_type, prev && prev.cli_type], "codex"),
+        cli_type: firstNonEmptyText([mergeBase.cli_type, prev && prev.cli_type], "codex"),
         model: typeof mergeConversationSessionModelValue === "function"
-          ? mergeConversationSessionModelValue(base, prev)
-          : normalizeSessionModel(firstNonEmptyText([base.model, prev && prev.model])),
+          ? mergeConversationSessionModelValue(mergeBase, prev)
+          : normalizeSessionModel(firstNonEmptyText([mergeBase.model, prev && prev.model])),
         codebuddy_permission_mode: typeof mergeConversationSessionPermissionModeValue === "function"
           ? mergeConversationSessionPermissionModeValue(base, prev)
           : firstNonEmptyText([base.codebuddy_permission_mode, base.codebuddyPermissionMode, prev && prev.codebuddy_permission_mode, prev && prev.codebuddyPermissionMode], "default"),
@@ -1273,7 +1348,7 @@
         is_primary: Object.prototype.hasOwnProperty.call(base, "is_primary")
           ? !!base.is_primary
           : !!(prev && prev.is_primary),
-        source: firstNonEmptyText([base.source, prev && prev.source]),
+        source: firstNonEmptyText([mergeBase.source, prev && prev.source]),
         session_display_state: firstNonEmptyText([base.session_display_state, base.sessionDisplayState, prev && prev.session_display_state, prev && prev.sessionDisplayState]),
         session_display_reason: firstNonEmptyText([base.session_display_reason, base.sessionDisplayReason, prev && prev.session_display_reason, prev && prev.sessionDisplayReason]),
         runtime_state: base.runtime_state || (prev && prev.runtime_state) || null,
@@ -1342,7 +1417,7 @@
           const normalized = typeof normalizeSessionInfoResponse === "function"
             ? normalizeSessionInfoResponse(payload, fallback)
             : normalizeConversationSessionDetail(payload, fallback);
-          const merged = mergeConversationSessionDetailIntoStore(normalized, sid);
+          const merged = mergeConversationSessionDetailIntoStore(normalized, sid, { authoritativeModel: true });
           if (String(STATE.selectedSessionId || "").trim() === sid && typeof renderConversationDetail === "function") {
             if (typeof buildConversationMainList === "function" && typeof document !== "undefined") {
               buildConversationMainList(document.getElementById("fileList"));
@@ -1503,6 +1578,9 @@
           created_at: String(s.created_at || ""),
           last_used_at: String(s.last_used_at || ""),
           is_primary: !!s.is_primary,
+          is_deleted: boolLike(s.is_deleted || s.isDeleted),
+          deleted_at: String(s.deleted_at || s.deletedAt || ""),
+          deleted_reason: String(s.deleted_reason || s.deletedReason || ""),
           source: String(s.source || ""),
           lastActiveAt: String(s.lastActiveAt || latestRunSummary.updated_at || s.last_used_at || ""),
           lastStatus: "idle",
@@ -1611,6 +1689,8 @@
       const qs = new URLSearchParams();
       qs.set("project_id", pid);
       if (channelName) qs.set("channel_name", String(channelName));
+      // Keep soft-delete tombstones so configured session fallbacks cannot resurrect them.
+      qs.set("include_deleted", "1");
       const payloadMode = normalizeConversationSessionsPayloadMode(opts && (opts.payloadMode || opts.payload_mode || opts.queryMode || opts.query_mode));
       qs.set("payloadMode", payloadMode);
       const allowStale = hasConversationOwnOption(opts, "allowStale")
@@ -2507,9 +2587,27 @@
       const prev = (prevRaw && typeof prevRaw === "object") ? prevRaw : {};
       const nextModel = normalizeSessionModel(next.model);
       const prevModel = normalizeSessionModel(prev.model);
+      const cliType = conversationSessionModelMergeCliType(next, prev);
+      const sid = String(firstNonEmptyText([
+        next.sessionId,
+        next.session_id,
+        next.id,
+        prev.sessionId,
+        prev.session_id,
+        prev.id,
+      ]) || "").trim();
+      const detailModel = (
+        typeof isClaudeCliType === "function"
+        && isClaudeCliType(cliType)
+        && !conversationSessionModelMergeIsExplicit(next)
+        && sid
+        && PCONV.sessionDetailModelById
+      )
+        ? normalizeSessionModel(PCONV.sessionDetailModelById[sid])
+        : "";
+      if (detailModel) return detailModel;
       if (!prevModel) return nextModel;
       if (!nextModel) return prevModel;
-      const cliType = conversationSessionModelMergeCliType(next, prev);
       if (isCodeBuddyCliType(cliType)) {
         const defaultModel = codeBuddySessionDefaultModelValue();
         const nextIsDefault = nextModel === defaultModel;

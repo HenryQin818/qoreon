@@ -1495,7 +1495,7 @@ def main(argv: list[str] | None = None) -> int:
             session_health_links["status_report_page"] = status_report_page_link
             session_health_links["message_risk_page"] = message_risk_page_link
     status_report_page_data = build_status_report_page_data(
-        script_dir,
+        root,
         generated_at=task_data["generated_at"],
         dashboard=task_data["dashboard"],
         links={
@@ -1507,7 +1507,7 @@ def main(argv: list[str] | None = None) -> int:
     agent_capability_report_page_data: dict[str, Any] | None = None
     if not fast_static_build:
         message_risk_dashboard_page_data = build_message_risk_report_page_data(
-            script_dir,
+            root,
             generated_at=task_data["generated_at"],
             dashboard=task_data["dashboard"],
             links={
@@ -1519,7 +1519,7 @@ def main(argv: list[str] | None = None) -> int:
             message_risk_page_link=message_risk_page_link,
         )
         agent_capability_report_page_data = build_agent_capability_report_page_data(
-            script_dir,
+            root,
             generated_at=task_data["generated_at"],
             dashboard=task_data["dashboard"],
             links={
@@ -1534,13 +1534,13 @@ def main(argv: list[str] | None = None) -> int:
             performance_page_link=performance_page_link,
         )
     open_source_sync_page_data = build_open_source_sync_page_data(
-        script_dir,
+        root,
         generated_at=task_data["generated_at"],
         dashboard=task_data["dashboard"],
         links=task_data["links"],
     )
     platform_architecture_board_page_data = build_platform_architecture_board_page_data(
-        script_dir,
+        root,
         generated_at=task_data["generated_at"],
         dashboard=task_data["dashboard"],
         links=task_data["links"],

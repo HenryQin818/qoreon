@@ -30,7 +30,7 @@
       if (isCodexCliType(cliType)) return codexDefaultModel();
       if (isCodeBuddyCliType(cliType)) return codeBuddyDefaultModel();
       if (typeof isClaudeCliType === "function" && isClaudeCliType(cliType)) {
-        return typeof claudeDefaultModel === "function" ? claudeDefaultModel() : "claude-opus-4-8";
+        return typeof claudeDefaultModel === "function" ? claudeDefaultModel() : "claude-opus-5";
       }
       return "";
     }
@@ -178,7 +178,18 @@
         ? (session && session.model)
         : "";
       const cachedModel = conversationComposerCachedModelForCli(sid, cliType);
+      const detailModel = (
+        typeof isClaudeCliType === "function"
+        && isClaudeCliType(cliType)
+        && conversationComposerSessionDetailLoadedForModel(sid)
+      )
+        ? normalizeSessionModel(
+          (PCONV.sessionDetailModelById && PCONV.sessionDetailModelById[sid])
+          || sessionModel
+        )
+        : "";
       return normalizeSessionModel(firstNonEmptyText([
+        detailModel,
         cachedModel,
         sessionModel,
         context && context.model,
@@ -765,6 +776,10 @@
         PCONV.claudeModelBySessionId = Object.create(null);
       }
       PCONV.claudeModelBySessionId[sid] = normalized;
+      if (!PCONV.sessionDetailModelById || typeof PCONV.sessionDetailModelById !== "object") {
+        PCONV.sessionDetailModelById = Object.create(null);
+      }
+      PCONV.sessionDetailModelById[sid] = normalized;
       const patchRow = (row) => {
         if (!row || typeof row !== "object") return row;
         row.model = normalized;
@@ -852,6 +867,9 @@
       const pid = String(select.dataset.projectId || STATE.project || "").trim();
       const previous = normalizeSessionModel(select.dataset.model) || conversationComposerDefaultModelForCli("claude");
       const next = normalizeSessionModel(select.value) || conversationComposerDefaultModelForCli("claude");
+      const canonical = typeof claudeCanonicalModelForSave === "function"
+        ? claudeCanonicalModelForSave(next)
+        : next;
       if (!sid || next === previous) {
         select.value = next;
         return;
@@ -860,7 +878,7 @@
       select.disabled = true;
       if (status) status.textContent = "保存中...";
       const ok = typeof tryUpdateSessionModel === "function"
-        ? await tryUpdateSessionModel(sid, next)
+        ? await tryUpdateSessionModel(sid, next, { expectedModel: canonical })
         : false;
       if (!ok) {
         select.value = previous;
@@ -870,12 +888,13 @@
         setHintText("conv", "ClaudeCode 模型切换失败，已保留原值。");
         return;
       }
-      syncConversationComposerClaudeModelToLocal(sid, next, pid);
-      select.dataset.model = next;
+      syncConversationComposerClaudeModelToLocal(sid, canonical, pid);
+      select.dataset.model = canonical;
+      select.value = canonical;
       select.dataset.saving = "";
       select.disabled = false;
       if (status) status.textContent = "下一次发送将使用";
-      const displayName = typeof claudeModelDisplayName === "function" ? claudeModelDisplayName(next) : next;
+      const displayName = typeof claudeModelDisplayName === "function" ? claudeModelDisplayName(canonical) : canonical;
       setHintText("conv", "ClaudeCode 模型已切换为 " + displayName + "，下一次发送将使用。");
       renderConversationComposerClaudeModel(currentConversationCtx());
     }

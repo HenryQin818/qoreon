@@ -232,6 +232,19 @@ class DeletedSessionUiFilterLogicTests(unittest.TestCase):
         )
         self.run_node_assert(script)
 
+    def test_session_directory_fetch_preserves_soft_delete_tombstones(self) -> None:
+        source = (REPO_ROOT / "web/task_parts/74-session-bootstrap-and-sessions.js").read_text(encoding="utf-8")
+        format_start = source.index("function formatConversationSessionsFromApi(")
+        fetch_start = source.index("async function fetchConversationSessionsFromApi(")
+        format_source = source[format_start:fetch_start]
+        fetch_end = source.index("async function ensureConversationProjectSessionDirectory(")
+        fetch_source = source[fetch_start:fetch_end]
+
+        self.assertIn("is_deleted: boolLike(s.is_deleted || s.isDeleted)", format_source)
+        self.assertIn("deleted_at: String(s.deleted_at || s.deletedAt || \"\")", format_source)
+        self.assertIn("deleted_reason: String(s.deleted_reason || s.deletedReason || \"\")", format_source)
+        self.assertIn('qs.set("include_deleted", "1")', fetch_source)
+
     def test_configured_project_conversations_skips_deleted_primary_entries(self) -> None:
         script = textwrap.dedent(
             rf"""

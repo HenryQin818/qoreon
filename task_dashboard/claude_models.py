@@ -6,11 +6,12 @@ from __future__ import annotations
 
 from typing import Any
 
-DEFAULT_CLAUDE_MODEL = "claude-opus-4-8"
+DEFAULT_CLAUDE_MODEL = "claude-opus-5"
+LEGACY_CLAUDE_OPUS_MODEL = "claude-opus-4-8"
 
 SUPPORTED_CLAUDE_MODELS = {
     "claude-fable-5",
-    "claude-opus-4-8",
+    DEFAULT_CLAUDE_MODEL,
     "claude-sonnet-4-6",
     "claude-haiku-4-5",
 }
@@ -29,6 +30,7 @@ _CLAUDE_MODEL_ALIASES = {
     "opus-plan": DEFAULT_CLAUDE_MODEL,
     "opus_plan": DEFAULT_CLAUDE_MODEL,
     "claude-opus": DEFAULT_CLAUDE_MODEL,
+    LEGACY_CLAUDE_OPUS_MODEL: DEFAULT_CLAUDE_MODEL,
     "claude-opus-4-20250514": DEFAULT_CLAUDE_MODEL,
     "sonnet": "claude-sonnet-4-6",
     "claude-sonnet": "claude-sonnet-4-6",
@@ -52,3 +54,12 @@ def normalize_claude_model(value: Any) -> str:
     if normalized in SUPPORTED_CLAUDE_MODELS:
         return normalized
     return _CLAUDE_MODEL_ALIASES.get(normalized, DEFAULT_CLAUDE_MODEL)
+
+
+def normalize_claude_model_for_storage_read(value: Any) -> str:
+    """Normalize Claude models without lazily migrating stored Opus 4.8 rows."""
+    text = str(value or "").strip()
+    normalized = text.lower().replace(" ", "-")
+    if normalized == LEGACY_CLAUDE_OPUS_MODEL:
+        return LEGACY_CLAUDE_OPUS_MODEL
+    return normalize_claude_model(text)

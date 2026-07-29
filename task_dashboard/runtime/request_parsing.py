@@ -204,6 +204,7 @@ def parse_session_create_request(body: dict[str, Any]) -> dict[str, Any]:
             if raw_cli_type == "claude"
             else _safe_text_local(row.get("model"), 120).strip()
         ),
+        "_model_explicit": "model" in row,
         "reasoning_effort": _normalize_reasoning_effort_local(
             row.get("reasoning_effort") if "reasoning_effort" in row else row.get("reasoningEffort")
         ),

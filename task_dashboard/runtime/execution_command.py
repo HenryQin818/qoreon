@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import inspect
 import os
+import re
 import shutil
 import socket
 import tempfile
@@ -435,6 +436,8 @@ def build_execution_command(
     profile_not_found_recent: Callable[[str, str], tuple[bool, float]],
     permission_mode: str = "",
     attachments: list[dict[str, Any]] | None = None,
+    browser_mode: str = "auto",
+    project_id: str = "",
 ) -> dict[str, Any]:
     def _build(profile: str) -> list[str]:
         kwargs = {
@@ -462,6 +465,16 @@ def build_execution_command(
             and _callable_accepts_keyword(adapter_cls.build_resume_command, "attachments")
         ):
             kwargs["attachments"] = attachments
+        if (
+            str(cli_type or "").strip().lower() == "codex"
+            and _callable_accepts_keyword(adapter_cls.build_resume_command, "browser_mode")
+        ):
+            kwargs["browser_mode"] = str(browser_mode or "auto")
+        if (
+            str(cli_type or "").strip().lower() == "codex"
+            and _callable_accepts_keyword(adapter_cls.build_resume_command, "project_id")
+        ):
+            kwargs["project_id"] = str(project_id or "")
         return adapter_cls.build_resume_command(**kwargs)
 
     base_cmd = _build("")
@@ -475,6 +488,31 @@ def build_execution_command(
         "profile_suppressed": bool(profile_suppressed),
         "profile_suppress_left_s": float(profile_suppress_left_s or 0.0),
     }
+
+
+def _redact_execution_command_for_log(cmd: list[str]) -> list[str]:
+    """Remove browser Profile paths from the human-readable command log."""
+
+    redacted: list[str] = []
+    redact_next = False
+    embedded_profile_arg = re.compile(
+        r'("--user-data-dir"\s*,\s*")((?:\\.|[^"\\])*)(")'
+    )
+    for raw_item in list(cmd or []):
+        item = str(raw_item or "")
+        if redact_next:
+            redacted.append("<redacted>")
+            redact_next = False
+            continue
+        if item == "--user-data-dir":
+            redacted.append(item)
+            redact_next = True
+            continue
+        if item.startswith("--user-data-dir="):
+            redacted.append("--user-data-dir=<redacted>")
+            continue
+        redacted.append(embedded_profile_arg.sub(r'\1<redacted>\3', item))
+    return redacted
 
 
 def write_execution_log_header(
@@ -506,7 +544,8 @@ def write_execution_log_header(
         logf.write(f"# mirrored_from: {mirrored_from}\n")
     if str(meta.get("branch") or "").strip():
         logf.write(f"# branch: {meta.get('branch')}\n")
-    logf.write(f"$ {' '.join(cmd)}\n\n")
+    log_cmd = _redact_execution_command_for_log(cmd)
+    logf.write(f"$ {' '.join(log_cmd)}\n\n")
     if profile_label and profile_suppressed:
         logf.write(
             f"[system] profile fallback suppressed ({int(profile_suppress_left_s)}s left), skip -p {profile_label}\n\n"
