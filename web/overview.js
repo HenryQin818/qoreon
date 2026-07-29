@@ -14,7 +14,6 @@
     const PROJECT_COVER_LOCAL_CUSTOM_LIBRARY_KEY = "overview.projectCardCoverCustomLibrary";
     const PROJECT_COVER_MAX_UPLOAD_BYTES = 850 * 1024;
     const PROJECT_COVER_MAX_LOCAL_CUSTOM_ITEMS = 4;
-    const PROJECT_COVER_STATIC_REGISTRY_URL = "/share/assets/project-covers/registry.v1.json";
     const PROJECT_BOOTSTRAP_FIXED_DIVISION_NAME = "总控分工";
     const PROJECT_BOOTSTRAP_FIXED_DIVISION_DESC = "项目默认总控分工";
 
@@ -508,19 +507,6 @@
       persistProjectCoverLocalCustomItems();
     }
 
-    function isProjectCoverApiUnavailable(errorLike) {
-      const status = Number(errorLike && errorLike.status);
-      if (status === 404 || status === 405 || status === 501) return true;
-      const text = String(errorLike && errorLike.message ? errorLike.message : errorLike).trim().toLowerCase();
-      if (!text) return false;
-      return text.includes("http 404")
-        || text.includes("http 405")
-        || text.includes("http 501")
-        || text.includes("not found")
-        || text.includes("method not allowed")
-        || text.includes("failed to fetch");
-    }
-
     function applyProjectCoverSelectionLocally(projectIdRaw, coverIdRaw) {
       const projectId = String(projectIdRaw || "").trim();
       const coverId = String(coverIdRaw || "").trim().toLowerCase();
@@ -780,33 +766,12 @@
       renderProjectCoverPicker();
       projectCoverMsg("正在保存配图...", "");
       try {
-        const body = {
-          project_id: projectId,
-          cover_id: selectedCoverId,
-        };
-        const data = await fetchJson("/api/project-card-covers", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-        });
-        if (Array.isArray(data.library)) setProjectCoverLibrary(data.library);
-        applyProjectCoverAssignments(data.assignments || {});
-        projectCoverMsg(body.cover_id ? "项目配图已更新" : "已恢复默认随机配图", "ok");
+        applyProjectCoverSelectionLocally(projectId, selectedCoverId);
+        projectCoverMsg(selectedCoverId ? "项目配图已本地保存" : "已恢复默认随机配图（本地）", "ok");
         renderProjectCoverPicker();
         renderCards();
       } catch (e) {
-        if (isProjectCoverApiUnavailable(e)) {
-          try {
-            applyProjectCoverSelectionLocally(projectId, selectedCoverId);
-            projectCoverMsg(selectedCoverId ? "项目配图已本地保存" : "已恢复默认随机配图（本地）", "ok");
-            renderProjectCoverPicker();
-            renderCards();
-          } catch (localErr) {
-            projectCoverMsg("保存失败：" + (localErr && localErr.message ? localErr.message : localErr), "err");
-          }
-        } else {
-          projectCoverMsg("保存失败：" + (e && e.message ? e.message : e), "err");
-        }
+        projectCoverMsg("保存失败：" + (e && e.message ? e.message : e), "err");
       } finally {
         PROJECT_COVER.saving = false;
         renderProjectCoverPicker();
@@ -822,82 +787,39 @@
       projectCoverMsg("正在上传并处理图片...", "");
       try {
         dataUrl = await buildUploadCoverDataUrl(file);
-        const body = {
-          project_id: projectId,
-          custom_cover_name: normalizeUploadedCoverName(file && file.name),
-          custom_cover_image_data_url: dataUrl,
+        const customCover = {
+          id: createLocalProjectCoverId(),
+          name: normalizeUploadedCoverName(file && file.name),
+          image_url: dataUrl,
+          background: "",
+          tone: "custom",
+          source: "custom",
+          credit: "本地上传",
         };
-        const data = await fetchJson("/api/project-card-covers", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-        });
-        if (Array.isArray(data.library)) setProjectCoverLibrary(data.library);
-        applyProjectCoverAssignments(data.assignments || {});
-        projectCoverMsg("自定义配图已加入图库并应用", "ok");
+        const localCustom = [customCover].concat(loadLocalProjectCoverCustomItems());
+        PROJECT_COVER.library = mergeProjectCoverLibrary(defaultProjectCoverLibrary(), localCustom);
+        persistProjectCoverLocalCustomItems();
+        applyProjectCoverSelectionLocally(projectId, customCover.id);
+        projectCoverMsg("自定义配图已本地加入图库并应用", "ok");
         renderProjectCoverPicker();
         renderCards();
       } catch (e) {
-        if (isProjectCoverApiUnavailable(e)) {
-          try {
-            const customCover = {
-              id: createLocalProjectCoverId(),
-              name: normalizeUploadedCoverName(file && file.name),
-              image_url: dataUrl,
-              background: "",
-              tone: "custom",
-              source: "custom",
-              credit: "本地上传",
-            };
-            const localCustom = [customCover].concat(loadLocalProjectCoverCustomItems());
-            PROJECT_COVER.library = mergeProjectCoverLibrary(defaultProjectCoverLibrary(), localCustom);
-            persistProjectCoverLocalCustomItems();
-            applyProjectCoverSelectionLocally(projectId, customCover.id);
-            projectCoverMsg("自定义配图已本地加入图库并应用", "ok");
-            renderProjectCoverPicker();
-            renderCards();
-          } catch (localErr) {
-            projectCoverMsg("上传失败：" + (localErr && localErr.message ? localErr.message : localErr), "err");
-          }
-        } else {
-          projectCoverMsg("上传失败：" + (e && e.message ? e.message : e), "err");
-        }
+        projectCoverMsg("上传失败：" + (e && e.message ? e.message : e), "err");
       } finally {
         PROJECT_COVER.saving = false;
         renderProjectCoverPicker();
       }
     }
 
-    async function loadProjectCardCoversFromUrl(url) {
-      const result = await fetchJsonWithMeta(url, { cache: "no-store" });
-      if (!result.ok) {
-        throw new Error(String((result.data && result.data.error) || ("HTTP " + result.status)));
-      }
-      const payload = result.data || {};
-      setProjectCoverLibrary(payload.library);
-      applyProjectCoverAssignments(payload.assignments || {});
-      return true;
-    }
-
     async function loadProjectCardCovers() {
       if (PROJECT_COVER.loading) return;
       PROJECT_COVER.loading = true;
       PROJECT_COVER.error = "";
-      setProjectCoverLibrary(PROJECT_COVER.library.length ? PROJECT_COVER.library : defaultProjectCoverLibrary());
-      applyProjectCoverAssignments(loadLocalProjectCoverAssignments());
-      let applied = false;
       try {
-        applied = await loadProjectCardCoversFromUrl("/api/project-card-covers");
+        setProjectCoverLibrary(PROJECT_COVER.library.length ? PROJECT_COVER.library : defaultProjectCoverLibrary());
+        applyProjectCoverAssignments(loadLocalProjectCoverAssignments());
       } catch (e) {
         PROJECT_COVER.error = String(e && e.message ? e.message : e);
-        if (!applied) {
-          try {
-            applied = await loadProjectCardCoversFromUrl(PROJECT_COVER_STATIC_REGISTRY_URL);
-            PROJECT_COVER.error = "";
-          } catch (fallbackError) {
-            if (!PROJECT_COVER.error) PROJECT_COVER.error = String(fallbackError && fallbackError.message ? fallbackError.message : fallbackError);
-          }
-        }
       } finally {
         PROJECT_COVER.loaded = true;
         PROJECT_COVER.loading = false;

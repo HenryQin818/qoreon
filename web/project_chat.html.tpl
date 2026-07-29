@@ -4,6 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>正在跳转 · Qoreon</title>
+  <link rel="icon" href="data:," />
   <style>__INLINE_CSS__</style>
 </head>
 <body class="project-chat-legacy">

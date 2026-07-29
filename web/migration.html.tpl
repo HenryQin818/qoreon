@@ -4,6 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>跨项目单源化改造追踪</title>
+  <link rel="icon" href="data:," />
   <style>__INLINE_CSS__</style>
 </head>
 <body>
