@@ -4,6 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Agent 会话上下文健康表 · Qoreon</title>
+  <link rel="icon" href="data:," />
   <style>__INLINE_CSS__</style>
 </head>
 <body>
