@@ -5,6 +5,8 @@ from __future__ import annotations
 import time
 from typing import Any
 
+from task_dashboard.runtime.process_control import terminate_process_tree
+
 
 def detect_execution_timeout(
     *,
@@ -24,16 +26,8 @@ def detect_execution_timeout(
 
 
 def terminate_process_for_timeout(proc: Any, timeout_error: str, *, sleep_s: float = 0.25) -> None:
-    if "no_progress" in str(timeout_error or ""):
-        try:
-            proc.terminate()
-            time.sleep(float(sleep_s or 0.25))
-            if proc.poll() is None:
-                proc.kill()
-        except Exception:
-            pass
-        return
-    try:
-        proc.kill()
-    except Exception:
-        pass
+    terminate_process_tree(
+        proc,
+        graceful="no_progress" in str(timeout_error or ""),
+        sleep_s=sleep_s,
+    )

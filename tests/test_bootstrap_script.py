@@ -147,7 +147,7 @@ class BootstrapScriptTests(unittest.TestCase):
 
         with mock.patch.object(bootstrap_script.subprocess, "run", return_value=proc), \
              mock.patch.object(bootstrap_script, "_die", side_effect=AssertionError("_die should not be called")), \
-             mock.patch.object(CodexAdapter, "build_create_command", return_value=["/usr/bin/true"]), \
+             mock.patch.object(CodexAdapter, "build_create_command", return_value=["/usr/bin/true"]) as m_build, \
              mock.patch.object(CodexAdapter, "find_new_session_id", return_value=("", "")), \
              mock.patch.object(
                  CodexAdapter,
@@ -158,6 +158,7 @@ class BootstrapScriptTests(unittest.TestCase):
             sid = bs._create_session_via_local_codex(alias="", seed_message="seed")
 
         self.assertEqual(sid, "44444444-4444-4444-4444-444444444444")
+        self.assertEqual(m_build.call_args.kwargs.get("browser_mode"), "off")
         m_append.assert_called_once()
 
     def test_desktopize_session_retries_until_session_file_visible(self):

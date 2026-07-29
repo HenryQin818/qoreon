@@ -318,6 +318,7 @@ class SessionBootstrapUiLogicTests(unittest.TestCase):
 
             eval(extractFunction("web/task_entry_parts/81-session-info-and-bindings.js", "buildNewConvInitMessage"));
             eval(extractFunction("web/task_entry_parts/81-session-info-and-bindings.js", "syncNewConvInitMessage"));
+            eval(extractFunction("web/task_entry_parts/81-session-info-and-bindings.js", "selectedNewConvModelValue"));
             eval(extractFunction("web/task_parts/74-session-bootstrap-and-sessions.js", "createNewConversation"));
 
             assert.equal(buildNewConvInitMessage("子级04-前端体验（task-overview 页面交互）"), "");
@@ -362,6 +363,9 @@ class SessionBootstrapUiLogicTests(unittest.TestCase):
             global.normalizeNewConvMode = (value) => String(value || "").trim() || "create";
             global.normalizeSessionModel = (value) => String(value || "").trim();
             global.isCodexCliType = (value) => String(value || "").trim().toLowerCase() === "codex";
+            global.isCodeBuddyCliType = (value) => String(value || "").trim().toLowerCase() === "codebuddy";
+            global.isClaudeCliType = (value) => String(value || "").trim().toLowerCase() === "claude";
+            global.claudeDefaultModel = () => "claude-opus-5";
             global.normalizeReasoningEffort = (value) => String(value || "").trim();
             global.normalizeSessionEnvironmentValue = (value) => String(value || "stable").trim() || "stable";
             global.looksLikeSessionId = (value) => /^[0-9a-z_-]{10,}$/i.test(String(value || "").trim());
@@ -551,19 +555,22 @@ class SessionBootstrapUiLogicTests(unittest.TestCase):
             global.setBinding = async () => true;
             global.sendNewConversationInitMessage = async () => ({ ok: true });
 
-            function makeDom(cliType, modelValue, codeBuddyValue) {
+            function makeDom(cliType, modelValue, codeBuddyValue, reuseStrategy = "create_new") {
               return {
                 newConvProject: { value: "task_dashboard" },
                 newConvChannel: { value: "子级04-前端体验（task-overview 页面交互）" },
                 newConvCliType: { value: cliType },
                 newConvCreateBtn: { textContent: "创建并绑定", disabled: false },
                 newConvSessionId: { value: "" },
-                newConvModel: { value: modelValue },
+                newConvModel: {
+                  value: modelValue,
+                  dataset: { modelSource: modelValue ? "user" : "default" },
+                },
                 newConvCodeBuddyModel: { value: codeBuddyValue },
                 newConvPurpose: { value: "前端实现" },
                 newConvAlias: { value: "前端-Agent" },
                 newConvSessionRole: { value: "child" },
-                newConvReuseStrategy: { value: "create_new" },
+                newConvReuseStrategy: { value: reuseStrategy },
                 newConvEnvironment: { value: "stable" },
                 newConvWorktreeRoot: { value: "/tmp/task-dashboard" },
                 newConvWorkdir: { value: "/tmp/task-dashboard" },
@@ -572,8 +579,8 @@ class SessionBootstrapUiLogicTests(unittest.TestCase):
               };
             }
 
-            async function runCase(cliType, modelValue, codeBuddyValue) {
-              dom = makeDom(cliType, modelValue, codeBuddyValue);
+            async function runCase(cliType, modelValue, codeBuddyValue, reuseStrategy = "create_new") {
+              dom = makeDom(cliType, modelValue, codeBuddyValue, reuseStrategy);
               let capturedPayload = null;
               global.postSessionCreateWithChannelRetry = async (payload) => {
                 capturedPayload = JSON.parse(JSON.stringify(payload));
@@ -601,6 +608,12 @@ class SessionBootstrapUiLogicTests(unittest.TestCase):
 
               const codexPayload = await runCase("codex", "gpt-5.3-codex", "glm-5.1");
               assert.equal(codexPayload.model, "gpt-5.3-codex");
+
+              const claudePayload = await runCase("claude", "claude-opus-5", "");
+              assert.equal(claudePayload.model, "claude-opus-5");
+
+              const claudeReusePayload = await runCase("claude", "", "", "reuse_active");
+              assert.equal(claudeReusePayload.model, "");
             })().catch((err) => {
               console.error(err);
               process.exit(1);

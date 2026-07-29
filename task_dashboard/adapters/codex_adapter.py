@@ -19,6 +19,14 @@ from typing import Any, Optional
 
 from .base import CLIAdapter, CLIInfo, SessionInfo, resolve_cli_executable
 from . import register_adapter
+from task_dashboard.browser_mcp_service import (
+    PLAYWRIGHT_MCP_PACKAGE,
+    browser_plugin_status,
+    effective_browser_mode,
+    normalize_browser_mode,
+    prepare_playwright_profile_dir,
+    resolve_browser_plugin_command,
+)
 
 
 @register_adapter
@@ -27,6 +35,16 @@ class CodexAdapter(CLIAdapter):
 
     _DEFAULT_HTTP_PROVIDER_ID = "openai_ccb_http"
     _DEFAULT_HTTP_BASE_URL = "https://chatgpt.com/backend-api/codex"
+    _PLAYWRIGHT_MCP_PACKAGE = PLAYWRIGHT_MCP_PACKAGE
+    _PLAYWRIGHT_MCP_ARGS = (
+        "--offline",
+        "--yes",
+        _PLAYWRIGHT_MCP_PACKAGE,
+        "--browser=chrome",
+        "--timeout-action=10000",
+        "--timeout-navigation=60000",
+        "--output-mode=stdout",
+    )
 
     @staticmethod
     def _env_bool(name: str, default: bool) -> bool:
@@ -66,7 +84,11 @@ class CodexAdapter(CLIAdapter):
         return [resolve_cli_executable("codex")]
 
     @classmethod
-    def _ccb_runtime_config_args(cls) -> list[str]:
+    def _ccb_runtime_config_args(
+        cls,
+        browser_mode: str = "off",
+        project_id: str = "",
+    ) -> list[str]:
         """
         Keep CCB's background Codex turns lean and predictable.
 
@@ -79,6 +101,56 @@ class CodexAdapter(CLIAdapter):
 
         if cls._env_bool("TASK_DASHBOARD_CODEX_DISABLE_APPS", True):
             args.extend(["-c", "features.apps=false"])
+
+        # A run gets exactly one browser controller. Persistent Playwright uses
+        # an opaque project profile; the plugin remains an explicit fallback.
+        playwright_enabled = cls._env_bool(
+            "TASK_DASHBOARD_CODEX_PLAYWRIGHT_MCP",
+            True,
+        )
+        mode = normalize_browser_mode(browser_mode)
+        effective_mode = effective_browser_mode(mode)
+        playwright_mcp_args = list(cls._PLAYWRIGHT_MCP_ARGS)
+        if effective_mode == "ephemeral":
+            playwright_mcp_args.extend(["--headless", "--isolated"])
+        elif effective_mode == "collab":
+            profile_dir = prepare_playwright_profile_dir(project_id)
+            playwright_mcp_args.extend(["--user-data-dir", str(profile_dir)])
+        playwright_args = json.dumps(
+            playwright_mcp_args,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        playwright_active = playwright_enabled and effective_mode in {"ephemeral", "collab"}
+        playwright_config = (
+            "mcp_servers.playwright="
+            f'{{command="npx",args={playwright_args},enabled={str(playwright_active).lower()}}}'
+        )
+        plugin_available, _plugin_error = browser_plugin_status()
+        plugin_active = plugin_available and effective_mode == "plugin"
+        if effective_mode == "plugin" and not plugin_available:
+            resolve_browser_plugin_command()
+        node_repl_config = (
+            "mcp_servers.node_repl.enabled=true"
+            if plugin_active
+            else 'mcp_servers.node_repl={command="",enabled=false}'
+        )
+        args.extend(
+            [
+                "-c",
+                playwright_config,
+                "-c",
+                'mcp_servers.chrome-devtools={command="",enabled=false}',
+                "-c",
+                'mcp_servers.agent-browser={command="",enabled=false}',
+                "-c",
+                'mcp_servers.agent-browser-headed={command="",enabled=false}',
+                "-c",
+                node_repl_config,
+                "-c",
+                'mcp_servers.computer-use={command="",enabled=false}',
+            ]
+        )
 
         if not cls._env_bool("TASK_DASHBOARD_CODEX_FORCE_HTTP", True):
             return args
@@ -217,6 +289,8 @@ class CodexAdapter(CLIAdapter):
         model: str = "",
         reasoning_effort: str = "",
         attachments: list[dict[str, Any]] | None = None,
+        browser_mode: str = "off",
+        project_id: str = "",
     ) -> list[str]:
         """
         Build command to resume a Codex session.
@@ -227,7 +301,7 @@ class CodexAdapter(CLIAdapter):
         cmd = cls._build_codex_invocation_prefix() + ["exec"]
         if profile_label:
             cmd.extend(["-p", profile_label])
-        cmd.extend(cls._ccb_runtime_config_args())
+        cmd.extend(cls._ccb_runtime_config_args(browser_mode, project_id))
         if model:
             cmd.extend(["-m", model])
         effort = cls._normalize_cli_reasoning_effort(reasoning_effort)
@@ -282,6 +356,8 @@ class CodexAdapter(CLIAdapter):
         model: str = "",
         reasoning_effort: str = "",
         sandbox_mode: str = "read-only",
+        browser_mode: str = "off",
+        project_id: str = "",
     ) -> list[str]:
         """
         Build command to create a new Codex session.
@@ -289,7 +365,7 @@ class CodexAdapter(CLIAdapter):
         Command: codex exec --skip-git-repo-check [--sandbox <mode>] -o <output_path> "<seed_prompt>"
         """
         cmd = cls._build_codex_invocation_prefix() + ["exec"]
-        cmd.extend(cls._ccb_runtime_config_args())
+        cmd.extend(cls._ccb_runtime_config_args(browser_mode, project_id))
         if model:
             cmd.extend(["-m", model])
         effort = cls._normalize_cli_reasoning_effort(reasoning_effort)

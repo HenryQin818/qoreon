@@ -121,6 +121,11 @@ from task_dashboard.runtime.platform_lan_access import (
     build_state as runtime_build_platform_lan_access_state,
     update_response as runtime_update_platform_lan_access_response,
 )
+from task_dashboard.browser_mcp_service import (
+    BrowserConfigurationError,
+    browser_capabilities,
+    build_browser_run_meta,
+)
 from task_dashboard.routes.project_resources import (
     handle_project_resources_delete,
     handle_project_resources_get,
@@ -1311,7 +1316,15 @@ class RouteDispatcher:
         self.ctx.json_response(
             handler,
             200,
-            {"types": [{"id": t.id, "name": t.name, "enabled": t.enabled} for t in types]},
+            {
+                "types": [{"id": t.id, "name": t.name, "enabled": t.enabled} for t in types],
+                "browser": browser_capabilities(
+                    scheduler_available=(
+                        self.ctx.scheduler is not None
+                        and str(os.environ.get("CCB_SCHEDULER") or "").strip() != "0"
+                    )
+                ),
+            },
         )
 
     def _handle_runtime_perf_snapshot_get(self, handler: "BaseHTTPRequestHandler") -> None:
@@ -3563,6 +3576,40 @@ class RouteDispatcher:
                 reasoning_effort = _normalize_reasoning_effort(session_data.get("reasoning_effort"))
         if not cli_type:
             cli_type = self.ctx.safe_text(body.get("cliType"), 40).strip() or "codex"
+
+        requested_browser_mode = (
+            body.get("browser_mode")
+            if "browser_mode" in body
+            else body.get("browserMode")
+        )
+        try:
+            run_extra_fields.update(
+                build_browser_run_meta(
+                    project_id=project_id,
+                    cli_type=cli_type,
+                    requested_mode=requested_browser_mode,
+                    scheduler_available=(
+                        self.ctx.scheduler is not None
+                        and str(os.environ.get("CCB_SCHEDULER") or "").strip() != "0"
+                    ),
+                )
+            )
+        except BrowserConfigurationError as exc:
+            status = 400 if exc.code == "invalid_browser_mode" else 409
+            self.ctx.json_response(
+                handler,
+                status,
+                {
+                    "ok": False,
+                    "state": "blocked",
+                    "blocking_error": {
+                        "code": exc.code,
+                        "message": str(exc),
+                        "retryable": False,
+                    },
+                },
+            )
+            return
 
         attachments: list[dict[str, Any]] = []
         raw_attachments = body.get("attachments")

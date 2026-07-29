@@ -113,6 +113,7 @@ class MessageCliTests(unittest.TestCase):
                 self.assertEqual(code, 0)
                 draft = payload["payload"]
                 self.assertEqual(draft["message_kind"], "collab_update")
+                self.assertNotIn("browser_mode", draft)
                 self.assertEqual(draft["interaction_mode"], mode)
                 self.assertEqual(draft["target_ref"]["session_id"], SID_TARGET)
                 self.assertEqual(draft["callback_to"]["session_id"], SID_SOURCE)

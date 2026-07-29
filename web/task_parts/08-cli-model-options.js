@@ -135,9 +135,10 @@
       return String(raw || "").trim().toLowerCase() === "codebuddy";
     }
 
-    const CLAUDE_DEFAULT_MODEL = "claude-opus-4-8";
+    const CLAUDE_DEFAULT_MODEL = "claude-opus-5";
+    const CLAUDE_LEGACY_OPUS_MODEL = "claude-opus-4-8";
     const CLAUDE_MODEL_OPTIONS = [
-      "claude-opus-4-8",
+      "claude-opus-5",
       "claude-sonnet-4-6",
       "claude-haiku-4-5",
       "claude-fable-5",
@@ -215,10 +216,51 @@
       return CLAUDE_MODEL_OPTIONS.slice();
     }
 
+    function claudeCanonicalModelForSave(raw) {
+      const model = normalizeSessionModel(raw).toLowerCase().replace(/ /g, "-");
+      const supported = new Set([
+        "claude-opus-5",
+        "claude-fable-5",
+        "claude-sonnet-4-6",
+        "claude-haiku-4-5",
+      ]);
+      if (supported.has(model)) return model;
+      const aliases = {
+        "claude-opus-4-8": "claude-opus-5",
+        "claude-opus-4-20250514": "claude-opus-5",
+        "default": "claude-opus-5",
+        "best": "claude-opus-5",
+        "fable": "claude-fable-5",
+        "fable5": "claude-fable-5",
+        "fable-5": "claude-fable-5",
+        "fable_5": "claude-fable-5",
+        "claude-fable": "claude-fable-5",
+        "claude-fable5": "claude-fable-5",
+        "opus": "claude-opus-5",
+        "opusplan": "claude-opus-5",
+        "opus-plan": "claude-opus-5",
+        "opus_plan": "claude-opus-5",
+        "claude-opus": "claude-opus-5",
+        "sonnet": "claude-sonnet-4-6",
+        "claude-sonnet": "claude-sonnet-4-6",
+        "claude-sonnet-4-20250514": "claude-sonnet-4-6",
+        "haiku": "claude-haiku-4-5",
+        "claude-haiku": "claude-haiku-4-5",
+      };
+      return aliases[model] || claudeDefaultModel();
+    }
+
+    function claudeModelMigrationStatusText(raw) {
+      return normalizeSessionModel(raw) === CLAUDE_LEGACY_OPUS_MODEL
+        ? "Claude Opus 4.8（待迁移 / 状态更新中）"
+        : "";
+    }
+
     function claudeModelDisplayName(raw) {
       const model = normalizeSessionModel(raw);
       const labels = {
-        "claude-opus-4-8": "Claude Opus 4.8",
+        "claude-opus-5": "Claude Opus 5",
+        "claude-opus-4-8": "Claude Opus 4.8（待迁移 / 状态更新中）",
         "claude-sonnet-4-6": "Claude Sonnet 4.6",
         "claude-haiku-4-5": "Claude Haiku 4.5",
         "claude-fable-5": "Claude Fable 5",
@@ -247,10 +289,15 @@
         selectEl.appendChild(el("option", { value: model, text: claudeModelOptionText(model) }));
       });
       if (selected && !known.has(selected)) {
-        selectEl.appendChild(el("option", {
+        const migrationText = claudeModelMigrationStatusText(selected);
+        const attrs = {
           value: selected,
-          text: "历史模型：" + selected + "（当前不在账号支持快照中，保留原值，可改选）",
-        }));
+          text: migrationText
+            ? (migrationText + " · " + selected)
+            : ("历史模型：" + selected + "（当前不在账号支持快照中，保留原值，可改选）"),
+        };
+        if (migrationText) attrs.disabled = "disabled";
+        selectEl.appendChild(el("option", attrs));
       }
       selectEl.value = selected;
       return String(selectEl.value || selected || "");
@@ -389,7 +436,7 @@
     function modelInputPlaceholderByCli(cliTypeRaw) {
       const t = String(cliTypeRaw || "").trim().toLowerCase();
       if (t === "codex") return "留空跟随 Codex CLI 默认；可选预设或输入自定义模型 ID";
-      if (t === "claude") return "默认 claude-opus-4-8；可选完整模型 ID 或 alias";
+      if (t === "claude") return "默认 claude-opus-5；可选完整模型 ID 或 alias";
       if (t === "gemini") return "例如：gemini-2.0-flash（可选，留空默认）";
       if (t === "opencode") return "可选模型标识（留空使用默认模型）";
       if (t === "trae") return "例如：gpt-4.1（需配置 TRAE_CONFIG_FILE）";

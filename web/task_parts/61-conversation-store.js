@@ -113,6 +113,12 @@
       return String(raw || "").trim().toLowerCase() === "codebuddy";
     }
 
+    function conversationStoreIsClaudeCliType(raw) {
+      if (typeof isClaudeCliType === "function") return isClaudeCliType(raw);
+      const text = String(raw || "").trim().toLowerCase();
+      return text === "claude" || text === "claudecode" || text === "claude_code" || text === "claude-code";
+    }
+
     function conversationStoreNormalizeCodeBuddyPermissionMode(raw) {
       if (typeof normalizeCodeBuddyPermissionMode === "function") return normalizeCodeBuddyPermissionMode(raw);
       const text = String(raw || "").trim();
@@ -153,13 +159,29 @@
         || (prev && (prev.cli_type || prev.cliType))
         || ""
       ).trim().toLowerCase();
+      const source = String(
+        (opts && opts.source)
+        || (src && (src.source || src.model_source || src.modelSource))
+        || ""
+      ).trim();
+      const sid = String(
+        (src && (src.sessionId || src.session_id || src.id))
+        || (prev && (prev.sessionId || prev.session_id || prev.id))
+        || ""
+      ).trim();
+      const detailModel = (
+        conversationStoreIsClaudeCliType(cliType)
+        && !conversationStoreModelSourceIsExplicit(source)
+        && sid
+        && typeof PCONV !== "undefined"
+        && PCONV
+        && PCONV.sessionDetailModelById
+      )
+        ? conversationStoreNormalizeSessionModel(PCONV.sessionDetailModelById[sid])
+        : "";
+      if (detailModel) return detailModel;
       if (conversationStoreIsCodeBuddyCliType(cliType)) {
         const defaultModel = conversationStoreCodeBuddyDefaultModel();
-        const source = String(
-          (opts && opts.source)
-          || (src && (src.source || src.model_source || src.modelSource))
-          || ""
-        ).trim();
         if (
           srcModel === defaultModel
           && prevModel !== defaultModel

@@ -649,7 +649,7 @@
                   <option value="gpt-5.4"></option>
                   <option value="gpt-5.4-mini"></option>
                   <option value="gpt-5.3-codex-spark" label="API 兼容受限"></option>
-                  <option value="claude-opus-4-8"></option>
+                  <option value="claude-opus-5"></option>
                   <option value="claude-sonnet-4-6"></option>
                   <option value="claude-haiku-4-5"></option>
                   <option value="claude-fable-5"></option>

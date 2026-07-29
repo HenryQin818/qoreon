@@ -43,6 +43,7 @@ from task_dashboard.runtime.request_parsing import (
     _normalize_reasoning_effort_local as _normalize_reasoning_effort,
 )
 from task_dashboard.runtime.project_execution_context import build_project_execution_context
+from task_dashboard.browser_mcp_service import normalize_browser_mode
 
 
 __all__ = [
@@ -4420,6 +4421,13 @@ def _extract_run_extra_fields(payload: dict[str, Any]) -> dict[str, Any]:
     if interaction_mode in {"dialog_now", "task_with_receipt", "notify_only"}:
         out["interaction_mode"] = interaction_mode
 
+    raw_browser_mode = _pick_payload_value(obj, extra_obj, "browser_mode", "browserMode")
+    if raw_browser_mode not in (None, ""):
+        try:
+            out["browser_mode"] = normalize_browser_mode(raw_browser_mode)
+        except ValueError:
+            pass
+
     client_message_id = _safe_text(
         _pick_payload_value(obj, extra_obj, "client_message_id", "clientMessageId"),
         160,
@@ -4610,6 +4618,38 @@ def _sanitize_run_extra_meta(extra_meta: Any) -> dict[str, Any]:
     ).strip().lower()
     if interaction_mode in {"dialog_now", "task_with_receipt", "notify_only"}:
         out["interaction_mode"] = interaction_mode
+
+    raw_browser_mode = src.get("browser_mode") if "browser_mode" in src else src.get("browserMode")
+    if raw_browser_mode not in (None, ""):
+        try:
+            out["browser_mode"] = normalize_browser_mode(raw_browser_mode)
+        except ValueError:
+            pass
+
+    browser_effective_mode = _safe_text(src.get("browser_effective_mode"), 40).strip().lower()
+    if browser_effective_mode in {"auto", "off", "ephemeral", "collab", "plugin"}:
+        out["browser_effective_mode"] = browser_effective_mode
+    browser_transport = _safe_text(src.get("browser_transport"), 20).strip().lower()
+    if browser_transport in {"disabled", "stdio"}:
+        out["browser_transport"] = browser_transport
+    browser_backend = _safe_text(src.get("browser_backend"), 80).strip().lower()
+    if browser_backend in {"disabled", "playwright", "browser_plugin", "playwright+browser_plugin"}:
+        out["browser_backend"] = browser_backend
+    browser_available_backends = src.get("browser_available_backends")
+    if isinstance(browser_available_backends, list):
+        allowed_backends = {"playwright", "browser_plugin"}
+        out["browser_available_backends"] = [
+            str(item).strip().lower()
+            for item in browser_available_backends
+            if str(item).strip().lower() in allowed_backends
+        ]
+    browser_profile_scope = _safe_text(src.get("browser_profile_scope"), 20).strip().lower()
+    if browser_profile_scope in {"project", "temporary", "none"}:
+        out["browser_profile_scope"] = browser_profile_scope
+    if "browser_persistent" in src:
+        out["browser_persistent"] = bool(src.get("browser_persistent"))
+    if "browser_headed" in src:
+        out["browser_headed"] = bool(src.get("browser_headed"))
 
     client_message_id = _safe_text(
         src.get("client_message_id") if "client_message_id" in src else src.get("clientMessageId"),

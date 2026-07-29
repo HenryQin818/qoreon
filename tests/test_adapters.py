@@ -166,16 +166,186 @@ class TestCodexAdapter(unittest.TestCase):
 
     def test_codex_adapter_uses_ccb_http_provider_by_default(self) -> None:
         """Verify CCB Codex turns avoid WebSocket transport and app preload by default."""
-        cmd = CodexAdapter.build_resume_command(
-            session_id="019bde9b-4793-70e0-b18a-a437279b2d18",
-            message="hi",
-            output_path=Path("/tmp/output.json"),
-        )
+        with mock.patch.dict(
+            os.environ,
+            {"TASK_DASHBOARD_CODEX_BROWSER_PLUGIN": "0"},
+            clear=False,
+        ):
+            cmd = CodexAdapter.build_resume_command(
+                session_id="019bde9b-4793-70e0-b18a-a437279b2d18",
+                message="hi",
+                output_path=Path("/tmp/output.json"),
+                browser_mode="ephemeral",
+            )
         self.assertIn("features.apps=false", cmd)
         self.assertIn('model_provider="openai_ccb_http"', cmd)
         self.assertIn("model_providers.openai_ccb_http.supports_websockets=false", cmd)
         self.assertIn("model_providers.openai_ccb_http.stream_max_retries=0", cmd)
         self.assertIn("model_providers.openai_ccb_http.request_max_retries=1", cmd)
+        playwright_config = next(
+            value for value in cmd if value.startswith("mcp_servers.playwright=")
+        )
+        self.assertIn('command="npx"', playwright_config)
+        self.assertIn('"@playwright/mcp@0.0.78"', playwright_config)
+        self.assertIn('"--browser=chrome"', playwright_config)
+        self.assertIn('"--headless"', playwright_config)
+        self.assertIn('"--isolated"', playwright_config)
+        self.assertIn("enabled=true", playwright_config)
+        self.assertIn('mcp_servers.chrome-devtools={command="",enabled=false}', cmd)
+        self.assertIn('mcp_servers.agent-browser={command="",enabled=false}', cmd)
+        self.assertIn('mcp_servers.agent-browser-headed={command="",enabled=false}', cmd)
+        self.assertIn('mcp_servers.node_repl={command="",enabled=false}', cmd)
+        self.assertIn('mcp_servers.computer-use={command="",enabled=false}', cmd)
+
+    def test_codex_adapter_can_disable_ccb_playwright_mcp(self) -> None:
+        """Verify isolated Playwright MCP remains opt-out for non-browser CCB runs."""
+        with mock.patch.dict(
+            "os.environ",
+            {
+                "TASK_DASHBOARD_CODEX_PLAYWRIGHT_MCP": "0",
+                "TASK_DASHBOARD_CODEX_BROWSER_PLUGIN": "0",
+            },
+            clear=False,
+        ):
+            cmd = CodexAdapter.build_resume_command(
+                session_id="019bde9b-4793-70e0-b18a-a437279b2d18",
+                message="hi",
+                output_path=Path("/tmp/output.json"),
+            )
+        playwright_config = next(
+            value for value in cmd if value.startswith("mcp_servers.playwright=")
+        )
+        self.assertIn('command="npx"', playwright_config)
+        self.assertIn('"@playwright/mcp@0.0.78"', playwright_config)
+        self.assertIn("enabled=false", playwright_config)
+        self.assertIn('mcp_servers.node_repl={command="",enabled=false}', cmd)
+
+    def test_codex_adapter_create_command_disables_browser_by_default(self) -> None:
+        cmd = CodexAdapter.build_create_command(
+            seed_prompt="Please reply with OK",
+            output_path=Path("/tmp/output.json"),
+        )
+        playwright_config = next(
+            value for value in cmd if value.startswith("mcp_servers.playwright=")
+        )
+        self.assertIn('command="npx"', playwright_config)
+        self.assertIn('"@playwright/mcp@0.0.78"', playwright_config)
+        self.assertIn("enabled=false", playwright_config)
+
+    def test_codex_adapter_auto_mode_uses_only_project_persistent_playwright(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            command = root / "node_repl"
+            command.write_text("placeholder", encoding="utf-8")
+            command.chmod(0o755)
+            (root / "config.toml").write_text(
+                f'[mcp_servers.node_repl]\ncommand = "{command}"\n',
+                encoding="utf-8",
+            )
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "CODEX_HOME": str(root),
+                    "TASK_DASHBOARD_CODEX_PLAYWRIGHT_MCP": "1",
+                    "TASK_DASHBOARD_CODEX_BROWSER_PLUGIN": "1",
+                    "TASK_DASHBOARD_CODEX_PLAYWRIGHT_PROFILE_ROOT": str(root / "profiles"),
+                },
+                clear=False,
+            ):
+                resume = CodexAdapter.build_resume_command(
+                    session_id="019bde9b-4793-70e0-b18a-a437279b2d18",
+                    message="hi",
+                    output_path=Path("/tmp/output.json"),
+                    browser_mode="auto",
+                    project_id="task-dashboard",
+                )
+                create = CodexAdapter.build_create_command(
+                    seed_prompt="Please reply with OK",
+                    output_path=Path("/tmp/output.json"),
+                    browser_mode="auto",
+                    project_id="task-dashboard",
+                )
+        for command in (resume, create):
+            playwright_config = next(value for value in command if value.startswith("mcp_servers.playwright="))
+            self.assertIn('command="npx"', playwright_config)
+            self.assertIn("enabled=true", playwright_config)
+            self.assertIn('"--offline"', playwright_config)
+            self.assertIn('"--user-data-dir"', playwright_config)
+            self.assertNotIn('"--headless"', playwright_config)
+            self.assertNotIn('"--isolated"', playwright_config)
+            self.assertIn('mcp_servers.node_repl={command="",enabled=false}', command)
+
+    def test_codex_adapter_collab_and_ephemeral_use_distinct_playwright_profiles(self) -> None:
+        with tempfile.TemporaryDirectory() as td, mock.patch.dict(
+            os.environ,
+            {
+                "TASK_DASHBOARD_CODEX_PLAYWRIGHT_PROFILE_ROOT": td,
+                "TASK_DASHBOARD_CODEX_BROWSER_PLUGIN": "0",
+            },
+            clear=False,
+        ):
+            collab = CodexAdapter.build_resume_command(
+                session_id="019bde9b-4793-70e0-b18a-a437279b2d18",
+                message="login",
+                output_path=Path("/tmp/output.json"),
+                browser_mode="collab",
+                project_id="project-a",
+            )
+            ephemeral = CodexAdapter.build_resume_command(
+                session_id="019bde9b-4793-70e0-b18a-a437279b2d18",
+                message="public check",
+                output_path=Path("/tmp/output.json"),
+                browser_mode="ephemeral",
+                project_id="project-a",
+            )
+        collab_config = next(value for value in collab if value.startswith("mcp_servers.playwright="))
+        ephemeral_config = next(value for value in ephemeral if value.startswith("mcp_servers.playwright="))
+        self.assertIn('"--user-data-dir"', collab_config)
+        self.assertNotIn('"--headless"', collab_config)
+        self.assertNotIn('"--isolated"', collab_config)
+        self.assertNotIn('"--user-data-dir"', ephemeral_config)
+        self.assertIn('"--headless"', ephemeral_config)
+        self.assertIn('"--isolated"', ephemeral_config)
+
+    def test_codex_adapter_off_mode_disables_playwright_and_conflicting_mcps(self) -> None:
+        cmd = CodexAdapter.build_resume_command(
+            session_id="019bde9b-4793-70e0-b18a-a437279b2d18",
+            message="hi",
+            output_path=Path("/tmp/output.json"),
+            browser_mode="off",
+        )
+        playwright_config = next(value for value in cmd if value.startswith("mcp_servers.playwright="))
+        self.assertIn("enabled=false", playwright_config)
+        self.assertIn('mcp_servers.node_repl={command="",enabled=false}', cmd)
+
+    def test_codex_adapter_plugin_mode_enables_only_node_repl_browser_bridge(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            command = root / "node_repl"
+            command.write_text("placeholder", encoding="utf-8")
+            command.chmod(0o755)
+            (root / "config.toml").write_text(
+                f'[mcp_servers.node_repl]\ncommand = "{command}"\n',
+                encoding="utf-8",
+            )
+            with mock.patch.dict(
+                os.environ,
+                {"CODEX_HOME": str(root), "TASK_DASHBOARD_CODEX_BROWSER_PLUGIN": "1"},
+                clear=False,
+            ):
+                cmd = CodexAdapter.build_resume_command(
+                    session_id="019d232f-02f1-7781-9de8-2333f2417e71",
+                    message="use browser plugin",
+                    output_path=str(root / "last.txt"),
+                    browser_mode="plugin",
+                )
+        playwright_config = next(value for value in cmd if value.startswith("mcp_servers.playwright="))
+        self.assertIn("enabled=false", playwright_config)
+        self.assertIn("mcp_servers.node_repl.enabled=true", cmd)
+        self.assertIn('mcp_servers.chrome-devtools={command="",enabled=false}', cmd)
+        self.assertIn('mcp_servers.agent-browser={command="",enabled=false}', cmd)
+        self.assertIn('mcp_servers.agent-browser-headed={command="",enabled=false}', cmd)
+        self.assertIn('mcp_servers.computer-use={command="",enabled=false}', cmd)
 
     def test_codex_adapter_can_disable_ccb_http_provider(self) -> None:
         """Verify HTTP-only provider is opt-out for sessions that need native transport."""
@@ -346,7 +516,7 @@ class TestClaudeAdapter(unittest.TestCase):
         )
 
         self.assertIn("--model", cmd)
-        self.assertEqual(cmd[cmd.index("--model") + 1], "claude-opus-4-8")
+        self.assertEqual(cmd[cmd.index("--model") + 1], "claude-opus-5")
 
     def test_claude_adapter_defaults_invalid_model(self) -> None:
         cmd = ClaudeAdapter.build_resume_command(
@@ -357,7 +527,7 @@ class TestClaudeAdapter(unittest.TestCase):
         )
 
         self.assertIn("--model", cmd)
-        self.assertEqual(cmd[cmd.index("--model") + 1], "claude-opus-4-8")
+        self.assertEqual(cmd[cmd.index("--model") + 1], "claude-opus-5")
 
     def test_claude_adapter_supports_model(self) -> None:
         self.assertTrue(ClaudeAdapter.supports_model())

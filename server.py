@@ -83,6 +83,8 @@ from task_dashboard.runtime.session_context import (
     session_context_write_requires_guard as runtime_session_context_write_requires_guard,
     stable_write_ack_requested as runtime_stable_write_ack_requested,
 )
+from task_dashboard.runtime.process_control import terminate_process_tree
+from task_dashboard.runtime.claude_model_migration import claude_model_migration_lock
 from task_dashboard.runtime.execution_runtime import (
     _QUEUED_RECOVERY_LAZY_LAST_TS,
     _QUEUED_RECOVERY_LAZY_LOCK,
@@ -3746,13 +3748,9 @@ class RunProcessRegistry:
                     self._interrupted.add(rid)
                 return fallback_ok
             self._interrupted.add(rid)
-        try:
-            proc.terminate()
-            time.sleep(0.25)
-            if proc.poll() is None:
-                proc.kill()
+        if terminate_process_tree(proc, graceful=True, sleep_s=0.25):
             return True
-        except Exception:
+        else:
             with self._lock:
                 self._interrupted.discard(rid)
             return False
@@ -3836,6 +3834,7 @@ def create_cli_session(
     reasoning_effort: str = "",
     execution_profile: str = "",
     permission_mode: str = "",
+    browser_mode: str = "off",
 ) -> dict[str, Any]:
     """
     Create a new CLI session by running a minimal command
@@ -3872,14 +3871,27 @@ def create_cli_session(
     tmp_dir.mkdir(parents=True, exist_ok=True)
     last_path = tmp_dir / f"task-dashboard-new-session-{int(start_ts)}.last.txt"
 
-    cmd = adapter_cls.build_create_command(
-        seed_prompt=seed_prompt or "请回复 OK。",
-        output_path=last_path,
-        model=(str(model or "").strip() if adapter_cls.supports_model() else ""),
-        reasoning_effort=(_normalize_reasoning_effort(reasoning_effort) if cli_type == "codex" else ""),
-        sandbox_mode=(codex_sandbox_mode if cli_type == "codex" else ""),
-        **({"permission_mode": str(permission_mode or "").strip()} if str(cli_type or "").strip().lower() in {"claude", "codebuddy"} else {}),
-    )
+    create_kwargs: dict[str, Any] = {
+        "seed_prompt": seed_prompt or "请回复 OK。",
+        "output_path": last_path,
+        "model": (str(model or "").strip() if adapter_cls.supports_model() else ""),
+        "reasoning_effort": (_normalize_reasoning_effort(reasoning_effort) if cli_type == "codex" else ""),
+        "sandbox_mode": (codex_sandbox_mode if cli_type == "codex" else ""),
+    }
+    if str(cli_type or "").strip().lower() in {"claude", "codebuddy"}:
+        create_kwargs["permission_mode"] = str(permission_mode or "").strip()
+    if str(cli_type or "").strip().lower() == "codex":
+        try:
+            create_signature = inspect.signature(adapter_cls.build_create_command)
+            accepts_browser_mode = "browser_mode" in create_signature.parameters or any(
+                param.kind == inspect.Parameter.VAR_KEYWORD
+                for param in create_signature.parameters.values()
+            )
+        except Exception:
+            accepts_browser_mode = True
+        if accepts_browser_mode:
+            create_kwargs["browser_mode"] = str(browser_mode or "off").strip()
+    cmd = adapter_cls.build_create_command(**create_kwargs)
 
     run_cwd = workdir if (workdir and workdir.exists() and workdir.is_dir()) else Path(__file__).resolve().parent
     spawn_bundle = runtime_prepare_process_spawn(
@@ -4359,59 +4371,67 @@ class RunStore:
                         saved_item["path"] = str(target)
                     saved_attachments.append(saved_item)
 
-        resolved_model = str(model or "").strip() or _project_channel_model(project_id, channel_name)
-        if str(cli_type or "").strip().lower() == "claude":
-            resolved_model = normalize_claude_model(resolved_model)
-        resolved_reasoning = _normalize_reasoning_effort(reasoning_effort) or _project_channel_reasoning_effort(project_id, channel_name)
-        meta: dict[str, Any] = {
-            "id": run_id,
-            "channelId": cid,
-            "projectId": project_id,
-            "channelName": channel_name,
-            "profileLabel": profile_label,
-            "model": resolved_model,
-            "reasoning_effort": resolved_reasoning,
-            "sessionId": session_id,
-            "cliType": cli_type or "codex",
-            "status": "queued",  # queued|retry_waiting|running|done|error
-            "createdAt": _now_iso(),
-            "startedAt": "",
-            "finishedAt": "",
-            "error": "",
-            "lastPreview": "",
-            "sender_type": str(sender_type or "legacy").strip() or "legacy",
-            "sender_id": str(sender_id or "legacy").strip() or "legacy",
-            "sender_name": str(sender_name or "历史消息（来源未知）").strip() or "历史消息（来源未知）",
-            "attachments": saved_attachments,
-            "paths": {k: str(v) for k, v in p.items()},
-        }
-        meta.update(_sanitize_run_extra_meta(extra_meta))
+        def _persist_run() -> dict[str, Any]:
+            resolved_model = str(model or "").strip() or _project_channel_model(project_id, channel_name)
+            if str(cli_type or "").strip().lower() == "claude":
+                resolved_model = normalize_claude_model(resolved_model)
+            resolved_reasoning = _normalize_reasoning_effort(reasoning_effort) or _project_channel_reasoning_effort(project_id, channel_name)
+            meta: dict[str, Any] = {
+                "id": run_id,
+                "channelId": cid,
+                "projectId": project_id,
+                "channelName": channel_name,
+                "profileLabel": profile_label,
+                "model": resolved_model,
+                "reasoning_effort": resolved_reasoning,
+                "sessionId": session_id,
+                "cliType": cli_type or "codex",
+                "status": "queued",  # queued|retry_waiting|running|done|error
+                "createdAt": _now_iso(),
+                "startedAt": "",
+                "finishedAt": "",
+                "error": "",
+                "lastPreview": "",
+                "sender_type": str(sender_type or "legacy").strip() or "legacy",
+                "sender_id": str(sender_id or "legacy").strip() or "legacy",
+                "sender_name": str(sender_name or "历史消息（来源未知）").strip() or "历史消息（来源未知）",
+                "attachments": saved_attachments,
+                "paths": {k: str(v) for k, v in p.items()},
+            }
+            meta.update(_sanitize_run_extra_meta(extra_meta))
+            if str(cli_type or "").strip().lower() == "claude":
+                meta["model"] = normalize_claude_model(meta.get("model"))
 
-        meta_text = json.dumps(meta, ensure_ascii=False, indent=2)
-        _atomic_write_text(p["msg"], message)
-        _atomic_write_text(p["meta"], meta_text)
-        self._mirror_legacy_meta(run_id, meta_text, meta)
-        self._update_live_run_index_entry(run_id, meta)
-        try:
-            _invalidate_project_session_runtime_index_cache(
-                str(meta.get("projectId") or "").strip(),
-                session_id=str(meta.get("sessionId") or "").strip(),
-            )
-        except Exception:
-            pass
-        try:
-            runtime_invalidate_sessions_payload_cache(str(meta.get("projectId") or "").strip())
-        except Exception:
-            pass
-        try:
-            runtime_invalidate_runs_list_cache(
-                str(meta.get("projectId") or "").strip(),
-                session_id=str(meta.get("sessionId") or "").strip(),
-                channel_id=str(meta.get("channelId") or "").strip(),
-            )
-        except Exception:
-            pass
-        return meta
+            meta_text = json.dumps(meta, ensure_ascii=False, indent=2)
+            _atomic_write_text(p["msg"], message)
+            _atomic_write_text(p["meta"], meta_text)
+            self._mirror_legacy_meta(run_id, meta_text, meta)
+            self._update_live_run_index_entry(run_id, meta)
+            try:
+                _invalidate_project_session_runtime_index_cache(
+                    str(meta.get("projectId") or "").strip(),
+                    session_id=str(meta.get("sessionId") or "").strip(),
+                )
+            except Exception:
+                pass
+            try:
+                runtime_invalidate_sessions_payload_cache(str(meta.get("projectId") or "").strip())
+            except Exception:
+                pass
+            try:
+                runtime_invalidate_runs_list_cache(
+                    str(meta.get("projectId") or "").strip(),
+                    session_id=str(meta.get("sessionId") or "").strip(),
+                    channel_id=str(meta.get("channelId") or "").strip(),
+                )
+            except Exception:
+                pass
+            return meta
+
+        if str(cli_type or "").strip().lower() == "claude":
+            with claude_model_migration_lock(self.runs_dir.parent, exclusive=False, timeout_s=30.0):
+                return _persist_run()
+        return _persist_run()
 
     def load_meta(self, run_id: str) -> Optional[dict[str, Any]]:
         p = self._paths(run_id)["meta"]

@@ -1,13 +1,34 @@
 import tempfile
 import unittest
 import json
+from contextlib import nullcontext
 from pathlib import Path
+from unittest import mock
 
 from task_dashboard.runtime.project_execution_context import build_project_execution_context
 from task_dashboard.session_store import SessionStore
 
 
 class SessionStoreModelTests(unittest.TestCase):
+    def test_codex_session_write_uses_shared_migration_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            with mock.patch(
+                "task_dashboard.session_store.claude_model_migration_lock",
+                side_effect=lambda *_args, **_kwargs: nullcontext(),
+            ) as lock:
+                SessionStore(base_dir=Path(td)).create_session(
+                    project_id="task_dashboard",
+                    channel_name="子级02-CCB运行时（server-并发-安全-启动）",
+                    cli_type="codex",
+                    session_id="01010101-0101-0101-0101-010101010101",
+                    model="gpt-5.4",
+                )
+
+            self.assertGreater(lock.call_count, 0)
+            for call in lock.call_args_list:
+                self.assertFalse(call.kwargs["exclusive"])
+                self.assertEqual(call.kwargs["timeout_s"], 30.0)
+
     def test_create_session_persists_model(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             store = SessionStore(base_dir=Path(td))
@@ -63,6 +84,41 @@ class SessionStoreModelTests(unittest.TestCase):
 
             got = store.get_session("11111111-1111-1111-1111-111111111111") or {}
             self.assertEqual(got.get("model"), "codex-spark")
+
+    def test_legacy_claude_model_is_not_lazily_migrated_but_explicit_write_is(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            store = SessionStore(base_dir=base)
+            sid = "15151515-1515-1515-1515-151515151515"
+            store.create_session(
+                project_id="task_dashboard",
+                channel_name="子级02-CCB运行时（server-并发-安全-启动）",
+                cli_type="claude",
+                session_id=sid,
+                model="claude-fable-5",
+            )
+            path = base / ".sessions" / "task_dashboard.json"
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            payload["sessions"][0]["model"] = "claude-opus-4-8"
+            path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            before = path.read_bytes()
+
+            listed = store.list_sessions("task_dashboard")
+            fetched = store.get_session(sid) or {}
+
+            self.assertEqual(listed[0].get("model"), "claude-opus-4-8")
+            self.assertEqual(fetched.get("model"), "claude-opus-4-8")
+            self.assertEqual(path.read_bytes(), before)
+
+            heartbeat = store.update_session(sid, heartbeat={"enabled": True}) or {}
+            self.assertEqual(heartbeat.get("model"), "claude-opus-4-8")
+            persisted = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(persisted["sessions"][0].get("model"), "claude-opus-4-8")
+
+            updated = store.update_session(sid, model="claude-opus-4-8") or {}
+            self.assertEqual(updated.get("model"), "claude-opus-5")
+            persisted = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(persisted["sessions"][0].get("model"), "claude-opus-5")
 
     def test_update_session_supports_status(self) -> None:
         with tempfile.TemporaryDirectory() as td:

@@ -82,6 +82,39 @@ class RunStoreListRunsLightModeTests(unittest.TestCase):
             self.assertTrue(str(rows[0].get("messagePreview") or "").strip())
             self.assertTrue(str(rows[0].get("lastPreview") or "").strip())
 
+    def test_create_run_canonicalizes_only_claude_models(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            store = server.RunStore(Path(td) / ".runs")
+            legacy = store.create_run(
+                project_id="task_dashboard",
+                channel_name="子级02",
+                session_id="claude-legacy",
+                message="hello",
+                cli_type="claude",
+                model="claude-opus-4-8",
+            )
+            invalid = store.create_run(
+                project_id="task_dashboard",
+                channel_name="子级02",
+                session_id="claude-invalid",
+                message="hello",
+                cli_type="claude",
+                model="project-name-is-not-a-model",
+                extra_meta={"model": "still-invalid"},
+            )
+            codex = store.create_run(
+                project_id="task_dashboard",
+                channel_name="子级03",
+                session_id="codex-custom",
+                message="hello",
+                cli_type="codex",
+                model="gpt-custom",
+            )
+
+            self.assertEqual(legacy.get("model"), "claude-opus-5")
+            self.assertEqual(invalid.get("model"), "claude-opus-5")
+            self.assertEqual(codex.get("model"), "gpt-custom")
+
     def test_list_runs_light_payload_keeps_basic_previews_but_skips_log_reads(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             store = server.RunStore(Path(td))

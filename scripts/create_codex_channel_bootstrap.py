@@ -748,7 +748,11 @@ class Bootstrapper:
             tmp_dir = cli_home / "tmp"
             tmp_dir.mkdir(parents=True, exist_ok=True)
             out_path = tmp_dir / f"task-dashboard-bootstrap-new-session-{int(start_ts)}.last.txt"
-            cmd = CodexAdapter.build_create_command(seed_prompt=seed_message, output_path=out_path)
+            cmd = CodexAdapter.build_create_command(
+                seed_prompt=seed_message,
+                output_path=out_path,
+                browser_mode="off",
+            )
         except Exception as e:
             _die(f"构建 Codex 建会话命令失败: {e}")
 

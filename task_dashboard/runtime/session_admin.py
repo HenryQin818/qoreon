@@ -387,6 +387,11 @@ def create_session_response(
     requested_session_id = str(payload.get("session_id") or "").strip()
     cli_type = str(payload.get("cli_type") or "codex")
     model = str(payload.get("model") or "")
+    model_explicit = (
+        bool(payload.get("_model_explicit"))
+        if "_model_explicit" in payload
+        else "model" in payload
+    )
     reasoning_effort = str(payload.get("reasoning_effort") or "")
     codebuddy_permission_mode_explicit = _payload_has_codebuddy_permission_mode(payload)
     codebuddy_permission_mode = _payload_codebuddy_permission_mode(payload) if codebuddy_permission_mode_explicit else ""
@@ -514,7 +519,7 @@ def create_session_response(
             cli_type=cli_type,
             alias=alias or ("" if existing_alias else effective_alias),
             agent_name=agent_name or (effective_alias if not existing_alias else ""),
-            model=model,
+            model=model if model_explicit else "",
             reasoning_effort=reasoning_effort,
             codebuddy_permission_mode=codebuddy_permission_mode if codebuddy_permission_mode_explicit else "",
             claude_permission_mode=claude_permission_mode if claude_permission_mode_explicit else "",
@@ -584,7 +589,7 @@ def create_session_response(
                 update_fields["alias"] = effective_alias
             if agent_name:
                 update_fields["agent_name"] = agent_name
-            if model:
+            if model_explicit:
                 update_fields["model"] = model
             if reasoning_effort:
                 update_fields["reasoning_effort"] = reasoning_effort

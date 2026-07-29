@@ -1,10 +1,15 @@
+import io
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 from task_dashboard.adapters.claude_adapter import ClaudeAdapter
-from task_dashboard.runtime.execution_command import build_execution_command, prepare_process_spawn
+from task_dashboard.runtime.execution_command import (
+    build_execution_command,
+    prepare_process_spawn,
+    write_execution_log_header,
+)
 
 
 class BuildExecutionCommandTests(unittest.TestCase):
@@ -87,7 +92,7 @@ class BuildExecutionCommandTests(unittest.TestCase):
             profile_not_found_recent=lambda _cli_type, _profile: (False, 0.0),
         )
 
-        self.assertEqual(bundle["cmd"][bundle["cmd"].index("--model") + 1], "claude-opus-4-8")
+        self.assertEqual(bundle["cmd"][bundle["cmd"].index("--model") + 1], "claude-opus-5")
 
     def test_build_execution_command_normalizes_claude_fable_alias(self) -> None:
         class _ClaudeAdapter:
@@ -170,6 +175,31 @@ class BuildExecutionCommandTests(unittest.TestCase):
         self.assertIn("-i", bundle["cmd"])
         self.assertEqual(bundle["cmd"][bundle["cmd"].index("-i") + 1], "/tmp/demo.png")
 
+    def test_build_execution_command_passes_browser_mode_only_to_codex(self) -> None:
+        class _CodexAdapter:
+            @classmethod
+            def build_resume_command(cls, *, browser_mode="", project_id="", **kwargs):
+                return ["codex", "browser-mode", browser_mode, "project", project_id]
+
+        bundle = build_execution_command(
+            adapter_cls=_CodexAdapter,
+            session_id="sid-codex",
+            message="hello",
+            output_path=Path("/tmp/out.txt"),
+            profile_label="",
+            resolved_model="",
+            resolved_reasoning="",
+            cli_type="codex",
+            supports_model=False,
+            browser_mode="auto",
+            project_id="project-a",
+            profile_not_found_recent=lambda _cli_type, _profile: (False, 0.0),
+        )
+        self.assertEqual(
+            ["codex", "browser-mode", "auto", "project", "project-a"],
+            bundle["cmd"],
+        )
+
     def test_build_execution_command_does_not_pass_attachments_to_non_codex(self) -> None:
         class _GeminiAdapter:
             @classmethod
@@ -201,6 +231,55 @@ class BuildExecutionCommandTests(unittest.TestCase):
         )
 
         self.assertNotIn("-i", bundle["cmd"])
+
+
+class WriteExecutionLogHeaderTests(unittest.TestCase):
+    def test_redacts_browser_profile_path_without_mutating_command(self) -> None:
+        profile_path = "/tmp/qoreon-browser-profiles/private"
+        browser_config = (
+            'mcp_servers.playwright={command="npx",'
+            f'args=["--offline","--user-data-dir","{profile_path}"],enabled=true}}'
+        )
+        command = ["codex", "exec", "-c", browser_config, "resume", "sid"]
+        logf = io.StringIO()
+
+        write_execution_log_header(
+            logf,
+            meta={},
+            run_cwd=Path("/tmp/work"),
+            spawn_cwd=Path("/tmp/work"),
+            cmd=command,
+            profile_label="",
+            profile_suppressed=False,
+            profile_suppress_left_s=0.0,
+        )
+
+        logged = logf.getvalue()
+        self.assertNotIn(profile_path, logged)
+        self.assertIn('"--user-data-dir","<redacted>"', logged)
+        self.assertIn(profile_path, command[3])
+
+    def test_redacts_direct_user_data_dir_command_forms(self) -> None:
+        profile_path = "/private/qoreon-profile"
+        for command in (
+            ["playwright-mcp", "--user-data-dir", profile_path],
+            ["playwright-mcp", f"--user-data-dir={profile_path}"],
+        ):
+            with self.subTest(command=command):
+                logf = io.StringIO()
+                write_execution_log_header(
+                    logf,
+                    meta={},
+                    run_cwd=Path("/tmp/work"),
+                    spawn_cwd=Path("/tmp/work"),
+                    cmd=command,
+                    profile_label="",
+                    profile_suppressed=False,
+                    profile_suppress_left_s=0.0,
+                )
+                logged = logf.getvalue()
+                self.assertNotIn(profile_path, logged)
+                self.assertIn("<redacted>", logged)
 
 
 class PrepareProcessSpawnTests(unittest.TestCase):

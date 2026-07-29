@@ -18,6 +18,7 @@ class ClaudeCodeFrontendSelectorsUiLogicTests(unittest.TestCase):
         controls_js = (REPO_ROOT / "web" / "task_parts" / "75-00-conversation-cli-controls.js").read_text(encoding="utf-8")
         conversation_js = (REPO_ROOT / "web" / "task_parts" / "60-conversation.js").read_text(encoding="utf-8")
         bootstrap_js = (REPO_ROOT / "web" / "task_parts" / "74-session-bootstrap-and-sessions.js").read_text(encoding="utf-8")
+        store_js = (REPO_ROOT / "web" / "task_parts" / "61-conversation-store.js").read_text(encoding="utf-8")
 
         sender_meta_match = re.search(r'<div class="convsendermeta">([\s\S]*?)</div>', html)
         self.assertIsNotNone(sender_meta_match)
@@ -33,11 +34,12 @@ class ClaudeCodeFrontendSelectorsUiLogicTests(unittest.TestCase):
         self.assertIn('value="acceptEdits">自动接受编辑', sender_meta)
         self.assertIn('value="plan">计划模式', sender_meta)
 
-        self.assertIn('const CLAUDE_DEFAULT_MODEL = "claude-opus-4-8";', options_js)
+        self.assertIn('const CLAUDE_DEFAULT_MODEL = "claude-opus-5";', options_js)
         model_options_match = re.search(r"const CLAUDE_MODEL_OPTIONS = \[([\s\S]*?)\];", options_js)
         self.assertIsNotNone(model_options_match)
         model_options = model_options_match.group(1)
-        self.assertIn('"claude-opus-4-8"', model_options)
+        self.assertIn('"claude-opus-5"', model_options)
+        self.assertNotIn('"claude-opus-4-8"', model_options)
         self.assertIn('"claude-sonnet-4-6"', model_options)
         self.assertIn('"claude-haiku-4-5"', model_options)
         self.assertIn('"claude-fable-5"', model_options)
@@ -54,11 +56,16 @@ class ClaudeCodeFrontendSelectorsUiLogicTests(unittest.TestCase):
         self.assertIn("function isClaudeCliType", options_js)
         self.assertIn("function populateClaudeModelSelect", options_js)
         self.assertIn("function populateClaudePermissionModeSelect", options_js)
-        self.assertIn('"claude-opus-4-8": "Claude Opus 4.8"', options_js)
+        self.assertIn('"claude-opus-5": "Claude Opus 5"', options_js)
+        self.assertIn('"claude-opus-4-8": "Claude Opus 4.8（待迁移 / 状态更新中）"', options_js)
         self.assertIn('"claude-fable-5": "Claude Fable 5"', options_js)
+        self.assertIn('<option value="claude-opus-5"></option>', html)
+        self.assertNotIn('<option value="claude-opus-4-8"></option>', html)
         self.assertIn('<option value="claude-fable-5"></option>', html)
         self.assertIn('"default": "Alias: default"', options_js)
-        self.assertIn("默认 claude-opus-4-8；可选完整模型 ID 或 alias", options_js)
+        self.assertIn("默认 claude-opus-5；可选完整模型 ID 或 alias", options_js)
+        self.assertIn("function claudeCanonicalModelForSave", options_js)
+        self.assertIn("function claudeModelMigrationStatusText", options_js)
         self.assertNotIn('return typeof claudeDefaultModel === "function" ? claudeDefaultModel() : "claude-sonnet";', controls_js)
 
         self.assertIn("function renderConversationComposerClaudeModel", controls_js)
@@ -70,6 +77,8 @@ class ClaudeCodeFrontendSelectorsUiLogicTests(unittest.TestCase):
         self.assertIn("function resolveConversationComposerPermissionPayload", controls_js)
         self.assertIn("tryUpdateSessionClaudePermissionMode(sid, next)", controls_js)
         self.assertIn("syncConversationComposerClaudeModelToLocal", controls_js)
+        self.assertIn("PCONV.sessionDetailModelById[sid] = normalized;", controls_js)
+        self.assertIn("tryUpdateSessionModel(sid, next, { expectedModel: canonical })", controls_js)
         self.assertIn("syncConversationComposerClaudePermissionModeToLocal", controls_js)
         self.assertIn("permission_mode: mode", controls_js)
         self.assertIn("permissionMode: mode", controls_js)
@@ -83,10 +92,97 @@ class ClaudeCodeFrontendSelectorsUiLogicTests(unittest.TestCase):
         self.assertIn("renderConversationComposerClaudePermissionMode(ctx)", conversation_js)
 
         self.assertIn("function tryUpdateSessionClaudePermissionMode", bootstrap_js)
+        self.assertIn("function reconcileConversationSessionDetailModel", bootstrap_js)
+        self.assertIn("opts && opts.authoritativeModel === true", bootstrap_js)
+        self.assertIn("const echoed = normalizeSessionModel(session && session.model);", bootstrap_js)
+        self.assertIn("function conversationStoreIsClaudeCliType", store_js)
+        self.assertIn("PCONV.sessionDetailModelById[sid]", store_js)
         self.assertIn("claude_permission_mode: normalized", bootstrap_js)
         self.assertIn("permission_mode: normalized", bootstrap_js)
         self.assertIn("syncConversationComposerClaudeModelToLocal", session_info_js)
         self.assertIn("isClaudeCliType(cliType)", session_info_js)
+        self.assertIn("populateClaudeModelSelect(claudeModelSelect, form.model)", session_info_js)
+        self.assertIn("服务端未回显一致的 ClaudeCode canonical model", session_info_js)
+
+    def test_claudecode_canonical_model_matches_backend_rules(self) -> None:
+        if not shutil.which("node"):
+            self.skipTest("node is required for UI logic regression checks")
+        script = textwrap.dedent(
+            r"""
+            const assert = require("node:assert/strict");
+            const fs = require("node:fs");
+            const path = require("node:path");
+            const text = fs.readFileSync(
+              path.join(process.argv[1], "web/task_parts/08-cli-model-options.js"),
+              "utf8"
+            );
+            const signature = /function claudeCanonicalModelForSave\(/;
+            const match = signature.exec(text);
+            if (!match) throw new Error("missing claudeCanonicalModelForSave");
+            const start = match.index;
+            const header = text
+              .slice(start)
+              .match(/function claudeCanonicalModelForSave\([^\n]*\)\s*\{/);
+            if (!header) throw new Error("missing claudeCanonicalModelForSave header");
+            const open = start + header[0].length - 1;
+            let depth = 1;
+            let end = -1;
+            for (let i = open + 1; i < text.length; i += 1) {
+              if (text[i] === "{") depth += 1;
+              if (text[i] === "}") {
+                depth -= 1;
+                if (depth === 0) { end = i + 1; break; }
+              }
+            }
+            eval(text.slice(start, end));
+            global.normalizeSessionModel = (raw) => String(raw || "").trim();
+            global.claudeDefaultModel = () => "claude-opus-5";
+
+            for (const model of [
+              "claude-opus-5",
+              "claude-fable-5",
+              "claude-sonnet-4-6",
+              "claude-haiku-4-5",
+            ]) {
+              assert.equal(claudeCanonicalModelForSave(model), model);
+            }
+            for (const alias of [
+              "claude-opus-4-8",
+              "claude-opus-4-20250514",
+              "default",
+              "best",
+              "opus",
+              "opusplan",
+              "opus-plan",
+              "opus_plan",
+              "claude-opus",
+            ]) {
+              assert.equal(claudeCanonicalModelForSave(alias), "claude-opus-5");
+            }
+            for (const alias of ["fable", "fable5", "fable-5", "fable_5", "claude-fable", "claude-fable5"]) {
+              assert.equal(claudeCanonicalModelForSave(alias), "claude-fable-5");
+            }
+            for (const alias of ["sonnet", "claude-sonnet", "claude-sonnet-4-20250514"]) {
+              assert.equal(claudeCanonicalModelForSave(alias), "claude-sonnet-4-6");
+            }
+            for (const alias of ["haiku", "claude-haiku"]) {
+              assert.equal(claudeCanonicalModelForSave(alias), "claude-haiku-4-5");
+            }
+            assert.equal(claudeCanonicalModelForSave(" CLAUDE OPUS 5 "), "claude-opus-5");
+            assert.equal(claudeCanonicalModelForSave("claude  sonnet"), "claude-opus-5");
+            assert.equal(claudeCanonicalModelForSave("claude\tfable"), "claude-opus-5");
+            assert.equal(claudeCanonicalModelForSave(""), "claude-opus-5");
+            assert.equal(claudeCanonicalModelForSave("unknown-or-invalid-model"), "claude-opus-5");
+            """
+        )
+        proc = subprocess.run(
+            ["node", "-e", script, str(REPO_ROOT)],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+        )
+        if proc.returncode != 0:
+            self.fail(proc.stderr or proc.stdout or "Claude canonical model rule regression failed")
 
     def test_claudecode_composer_resolves_model_and_permission_payload(self) -> None:
         if not shutil.which("node"):
@@ -192,7 +288,7 @@ class ClaudeCodeFrontendSelectorsUiLogicTests(unittest.TestCase):
             }
             function codeBuddyDefaultModel() { return "deepseek-v4-pro"; }
             function codexDefaultModel() { return ""; }
-            function claudeDefaultModel() { return "claude-opus-4-8"; }
+            function claudeDefaultModel() { return "claude-opus-5"; }
             function normalizeCodeBuddyPermissionMode(raw) {
               const text = String(raw || "").trim();
               return text === "bypassPermissions" ? "bypassPermissions" : "default";
@@ -215,16 +311,18 @@ class ClaudeCodeFrontendSelectorsUiLogicTests(unittest.TestCase):
                 sessionId: "session-a",
                 id: "session-a",
                 cli_type: "claude",
-                model: "claude-opus-4-8",
+                model: "claude-opus-5",
                 claude_permission_mode: "default",
               }],
-              claudeModelBySessionId: { "session-a": "claude-fable-5" },
+              claudeModelBySessionId: { "session-a": "claude-opus-4-8" },
+              sessionDetailModelById: { "session-a": "claude-opus-5" },
+              sessionDetailLoadedAtById: { "session-a": Date.now() },
               claudePermissionModeBySessionId: { "session-a": "bypassPermissions" },
             };
             let mockClaudeModelSelect = {
               hidden: false,
-              value: "claude-fable-5",
-              dataset: { sessionId: "session-a", saving: "", model: "claude-fable-5" },
+              value: "claude-opus-5",
+              dataset: { sessionId: "session-a", saving: "", model: "claude-opus-5" },
             };
             let mockClaudePermissionSelect = {
               hidden: false,
@@ -273,7 +371,7 @@ class ClaudeCodeFrontendSelectorsUiLogicTests(unittest.TestCase):
             }
 
             const ctx = { sessionId: "session-a", cliType: "claude", model: "claude-opus-4-8" };
-            assert.equal(resolveConversationComposerPayloadModel(ctx), "claude-fable-5");
+            assert.equal(resolveConversationComposerPayloadModel(ctx), "claude-opus-5");
             assert.equal(resolveConversationComposerClaudePermissionMode(ctx), "bypassPermissions");
             assert.deepEqual(resolveConversationComposerPermissionPayload(ctx), {
               permission_mode: "bypassPermissions",
@@ -320,6 +418,283 @@ class ClaudeCodeFrontendSelectorsUiLogicTests(unittest.TestCase):
         )
         if proc.returncode != 0:
             self.fail(proc.stderr or proc.stdout or "node claudecode selector regression script failed")
+
+    def test_claudecode_detail_model_reconciles_stale_cache_and_summary(self) -> None:
+        if not shutil.which("node"):
+            self.skipTest("node is required for UI logic regression checks")
+        script = textwrap.dedent(
+            r"""
+            const assert = require("node:assert/strict");
+            const fs = require("node:fs");
+            const path = require("node:path");
+            const repoRoot = process.argv[1];
+
+            function extractFunction(file, name) {
+              const text = fs.readFileSync(path.join(repoRoot, file), "utf8");
+              const match = new RegExp(`function ${name}\\(`).exec(text);
+              if (!match) throw new Error(`missing ${name}`);
+              const start = match.index;
+              const header = text
+                .slice(start)
+                .match(new RegExp(`function ${name}\\([^\\n]*\\)\\s*\\{`));
+              if (!header) throw new Error(`missing ${name} header`);
+              const open = start + header[0].length - 1;
+              let depth = 1;
+              let quote = "";
+              let escape = false;
+              for (let i = open + 1; i < text.length; i += 1) {
+                const ch = text[i];
+                if (escape) { escape = false; continue; }
+                if (quote) {
+                  if (ch === "\\") escape = true;
+                  else if (ch === quote) quote = "";
+                  continue;
+                }
+                if (ch === "'" || ch === '"' || ch === "`") { quote = ch; continue; }
+                if (ch === "{") depth += 1;
+                if (ch === "}") {
+                  depth -= 1;
+                  if (depth === 0) return text.slice(start, i + 1);
+                }
+              }
+              throw new Error(`unterminated ${name}`);
+            }
+
+            function normalizeSessionModel(raw) { return String(raw || "").trim(); }
+            function firstNonEmptyText(values, fallback = "") {
+              for (const value of values || []) {
+                const text = String(value || "").trim();
+                if (text) return text;
+              }
+              return String(fallback || "");
+            }
+            function isClaudeCliType(raw) { return String(raw || "").trim().toLowerCase() === "claude"; }
+            function isCodeBuddyCliType(raw) { return String(raw || "").trim().toLowerCase() === "codebuddy"; }
+            function getSessionId(row) { return String((row && (row.sessionId || row.id)) || ""); }
+            function ensureConversationSessionDetailStateMaps() {
+              PCONV.sessionDetailModelById ||= Object.create(null);
+            }
+
+            global.STATE = { project: "task_dashboard" };
+            global.PCONV = {
+              sessions: [{ sessionId: "session-a", cli_type: "claude", model: "claude-opus-4-8" }],
+              sessionDirectoryByProject: {
+                task_dashboard: [{ sessionId: "session-a", cli_type: "claude", model: "claude-opus-4-8" }],
+              },
+              claudeModelBySessionId: { "session-a": "claude-opus-4-8" },
+              sessionDetailModelById: {},
+            };
+            global.conversationStoreUpsertSession = () => null;
+
+            const functionNames = [
+              "conversationSessionModelMergeSource",
+              "conversationSessionModelMergeCliType",
+              "conversationSessionModelMergeIsExplicit",
+              "reconcileConversationSessionDetailModel",
+              "mergeConversationSessionModelValue",
+            ];
+            for (const name of functionNames) {
+              eval(extractFunction("web/task_parts/74-session-bootstrap-and-sessions.js", name));
+            }
+            for (const name of [
+              "conversationStoreNormalizeSessionModel",
+              "conversationStoreCodeBuddyDefaultModel",
+              "conversationStoreIsCodeBuddyCliType",
+              "conversationStoreIsClaudeCliType",
+              "conversationStoreModelSourceIsExplicit",
+              "conversationStoreMergeSessionModel",
+            ]) {
+              eval(extractFunction("web/task_parts/61-conversation-store.js", name));
+            }
+
+            assert.equal(
+              reconcileConversationSessionDetailModel("session-a", "claude-opus-5", "claude", "task_dashboard"),
+              "claude-opus-5"
+            );
+            assert.equal(PCONV.claudeModelBySessionId["session-a"], "claude-opus-5");
+            assert.equal(PCONV.sessions[0].model, "claude-opus-5");
+            assert.equal(PCONV.sessionDirectoryByProject.task_dashboard[0].model, "claude-opus-5");
+            assert.equal(
+              mergeConversationSessionModelValue(
+                { sessionId: "session-a", cli_type: "claude", model: "claude-opus-4-8", source: "api-summary" },
+                { sessionId: "session-a", cli_type: "claude", model: "claude-opus-5" }
+              ),
+              "claude-opus-5"
+            );
+            assert.equal(
+              conversationStoreMergeSessionModel(
+                { sessionId: "session-a", cli_type: "claude", model: "claude-opus-4-8", source: "stream-summary" },
+                { sessionId: "session-a", cli_type: "claude", model: "claude-opus-5" },
+                { source: "stream-summary" }
+              ),
+              "claude-opus-5"
+            );
+            assert.equal(
+              mergeConversationSessionModelValue(
+                { sessionId: "session-a", cli_type: "claude", model: "claude-fable-5", source: "composer-model-switch" },
+                { sessionId: "session-a", cli_type: "claude", model: "claude-opus-5" }
+              ),
+              "claude-fable-5"
+            );
+            """
+        )
+        proc = subprocess.run(
+            ["node", "-e", script, str(REPO_ROOT)],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+        )
+        if proc.returncode != 0:
+            self.fail(proc.stderr or proc.stdout or "Claude detail model reconcile regression failed")
+
+    def test_claudecode_model_put_requires_canonical_echo(self) -> None:
+        if not shutil.which("node"):
+            self.skipTest("node is required for UI logic regression checks")
+        script = textwrap.dedent(
+            r"""
+            const assert = require("node:assert/strict");
+            const fs = require("node:fs");
+            const path = require("node:path");
+            const text = fs.readFileSync(
+              path.join(process.argv[1], "web/task_parts/74-session-bootstrap-and-sessions.js"),
+              "utf8"
+            );
+            const signature = /async function tryUpdateSessionModel\(/;
+            const match = signature.exec(text);
+            if (!match) throw new Error("missing tryUpdateSessionModel");
+            const start = match.index;
+            const header = text
+              .slice(start)
+              .match(/async function tryUpdateSessionModel\([^\n]*\)\s*\{/);
+            if (!header) throw new Error("missing tryUpdateSessionModel header");
+            const open = start + header[0].length - 1;
+            let depth = 1;
+            let end = -1;
+            for (let i = open + 1; i < text.length; i += 1) {
+              if (text[i] === "{") depth += 1;
+              if (text[i] === "}") {
+                depth -= 1;
+                if (depth === 0) { end = i + 1; break; }
+              }
+            }
+            eval(text.slice(start, end));
+            global.normalizeSessionModel = (raw) => String(raw || "").trim();
+            global.looksLikeSessionId = () => true;
+            global.authHeaders = (headers = {}) => headers;
+
+            let response = { ok: true, payload: { session: { model: "claude-opus-5" } } };
+            global.fetch = async () => ({
+              ok: response.ok,
+              json: async () => response.payload,
+            });
+
+            (async () => {
+              response = { ok: true, payload: { session: {} } };
+              assert.equal(
+                await tryUpdateSessionModel("session-a", "non-claude-model"),
+                true
+              );
+              response = { ok: true, payload: { session: { model: "claude-opus-5" } } };
+              assert.equal(
+                await tryUpdateSessionModel("session-a", "opus", { expectedModel: "claude-opus-5" }),
+                true
+              );
+              assert.equal(
+                await tryUpdateSessionModel("session-a", "unknown-or-invalid-model", { expectedModel: "claude-opus-5" }),
+                true
+              );
+              response = { ok: true, payload: { session: {} } };
+              assert.equal(
+                await tryUpdateSessionModel("session-a", "opus", { expectedModel: "claude-opus-5" }),
+                false
+              );
+              response = { ok: true, payload: { session: { model: "claude-opus-4-8" } } };
+              assert.equal(
+                await tryUpdateSessionModel("session-a", "opus", { expectedModel: "claude-opus-5" }),
+                false
+              );
+            })().catch((err) => {
+              console.error(err);
+              process.exit(1);
+            });
+            """
+        )
+        proc = subprocess.run(
+            ["node", "-e", script, str(REPO_ROOT)],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+        )
+        if proc.returncode != 0:
+            self.fail(proc.stderr or proc.stdout or "Claude canonical model echo regression failed")
+
+    def test_claudecode_create_default_does_not_override_attach_or_reuse(self) -> None:
+        if not shutil.which("node"):
+            self.skipTest("node is required for UI logic regression checks")
+        script = textwrap.dedent(
+            r"""
+            const assert = require("node:assert/strict");
+            const fs = require("node:fs");
+            const path = require("node:path");
+            const text = fs.readFileSync(
+              path.join(process.argv[1], "web/task_entry_parts/81-session-info-and-bindings.js"),
+              "utf8"
+            );
+            const signature = /function selectedNewConvModelValue\(/;
+            const match = signature.exec(text);
+            if (!match) throw new Error("missing selectedNewConvModelValue");
+            const start = match.index;
+            const header = text
+              .slice(start)
+              .match(/function selectedNewConvModelValue\([^\n]*\)\s*\{/);
+            if (!header) throw new Error("missing selectedNewConvModelValue header");
+            const open = start + header[0].length - 1;
+            let depth = 1;
+            let end = -1;
+            for (let i = open + 1; i < text.length; i += 1) {
+              if (text[i] === "{") depth += 1;
+              if (text[i] === "}") {
+                depth -= 1;
+                if (depth === 0) { end = i + 1; break; }
+              }
+            }
+            eval(text.slice(start, end));
+            global.normalizeSessionModel = (raw) => String(raw || "").trim();
+            global.normalizeNewConvMode = (raw) => String(raw || "create").trim();
+            global.isCodeBuddyCliType = (raw) => String(raw || "").trim() === "codebuddy";
+            global.isCodexCliType = (raw) => String(raw || "").trim() === "codex";
+            global.isClaudeCliType = (raw) => String(raw || "").trim() === "claude";
+            global.claudeDefaultModel = () => "claude-opus-5";
+            const input = { value: "claude-opus-5", dataset: { modelSource: "default" } };
+
+            assert.equal(
+              selectedNewConvModelValue("claude", input, null, { mode: "create", reuseStrategy: "create_new" }),
+              "claude-opus-5"
+            );
+            assert.equal(
+              selectedNewConvModelValue("claude", input, null, { mode: "attach", reuseStrategy: "create_new" }),
+              ""
+            );
+            assert.equal(
+              selectedNewConvModelValue("claude", input, null, { mode: "create", reuseStrategy: "reuse_active" }),
+              ""
+            );
+            input.value = "claude-fable-5";
+            input.dataset.modelSource = "user";
+            assert.equal(
+              selectedNewConvModelValue("claude", input, null, { mode: "create", reuseStrategy: "reuse_active" }),
+              "claude-fable-5"
+            );
+            """
+        )
+        proc = subprocess.run(
+            ["node", "-e", script, str(REPO_ROOT)],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+        )
+        if proc.returncode != 0:
+            self.fail(proc.stderr or proc.stdout or "Claude create/attach model semantics regression failed")
 
 
 if __name__ == "__main__":

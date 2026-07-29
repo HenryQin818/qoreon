@@ -8,6 +8,58 @@ from task_dashboard import cli
 
 
 class RuntimeEnvLinkTests(unittest.TestCase):
+    def test_cli_uses_explicit_root_for_repository_report_data(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td).resolve()
+            with mock.patch(
+                "task_dashboard.cli.load_dashboard_config",
+                return_value={"projects": [], "dashboard": {}},
+            ), mock.patch(
+                "task_dashboard.cli.build_overview",
+                return_value={"totals": {}, "projects": []},
+            ), mock.patch(
+                "task_dashboard.cli.build_session_health_page",
+                return_value={},
+            ), mock.patch(
+                "task_dashboard.cli.build_status_report_page_data",
+                return_value={},
+            ) as status_builder, mock.patch(
+                "task_dashboard.cli.build_message_risk_report_page_data",
+                return_value={},
+            ) as risk_builder, mock.patch(
+                "task_dashboard.cli.build_agent_capability_report_page_data",
+                return_value={},
+            ) as capability_builder, mock.patch(
+                "task_dashboard.cli.build_open_source_sync_page_data",
+                return_value={},
+            ) as open_source_builder, mock.patch(
+                "task_dashboard.cli.build_platform_architecture_board_page_data",
+                return_value={},
+            ) as architecture_builder, mock.patch(
+                "task_dashboard.cli.render_from_template",
+                return_value="<html></html>",
+            ):
+                rc = cli.main(
+                    [
+                        "--root",
+                        str(root),
+                        "--out-task",
+                        "dist/project-task-dashboard.html",
+                        "--out-overview",
+                        "dist/project-overview-dashboard.html",
+                    ]
+                )
+
+            self.assertEqual(rc, 0)
+            for builder in (
+                status_builder,
+                risk_builder,
+                capability_builder,
+                open_source_builder,
+                architecture_builder,
+            ):
+                self.assertEqual(builder.call_args.args[0], root)
+
     def test_cli_injects_project_source_fields_into_task_and_overview_data(self) -> None:
         captured = {}
 

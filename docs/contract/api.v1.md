@@ -120,3 +120,23 @@
 ## Message CLI 目标解析
 
 同通道存在多条活跃会话或按通道寻址歧义时返回 `agent_ambiguous`，并提示通过会话治理入口设置主会话、归档冗余会话。不得随机选择，也不得绕过 SessionStore 从旧索引猜测目标。
+
+## ClaudeCode 模型归一化
+
+- ClaudeCode 新会话和显式模型写入的默认模型为 `claude-opus-5`。
+- 旧 Opus ID 和 `default|best|opus|opusplan` 归一化为 `claude-opus-5`；Sonnet、Haiku 和 Fable 仍归一化到各自当前 ID。
+- 普通读取不会惰性改写存量模型；只有显式写入或受控迁移工具可以修改存量 SessionStore。
+- `attach_existing` 和 `reuse_active` 未显式传入 `model` 时继承既有会话模型，不使用新建默认值覆盖。
+- 存量迁移仅提供本地运维脚本，不新增 HTTP API；apply/rollback 使用迁移锁、SHA-256 CAS、原子替换、读回核验和失败补偿。
+
+## Codex 浏览器模式
+
+会话和运行请求可携带 additive `browser_mode` 字段：
+
+- `collab`：默认模式，使用项目隔离的持久 Playwright Profile。
+- `auto`：旧客户端兼容值，当前与 `collab` 等价。
+- `ephemeral`：使用无持久状态的隔离浏览器。
+- `plugin`：显式使用已配置的桌面浏览器插件。
+- `off`：不注入浏览器能力。
+
+能力响应可通过 additive `browser` 对象返回默认模式、可用模式、后端和插件可用状态。Profile 路径、Cookie、登录态和浏览历史不得进入 API 元数据或普通日志。

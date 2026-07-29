@@ -566,6 +566,9 @@ def build_message_payload(
             "session_id": owner_session_id,
         },
     }
+    browser_mode = _as_str(getattr(args, "browser_mode", "")).strip().lower()
+    if browser_mode:
+        payload["browser_mode"] = browser_mode
     if owner_channel:
         payload["owner_ref"]["channel_name"] = owner_channel
     if callback_to:
@@ -1078,6 +1081,12 @@ def _add_common_options(parser: argparse.ArgumentParser, *, include_message: boo
     parser.add_argument("--owner-channel", default="", help="owner channel name")
     parser.add_argument("--owner-role", default="主负责位", help="owner role")
     parser.add_argument("--client-message-id", default="", help="optional idempotency key")
+    parser.add_argument(
+        "--browser-mode",
+        choices=("auto", "off", "ephemeral", "collab", "plugin"),
+        default="",
+        help="optional Codex browser override: collab, ephemeral, plugin, auto compatibility, or off",
+    )
     parser.add_argument("--base-url", default="http://localhost:18770", help="local dashboard origin for send")
     parser.add_argument("--token", default="", help="TASK_DASHBOARD_TOKEN override")
     parser.add_argument("--timeout", type=float, default=20.0)
